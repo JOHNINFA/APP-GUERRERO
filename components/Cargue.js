@@ -1,256 +1,209 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Vibration, ActivityIndicator, Alert, Animated } from 'react-native';
-import { CheckBox } from 'react-native-elements';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Vibration, ActivityIndicator, Alert, TextInput, Animated } from 'react-native';
+import Checkbox from 'expo-checkbox';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import debounce from 'lodash.debounce';
+
+// ⚠️ AJUSTAR ESTA URL SEGÚN EL ENTORNO
+const API_URL_OBTENER = 'http://192.168.1.19:8000/api/obtener-cargue/';
+const API_URL_ACTUALIZAR = 'http://192.168.1.19:8000/api/actualizar-check-vendedor/';
 
 const Cargue = ({ userId }) => {
   const [selectedDay, setSelectedDay] = useState('Lunes');
+  // Fecha actual en formato YYYY-MM-DD
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [quantities, setQuantities] = useState({});
   const [checkedItems, setCheckedItems] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const scaleAnims = useRef({}).current;
-  
 
-  const dayUrls = {
-    Lunes: {
-      GET: `https://script.google.com/macros/s/AKfycbwadFyKaLcxopk-wwZUso66qjyB0x8USwsML7wDHi-4c9izm3WxUcvjzB3HvPi4npo/exec?userId=${userId}`,
-      POST: `https://script.google.com/macros/s/AKfycbzy8QjFAkmrNx4nePAOiTeNdVmiE2TWPqoG40yghOTwR3AvX72YDSMwisNk52uP5Zbp/exec?userId=${userId}`,
-    },
-    Martes: {
-      GET: `https://script.google.com/macros/s/AKfycbzOxY9DkMLiVHui-kJDNRYZLmSJ_mAtLxzgTWfJnlvvt3IEdK6o2RkqqacG2GgqaI7G/exec?userId=${userId}`,
-      POST: `https://script.google.com/macros/s/AKfycbz2lYszS5rFbxePsdyCo5iEWyiuiJN9UJBeWDLiSzvzVuCnjU8lBkMao49Vw79WSQc/exec?userId=${userId}`,
-    },
-    Miércoles: {
-      GET: `https://script.google.com/macros/s/AKfycbz0oBHhnPrl2HJjQX8LPMuQ653QQJtORAT45wcckHYBKqDArHvb-p_f1EBCHO33BA/exec?userId=${userId}`,
-      POST: `https://script.google.com/macros/s/AKfycbwqrnajtsm5P1NxOu90u6huxvw1BDhfkc1iGXUvvYzmiPoVnE6pM-L_DKNT6pa4GLDr/exec?userId=${userId}`,
-    },
-    Jueves: {
-      GET: `https://script.google.com/macros/s/AKfycbwdmsDhEVO1ucl2v672zuFGa6QcBc3FuO1qCBtpeEvWayLdnVjyCqf-RUSrtRBA-w5k/exec?userId=${userId}`,
-      POST: `https://script.google.com/macros/s/AKfycbzE5sCtzpNuUkLnJ7MXqI4VHTf_IYZty276GHu8kAo56z1JzPvC8ujXaOroZzcxUww/exec?userId=${userId}`,
-    },
-    Viernes: {
-      GET: `https://script.google.com/macros/s/AKfycbzUdzf5gFtQACMm3mWkaYJTxnw5IHuRd6FApvub1l5JPqKl67JL1HjujwS4mCgcreFD/exec?userId=${userId}`,
-      POST: `https://script.google.com/macros/s/AKfycbwMBIXzT769iTet5QDGM_DWTrAV709AdaEY9g607NOt3JK3OWu6XozjZUvOyIRf410/exec?userId=${userId}`,
-    },
-    Sábado: {
-      GET: `https://script.google.com/macros/s/AKfycbz-F9sz31L2QR-VLwOK2Rl2ofSr-_AOsxduuT_ycSimcezdZgSPSGB3ud0Ehfn_G0A/exec?userId=${userId}`,
-      POST: `https://script.google.com/macros/s/AKfycbz-7Qyf1c3cZ-HIym_GSlqHW1M3Irvr2zU9Jlm_onnBp9LcHnyFtMWdgR0bjCbgF6Mb/exec?userId=${userId}`,
-    },
-    
-  };
-
-  const { GET: BASE_GET_URL, POST: BASE_POST_URL } = dayUrls[selectedDay];
 
   const productos = [
-   "AREPA TIPO OBLEA",
-    "AREPA MEDIANA",
-    "AREPA TIPO PINCHO",
-    "AREPA CON QUESO - CORRIENTE",
-    "AREPA CON QUESO- ESPECIAL GRANDE",
-    "AREPA CON QUESO- ESPECIAL PEQUEÑA",
-    "AREPA CON QUESO MINI X 10",
-    "AREPA CON QUESO CUADRADA",
-    "AREPA DE CHOCLO-CORRIENTE",
-    "AREPA DE CHOCLO CON QUESO GRANDE",
-    "AREPA DE CHOCLO CON QUESO PEQUEÑA",
-    "AREPA BOYACENSE X5",
-    "AREPA BOYACENSE X10",
-    "AREPA SANTADERANA",
-    "ALMOJABANAS X5",
-    "ALMOJABANAS X10",
-    "AREPA CON SEMILLA DE QUINUA",
-    "AREPA CON SEMILLA DE CHIA",
-    "AREPA CON SEMILLA DE AJONJOLI",
-    "AREPA CON SEMILLA DE LINANZA",
-    "AREPA CON SEMILLA DE GIRASOL",
-    "AREPA CHORICERA",
-    "AREPA LONCHERIA",
-    "AREPA CON MARGARINA Y SAL",
-    "YUCAREPA",
-    "AREPA TIPO ASADERO X 10",
-    "AREPA PARA RELLENAR # 1",
-    "AREPA PARA RELLENAR #2",
-    "AREPA PARA RELLENAR #3",
-    "PORCION DE AREPAS X 2 UND",
-    "PORCION DE AREPAS X 3 UND",
-    "PORCION DE AREPAS X 4 UND",
-    "PORCION DE AREPAS X 5 UND",
-    "AREPA SUPER OBLEA",
-    "BLOQUE DE MASA",
-    "LIBRAS DE MASA",
-    "MUTE BOYACENSE",
-    "LIBRA DE MAIZ PETO",
-    "ENVUELTO DE MAIZ X 5 UND",
-    "CANASTAS"
+    'AREPA TIPO OBLEA 500Gr',
+    'AREPA MEDIANA 330Gr',
+    'AREPA TIPO PINCHO 330Gr',
+    'AREPA QUESO CORRIENTE 450Gr',
+    'AREPA QUESO ESPECIAL GRANDE 600Gr',
+    'AREPA CON QUESO ESPECIAL PEQUEÑA 600Gr',
+    'AREPA QUESO MINI X10',
+    'AREPA CON QUESO CUADRADA 450Gr',
+    'AREPA DE CHOCLO CORRIENTE 300Gr',
+    'AREPA DE CHOCLO CON QUESO GRANDE 1200Gr',
+    'AREPA DE CHOCLO CON QUESO PEQUEÑA 700Gr',
+    'AREPA BOYACENSE X 5 450Gr',
+    'AREPA SANTANDEREANA 450Gr',
+    'ALMOJABANA X 5 300Gr',
+    'AREPA CON SEMILLA DE QUINUA 450Gr',
+    'AREPA DE MAIZ CON SEMILLA DE CHIA450Gr',
+    'AREPAS DE MAIZ PETO CON SEMILLA DE AJONJOLI 450GR',
+    'AREPA DE MAIZ PETO CON SEMILLAS DE LINAZA 450Gr',
+    'AREPA DE MAIZ PETO CON SEMILLAS DE GIRASOL 450Gr',
+    'AREPA DE MAIZ PETO CHORICERA 1000Gr',
+    'AREPA DE MAIZ DE PETO TIPO LONCHERIA 500Gr',
+    'AREPA DE MAIZ PETO CON MARGARINA Y SAL 500Gr',
+    'YUCAREPA 500Gr',
+    'AREPA TIPO ASADERO X 10 280Gr',
+    'AREPA RELLENAR #1',
+    'AREPA PARA RELLENA #2',
+    'AREPA RELLENAR #3 1000Gr',
+    'PORCION DE AREPA X 2 UND 55Gr',
+    'PORCION DE AREPA 3 UND',
+    'PORCION DE AREPA 4 UND 110 GR',
+    'PORCION DE AREPA 5 UND',
+    'AREPA SUPER OBLEA 500Gr',
+    'LIBRA MASA',
+    'MUTE BOYACENSE',
+    'ENVUELTO DE MAÍZ 500Gr',
+    'CANASTILLA'
   ];
 
- 
-
   const fetchData = async () => {
-    setLoading(true); // Muestra el indicador de carga
+    setLoading(true);
     try {
-      // Resetea el estado al cambiar de día
-      setCheckedItems({});
-      setQuantities({});
-  
-      const storedCheckedItems = await AsyncStorage.getItem(`checkedItems_${userId}_${selectedDay}`);
-      const storedQuantities = await AsyncStorage.getItem(`quantities_${userId}_${selectedDay}`);
-  
-      const initialCheckedItems = storedCheckedItems ? JSON.parse(storedCheckedItems) : {};
-      const initialQuantities = storedQuantities ? JSON.parse(storedQuantities) : {};
-  
-      const response = await fetch(dayUrls[selectedDay].GET);
+      const url = `${API_URL_OBTENER}?vendedor_id=${userId}&dia=${selectedDay.toUpperCase()}&fecha=${selectedDate}`;
+      console.log('📥 Cargando cargue:', url);
+
+      const response = await fetch(url);
       const data = await response.json();
-  
-      const updatedQuantities = productos.reduce((acc, product) => {
-        acc[product] = data[product]?.quantity || '0';
-        return acc;
-      }, {});
-  
-      const updatedCheckedItems = productos.reduce((acc, product) => {
-        const isQuantityZero = updatedQuantities[product] === '0';
-  
-        // Si la cantidad es 0, desmarca el checkbox de 'V'
-        acc[product] = {
-          D: data[product]?.checked || false,
-          V: isQuantityZero ? false : initialCheckedItems[product]?.V || false,
-        };
-  
-        return acc;
-      }, {});
-  
-      setQuantities(updatedQuantities);
-      setCheckedItems(updatedCheckedItems);
-  
-      // Guardar en AsyncStorage
-      await AsyncStorage.setItem(`quantities_${userId}_${selectedDay}`, JSON.stringify(updatedQuantities));
-      await AsyncStorage.setItem(`checkedItems_${userId}_${selectedDay}`, JSON.stringify(updatedCheckedItems));
-  
-      // Enviar los datos actualizados al servidor si hay cambios en los checks de 'V'
-      const itemsToUpdate = Object.fromEntries(
-        Object.entries(updatedCheckedItems).filter(([product, item]) => item.V !== initialCheckedItems[product]?.V)
-      );
-      if (Object.keys(itemsToUpdate).length > 0) {
-        syncDataToServerDebounced(itemsToUpdate);
+
+      if (response.ok) {
+        const newQuantities = {};
+        const newCheckedItems = {};
+
+        productos.forEach(prod => {
+          if (data[prod]) {
+            newQuantities[prod] = data[prod].quantity;
+            newCheckedItems[prod] = {
+              V: data[prod].v || false,
+              D: data[prod].d || false
+            };
+          } else {
+            newQuantities[prod] = '0';
+            newCheckedItems[prod] = { V: false, D: false };
+          }
+        });
+
+        setQuantities(newQuantities);
+        setCheckedItems(newCheckedItems);
+        console.log('✅ Cargue cargado correctamente');
+      } else {
+        console.error('Error fetching cargue:', data);
+        Alert.alert('Error', 'No se pudo obtener el cargue del CRM');
       }
-  
+
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Error fetching cargue:', error);
+      Alert.alert('Error', 'Error de conexión con el CRM');
     } finally {
       setLoading(false);
     }
   };
-  
-  
+
+  // Cargar datos al cambiar día o fecha
   useEffect(() => {
-    // Limpiar los datos de cantidades y de checks cuando se cambia el día
-    setCheckedItems({});
-    setQuantities({});
-    setLoading(true);
-    
-    // Llamar a fetchData para cargar los datos del día seleccionado
     fetchData();
-    
-    // Establecer intervalo para actualizar datos cada 80 segundos
-    const intervalId = setInterval(fetchData, 90000);
-  
-    return () => clearInterval(intervalId); // Limpiar el intervalo al desmontar o cambiar de día
-  }, [userId, selectedDay]); // Añadir dependencia a selectedDay para que se ejecute cada vez que cambies el día
-  
+  }, [selectedDay, selectedDate, userId]);
 
-  const syncDataToServer = async (newCheckedItems) => {
-    const dataToSend = Object.entries(newCheckedItems).map(([product, item]) => ({
-      product,
-      checked: item.V
-    }));
-  
-
-    try {
-      const response = await fetch(dayUrls[selectedDay].POST, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(dataToSend),
-      });
-
-      if (!response.ok) {
-        Alert.alert('Error', 'Hubo un problema al enviar los datos.');
-        
-      }
-    } catch (error) {
-    
-      Alert.alert('Error', 'Hubo un problema al enviar los datos.');
-    }
-  };
-
-  const syncDataToServerDebounced = useCallback(debounce(syncDataToServer, 300), [selectedDay]);
-
-  const handleCheckChange = useCallback((productName, type) => {
-    if (checkedItems[productName]?.[type]) return;
-
-    if (type === 'V' && quantities[productName] === '0') {
-      Alert.alert('Atención', 'No puedes marcar este producto porque la cantidad es cero.');
+  const handleCheckChange = async (productName, type) => {
+    // Solo permitir cambiar V (Vendedor), D viene del CRM
+    if (type === 'D') {
+      Alert.alert('No Permitido', 'El check de Despachador solo se puede marcar desde el CRM.');
       return;
     }
 
-    if (!scaleAnims[productName]) {
-      scaleAnims[productName] = new Animated.Value(2);
+    const nuevoValorV = !checkedItems[productName]?.V;
+    const cantidad = parseInt(quantities[productName] || '0');
+    const checkD = checkedItems[productName]?.D || false;
+
+    // Validaciones antes de marcar V
+    if (nuevoValorV) {
+      if (!checkD) {
+        Alert.alert(
+          'Check Despachador Requerido',
+          'No puedes marcar el check de Vendedor hasta que el Despachador lo haya marcado en el CRM.'
+        );
+        return;
+      }
+
+      if (cantidad <= 0) {
+        Alert.alert(
+          'Sin Cantidad',
+          'No puedes marcar el check sin cantidad de producto.'
+        );
+        return;
+      }
     }
 
-    const newCheckedItems = {
-      ...checkedItems,
-      [productName]: { ...checkedItems[productName], [type]: !checkedItems[productName][type] },
-    };
+    // Actualizar en el servidor
+    try {
+      const response = await fetch(API_URL_ACTUALIZAR, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vendedor_id: userId,
+          dia: selectedDay.toUpperCase(),
+          fecha: selectedDate,
+          producto: productName,
+          v: nuevoValorV
+        })
+      });
 
-    setCheckedItems(newCheckedItems);
-    Vibration.vibrate(30);
+      const result = await response.json();
 
-    Animated.sequence([
-      Animated.timing(scaleAnims[productName], {
-        toValue: 1.05,
-        duration: 50,
-        useNativeDriver: true,
-      }),
-      Animated.timing(scaleAnims[productName], {
-        toValue: 1,
-        duration: 50,
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    AsyncStorage.setItem(`checkedItems_${userId}_${selectedDay}`, JSON.stringify(newCheckedItems));
-    syncDataToServerDebounced(newCheckedItems);
-  }, [checkedItems, quantities, selectedDay]);
-
-  const handleReload = async () => {
-    setLoading(true);
-    await fetchData();
+      if (response.ok) {
+        // Actualizar estado local
+        setCheckedItems(prev => ({
+          ...prev,
+          [productName]: {
+            ...prev[productName],
+            V: nuevoValorV
+          }
+        }));
+        Vibration.vibrate(30);
+        console.log(`✅ Check V actualizado: ${productName} = ${nuevoValorV}`);
+      } else {
+        Alert.alert('Error', result.message || 'No se pudo actualizar el check');
+      }
+    } catch (error) {
+      console.error('Error actualizando check:', error);
+      Alert.alert('Error', 'Error de conexión con el CRM');
+    }
   };
 
   const dias = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
   const renderProduct = ({ item }) => {
     const scale = scaleAnims[item] || new Animated.Value(1);
+    const cantidad = quantities[item] || '0';
 
     return (
       <View style={styles.productContainer}>
-        <Animated.View style={{ transform: [{ scale }] }}>
-          <CheckBox
-            checked={checkedItems[item]?.V}
-            onPress={() => handleCheckChange(item, 'V')}
-            containerStyle={styles.checkbox}
-            checkedColor="#28a745"
+        {/* Checkbox V (Vendedor) */}
+        <View style={{ width: 30, alignItems: 'center' }}>
+          <Checkbox
+            value={checkedItems[item]?.V || false}
+            onValueChange={() => handleCheckChange(item, 'V')}
+            style={styles.checkbox}
+            color={checkedItems[item]?.V ? '#28a745' : undefined}
           />
-        </Animated.View>
-        <CheckBox
-          checked={checkedItems[item]?.D}
-          onPress={() => handleCheckChange(item, 'D')}
-          containerStyle={styles.checkbox}
-          disabled
-        />
-        <View style={styles.inputContainer}>
-          <Text style={styles.quantity}>{quantities[item] || '0'}</Text>
         </View>
+
+        {/* Checkbox D (Despachador - Solo Lectura) */}
+        <View style={{ width: 30, alignItems: 'center' }}>
+          <Checkbox
+            value={checkedItems[item]?.D || false}
+            onValueChange={() => handleCheckChange(item, 'D')}
+            style={styles.checkbox}
+            color={checkedItems[item]?.D ? '#28a745' : '#ccc'}
+            disabled={true}
+          />
+        </View>
+
+        {/* Cantidad (Solo Lectura) */}
+        <View style={styles.inputContainer}>
+          <Text style={styles.quantity}>{cantidad}</Text>
+        </View>
+
+        {/* Descripción */}
         <View style={styles.descriptionContainer}>
           <Text style={styles.description}>{item}</Text>
         </View>
@@ -273,29 +226,31 @@ const Cargue = ({ userId }) => {
           ))}
         </ScrollView>
       </View>
+
       <View style={styles.titleContainer}>
-      <Text style={[styles.title, styles.titleCheckbox, styles.titleV]}>V</Text>
-      <Text style={[styles.title, styles.titleCheckbox, styles.titleD]}>D</Text>
-      <Text style={[styles.title, styles.titleQuantity, styles.titleC]}>Cantidad</Text>
-     <Text style={[styles.title, styles.titledescripcion, styles.titleP]}>Producto</Text>
-   </View>
+        <Text style={[styles.title, styles.titleCheckbox, styles.titleV]}>V</Text>
+        <Text style={[styles.title, styles.titleCheckbox, styles.titleD]}>D</Text>
+        <Text style={[styles.title, styles.titleQuantity, styles.titleC]}>Cant</Text>
+        <Text style={[styles.title, styles.titledescripcion, styles.titleP]}>Producto</Text>
+      </View>
 
       {loading ? (
-        <ActivityIndicator size="large" color="#033468" />
+        <ActivityIndicator size="large" color="#033468" style={{ marginTop: 20 }} />
       ) : (
         <FlatList
-        data={productos}
-        keyExtractor={item => item}
-        renderItem={renderProduct}
-        initialNumToRender={5} // Número de elementos a renderizar inicialmente
-        maxToRenderPerBatch={5} // Máximo número de elementos por lote
-        windowSize={10} // Tamaño de la ventana
-        removeClippedSubviews={true} // Mejora el rendimiento
-        contentContainerStyle={styles.listContent}
+          data={productos}
+          keyExtractor={item => item}
+          renderItem={renderProduct}
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={10}
+          removeClippedSubviews={true}
+          contentContainerStyle={styles.listContent}
         />
       )}
-      <TouchableOpacity style={styles.reloadButton} onPress={handleReload}>
-        <Text style={styles.reloadButtonText}>Recargar</Text>
+
+      <TouchableOpacity style={styles.reloadButton} onPress={fetchData}>
+        <Text style={styles.reloadButtonText}>Recargar Cargue</Text>
       </TouchableOpacity>
     </View>
   );
@@ -353,6 +308,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     marginTop: -10,
     marginBottom: 10,
+    marginLeft: -5, // Ampliar franja a la izquierda
+    paddingLeft: 15, // Compensar para que los títulos no se muevan
   },
   title: {
     // Otros estilos generales para el texto
@@ -364,11 +321,12 @@ const styles = StyleSheet.create({
     paddingRight: 0,
   },
   titleV: {
-    marginLeft:2,
+    marginLeft: 2,
     marginRight: -4, // Ajusta este valor para mover "V" hacia la derecha
   },
   titleD: {
-    marginRight: -11, // Ajusta este valor para mover "D" un poco hacia la derecha
+    marginLeft: -8, // Acercar a V
+    marginRight: 8, // Compensar para mantener Cant en su lugar
   },
   titleC: {
     marginRight: 29, // Ajusta este valor para mover "C" hacia la izquierda
@@ -438,11 +396,11 @@ const styles = StyleSheet.create({
     marginLeft: 7,
   },
   checkbox: {
-    width: 19,
-    height: 23,
-    padding: 1,
-    borderColor: '#66b3ff',
+    width: 20,
+    height: 20,
     marginRight: 7,
+    borderRadius: 3,
+    borderWidth: 1,
   },
   reloadButton: {
     backgroundColor: '#28a745',

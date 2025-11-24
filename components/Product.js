@@ -1,7 +1,7 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, memo } from 'react';
 import { View, Image, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 
-const Product = ({ product, quantity, onQuantityChange }) => {
+const Product = memo(({ product, quantity, onQuantityChange }) => {
   const inputRef = useRef(null);
   const [inputFocused, setInputFocused] = useState(false);
 
@@ -72,7 +72,9 @@ const Product = ({ product, quantity, onQuantityChange }) => {
       </View>
     </View>
   );
-};
+});
+
+Product.displayName = 'Product';
 
 const styles = StyleSheet.create({
   container: {
@@ -134,8 +136,8 @@ const styles = StyleSheet.create({
   inputHighlighted: {
     backgroundColor: '#f0f0f0', // Sombreado gris suave
   },
-  
-  
+
+
 });
 
 export default Product;

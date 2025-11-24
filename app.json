@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "AG",
+    "name": "Aplicacion Guerrero",
     "slug": "AG",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -26,7 +26,8 @@
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
         "INTERNET"
-      ]
+      ],
+      "useCleartextTraffic": true
     },
     "web": {
       "favicon": "./assets/favicon.png"

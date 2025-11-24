@@ -1,71 +1,29 @@
-import React, { useState } from 'react';
-import { ScrollView, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, View, TextInput} from 'react-native';
+import React, { useState, useMemo } from 'react';
+import { ScrollView, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, View, FlatList } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Product from './Product';
-import productos from './Productos'
+import productos from './Productos'; // Importar productos con imágenes
 
 
-const orderOfProducts = [
-  "AREPA TIPO OBLEA",
-  "AREPA MEDIANA",
-  "AREPA TIPO PINCHO",
-  "AREPA CON QUESO - CORRIENTE",
-  "AREPA CON QUESO- ESPECIAL GRANDE",
-  "AREPA CON QUESO- ESPECIAL PEQUEÑA",
-  "AREPA CON QUESO MINI X 10",
-  "AREPA CON QUESO CUADRADA",
-  "AREPA DE CHOCLO-CORRIENTE",
-  "AREPA DE CHOCLO CON QUESO GRANDE",
-  "AREPA DE CHOCLO CON QUESO PEQUEÑA",
-  "AREPA BOYACENSE X5",
-  "AREPA BOYACENSE X10",
-  "AREPA SANTADERANA",
-  "ALMOJABANAS X5",
-  "ALMOJABANAS X10",
-  "AREPA CON SEMILLA DE QUINUA",
-  "AREPA CON SEMILLA DE CHIA",
-  "AREPA CON SEMILLA DE AJONJOLI",
-  "AREPA CON SEMILLA DE LINANZA",
-  "AREPA CON SEMILLA DE GIRASOL",
-  "AREPA CHORICERA",
-  "AREPA LONCHERIA",
-  "AREPA CON MARGARINA Y SAL",
-  "YUCAREPA",
-  "AREPA TIPO ASADERO X 10",
-  "AREPA PARA RELLENAR # 1",
-  "AREPA PARA RELLENAR #2",
-  "AREPA PARA RELLENAR #3",
-  "PORCION DE AREPAS X 2 UND",
-  "PORCION DE AREPAS X 3 UND",
-  "PORCION DE AREPAS X 4 UND",
-  "PORCION DE AREPAS X 5 UND",
-  "AREPA SUPER OBLEA",
-  "BLOQUE DE MASA",
-  "LIBRAS DE MASA",
-  "MUTE BOYACENSE",
-  "LIBRA DE MAIZ PETO",
-  "ENVUELTO DE MAIZ X 5 UND"
-  
-];
+// ⚠️ AJUSTAR ESTA URL SEGÚN EL ENTORNO
+// Emulador Android: 'http://10.0.2.2:8000/api/guardar-sugerido/'
+// Dispositivo Físico: 'http://192.168.1.19:8000/api/guardar-sugerido/' (IP de tu PC)
+const API_URL = 'http://192.168.1.19:8000/api/guardar-sugerido/';
 
-const getUrlByDay = (selectedDay, userId) => {
-  const urls = {
-    Lunes: `https://script.google.com/macros/s/AKfycbwadFyKaLcxopk-wwZUso66qjyB0x8USwsML7wDHi-4c9izm3WxUcvjzB3HvPi4npo/exec?userId=${userId}`,
-    Martes: `https://script.google.com/macros/s/AKfycbzOxY9DkMLiVHui-kJDNRYZLmSJ_mAtLxzgTWfJnlvvt3IEdK6o2RkqqacG2GgqaI7G/exec?userId=${userId}`,
-    Miércoles: `https://script.google.com/macros/s/AKfycbz0oBHhnPrl2HJjQX8LPMuQ653QQJtORAT45wcckHYBKqDArHvb-p_f1EBCHO33BA/exec?userId=${userId}`,
-    Jueves: `https://script.google.com/macros/s/AKfycbwdmsDhEVO1ucl2v672zuFGa6QcBc3FuO1qCBtpeEvWayLdnVjyCqf-RUSrtRBA-w5k/exec?userId=${userId}`,
-    Viernes: `https://script.google.com/macros/s/AKfycbzUdzf5gFtQACMm3mWkaYJTxnw5IHuRd6FApvub1l5JPqKl67JL1HjujwS4mCgcreFD/exec?userId=${userId}`,
-    Sábado: `https://script.google.com/macros/s/AKfycbz-F9sz31L2QR-VLwOK2Rl2ofSr-_AOsxduuT_ycSimcezdZgSPSGB3ud0Ehfn_G0A/exec?userId=${userId}`,
-   
-  };
-  return urls[selectedDay] || null;
-};
 const ProductList = ({ selectedDay, userId }) => {
   const [quantities, setQuantities] = useState({});
   const [loading, setLoading] = useState(false);
   const [date, setDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
- 
+
+  // Crear un mapa de productos por nombre para búsqueda rápida
+  const productMap = useMemo(() => {
+    const map = {};
+    productos.forEach(p => {
+      map[p.name] = p;
+    });
+    return map;
+  }, []);
 
   const handleQuantityChange = (productName, quantity) => {
     setQuantities((prevQuantities) => ({
@@ -73,8 +31,6 @@ const ProductList = ({ selectedDay, userId }) => {
       [productName]: quantity,
     }));
   };
-  
- 
 
   const handleSendPress = () => {
     if (!loading && selectedDay) {
@@ -91,79 +47,132 @@ const ProductList = ({ selectedDay, userId }) => {
       return;
     }
 
-    setDate(selectedDate); // Actualiza la fecha seleccionada
+    const currentDate = selectedDate || date;
+    setDate(currentDate); // Actualiza la fecha seleccionada
     setLoading(true); // Activa el estado de carga
 
-     // Ajustar la fecha a la zona horaria local
-  const localDate = new Date(selectedDate);
-  localDate.setMinutes(localDate.getMinutes() - localDate.getTimezoneOffset());
+    // ✅ CORREGIDO: Formatear fecha usando hora local (no UTC) para evitar cambio de día
+    const year = currentDate.getFullYear();
+    const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+    const day = String(currentDate.getDate()).padStart(2, '0');
+    const formattedDate = `${year}-${month}-${day}`;
+
+    console.log('📅 Fecha seleccionada:', currentDate);
+    console.log('📅 Fecha formateada:', formattedDate);
+    console.log('📅 Día de la semana:', currentDate.getDay());
+
+    // ✅ VALIDACIÓN: Verificar que el día seleccionado coincida con la fecha
+    const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const diaDeLaFecha = diasSemana[currentDate.getDay()];
+    
+    console.log('📅 Día calculado:', diaDeLaFecha);
+    console.log('📅 Día seleccionado:', selectedDay);
+    
+    if (diaDeLaFecha.toUpperCase() !== selectedDay.toUpperCase()) {
+      Alert.alert(
+        'Error de Fecha',
+        `La fecha seleccionada (${formattedDate}) es ${diaDeLaFecha}, pero seleccionaste ${selectedDay}. Por favor elige una fecha que corresponda a ${selectedDay}.`
+      );
+      setLoading(false);
+      return;
+    }
 
     try {
-      const url = getUrlByDay(selectedDay, userId);
-      if (!url) {
-        Alert.alert('Error', 'Día no seleccionado o no válido.');
+      // Filtrar productos con cantidad > 0
+      const productosAEnviar = productos.map(p => ({
+        nombre: p.name,
+        cantidad: parseInt(quantities[p.name] || 0)
+      })).filter(p => p.cantidad > 0);
+
+      if (productosAEnviar.length === 0) {
+        Alert.alert('Aviso', 'No hay productos con cantidades para enviar');
         setLoading(false);
         return;
       }
 
-      const formData = new FormData();
-      formData.append('userId', userId);
-      formData.append('date', selectedDate.toISOString().split('T')[0]);
+      const payload = {
+        vendedor_id: userId,
+        dia: selectedDay.toUpperCase(),
+        fecha: formattedDate,
+        productos: productosAEnviar
+      };
 
-      orderOfProducts.forEach(productName => {
-        const quantity = quantities[productName] || '0';
-        formData.append(productName, quantity);
+      console.log('Enviando Sugerido:', payload);
+
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload)
       });
 
-      const response = await fetch(url, { method: 'POST', body: formData });
-      const responseText = await response.text();
-      
+      const result = await response.json();
 
-      if (!response.ok) throw new Error('Error al enviar las cantidades');
-
-      if (responseText.includes("Error: No se pueden enviar datos hasta que las celdas estén vacías")) {
-        Alert.alert('Error', 'No se pueden enviar datos hasta que las celdas estén vacías en la hoja de cálculo.');
+      if (response.ok) {
+        Alert.alert('Éxito', `Sugerido enviado correctamente.\n${result.message || ''}`);
+        setQuantities({}); // Limpiar cantidades tras envío exitoso
       } else {
-        Alert.alert('Éxito', '¡Cantidades enviadas exitosamente!');
-        setQuantities({});
+        // ✅ Manejar error de sugerido duplicado
+        if (result.error === 'YA_EXISTE_SUGERIDO') {
+          Alert.alert(
+            'Sugerido Ya Existe',
+            `Ya enviaste un sugerido para ${selectedDay} ${formattedDate}.\n\nNo puedes enviar otro sugerido para el mismo día.`,
+            [{ text: 'Entendido', style: 'cancel' }]
+          );
+        } else {
+          Alert.alert('Error', result.message || result.error || 'Error al enviar datos al CRM');
+        }
       }
+
     } catch (error) {
-      console.error('Error:', error);
-      Alert.alert('Error', 'Hubo un error al enviar las cantidades');
+      console.error('Error enviando sugerido:', error);
+      Alert.alert('Error de Conexión', 'No se pudo conectar con el CRM. Verifica tu conexión a internet.');
     } finally {
       setLoading(false);
     }
   };
-  
+
+  const renderProduct = ({ item }) => (
+    <Product
+      product={item}
+      onQuantityChange={handleQuantityChange}
+      quantity={quantities[item.name] || ''}
+    />
+  );
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      {!selectedDay && (
-        <Text style={styles.alertText}>Por favor, seleccione un día para ingresar cantidades.</Text>
+    <View style={styles.container}>
+      <FlatList
+        data={productos}
+        renderItem={renderProduct}
+        keyExtractor={(item) => item.name}
+        contentContainerStyle={styles.scrollContainer}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        removeClippedSubviews={true}
+        getItemLayout={(data, index) => ({
+          length: 150, // altura aproximada de cada item
+          offset: 150 * index,
+          index,
+        })}
+      />
+
+      {selectedDay && (
+        <TouchableOpacity
+          style={[styles.sendButton, loading && styles.disabledButton]}
+          onPress={handleSendPress}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.sendButtonText}>Enviar Sugerido</Text>
+          )}
+        </TouchableOpacity>
       )}
-      {orderOfProducts.map((productName, index) => (
-        <Product
-          key={index}
-          product={productos[index]}
-          quantity={quantities[productName] || '0'}
-          onQuantityChange={handleQuantityChange}
-          editable={!!selectedDay}
-        />
-      ))}
-       
 
-      <TouchableOpacity
-        onPress={handleSendPress}
-        style={styles.sendButton}
-        disabled={loading || !selectedDay}
-      >
-        {loading ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Text style={styles.sendButtonText}>Enviar Todas las Cantidades</Text>
-        )}
-      </TouchableOpacity>
-
-      {/* Selector de fecha */}
       {showDatePicker && (
         <DateTimePicker
           value={date}
@@ -172,29 +181,35 @@ const ProductList = ({ selectedDay, userId }) => {
           onChange={handleDateChange}
         />
       )}
-    </ScrollView>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    padding: 20,
-    backgroundColor: '#fff',
+    flex: 1,
+    paddingBottom: 80, // Espacio para el botón flotante
   },
-  alertText: {
-    color: 'red',
-    textAlign: 'center',
-    marginBottom: 20,
+  scrollContainer: {
+    padding: 10,
   },
   sendButton: {
-    marginTop: 20,
+    position: 'absolute',
+    bottom: 20,
+    left: 20,
+    right: 20,
+    backgroundColor: '#00ad53',
     padding: 15,
-    backgroundColor: '#003d88',
-    borderRadius: 5,
+    borderRadius: 10,
     alignItems: 'center',
+    elevation: 5,
+  },
+  disabledButton: {
+    backgroundColor: '#a5d6a7',
   },
   sendButtonText: {
-    color: 'white',
+    color: '#fff',
+    fontSize: 18,
     fontWeight: 'bold',
   },
 });

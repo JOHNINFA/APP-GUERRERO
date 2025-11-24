@@ -8,6 +8,11 @@ import MainScreen from './MainScreen';
 import OptionsScreen from './components/OptionsScreen';
 import Cargue from './components/Cargue';
 import Vencidas from './components/Vencidas';
+import VentasScreen from './components/Ventas/VentasScreen';
+import InicioRutas from './components/rutas/InicioRutas';
+import SeleccionarRuta from './components/rutas/SeleccionarRuta';
+import SeleccionarDia from './components/rutas/SeleccionarDia';
+import ListaClientes from './components/rutas/ListaClientes';
 import 'react-native-gesture-handler';
 
 
@@ -32,12 +37,23 @@ const App = () => {
           <Stack.Screen name="Main">
             {(props) => <MainScreen {...props} userId={userId} />}
           </Stack.Screen>
+          <Stack.Screen name="Ventas">
+            {(props) => <VentasScreen {...props} userId={userId} />}
+          </Stack.Screen>
           <Stack.Screen name="Cargue">
             {(props) => <Cargue {...props} userId={userId} />}
           </Stack.Screen>
           <Stack.Screen name="Vencidas">
             {(props) => <Vencidas {...props} userId={userId} />}
           </Stack.Screen>
+          <Stack.Screen name="InicioRutas">
+            {(props) => <InicioRutas {...props} userId={userId} />}
+          </Stack.Screen>
+          <Stack.Screen name="SeleccionarRuta">
+            {(props) => <SeleccionarRuta {...props} userId={userId} />}
+          </Stack.Screen>
+          <Stack.Screen name="SeleccionarDia" component={SeleccionarDia} />
+          <Stack.Screen name="ListaClientes" component={ListaClientes} />
         </Stack.Navigator>
       ) : (
         <View style={styles.container}>

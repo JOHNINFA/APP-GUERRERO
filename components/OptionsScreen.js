@@ -1,58 +1,66 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, BackHandler, Alert, StatusBar, ImageBackground } from 'react-native';
-import CloudDownloadIcon from '../assets/cloud-download-outline.svg';
-import CloudUploadIcon from '../assets/cloud-upload-outline.svg';
-import Rendimiento from '../assets/newspaper-outline.svg';
+import React from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ImageBackground } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 
 
 const OptionsScreen = ({ navigation, userId }) => {
-  const [carguePressed, setCarguePressed] = useState(false); // Estado para verificar si "Cargue" ha sido presionado
-  const [isPressed, setIsPressed] = useState(false); // Estado para verificar si el botón "Salir" ha sido presionado
-
-  const handleCarguePress = () => {
-    setCarguePressed(true); // Marca que se ha presionado "Cargue"
-    navigation.navigate('Cargue', { userId }); // Navega a la pantalla "Cargue"
-  };
+  // Eliminado carguePressed, ya no es necesario forzar la navegación a Cargue
+  // Eliminado isPressed, ya no es necesario
 
   const handleOptionPress = (screen) => {
-    if (carguePressed) {
-      navigation.navigate(screen, { userId }); // Navega a la pantalla deseada si "Cargue" ha sido presionado
-    } else {
-      alert('Por favor, presiona el botón "Cargue" antes de continuar.'); // Muestra una alerta si "Cargue" no ha sido presionado
-    }
+    // Navega directamente a la pantalla solicitada
+    navigation.navigate(screen, { userId });
   };
 
 
   return (
-    <ImageBackground 
+    <ImageBackground
       source={require('../assets/banner2.png')} // Cambia la ruta a tu imagen
       style={styles.container} // Utiliza el mismo estilo que tenías en tu contenedor
       resizeMode="cover" // Puedes ajustar esto a 'contain' si prefieres
     >
-      <StatusBar hidden={true} /> 
-    
+      <StatusBar hidden={true} />
 
-     
 
-      <TouchableOpacity style={styles.option} onPress={handleCarguePress}>
+
+
+      {/* Botón Ventas - NUEVO */}
+      <TouchableOpacity
+        style={styles.option}
+        onPress={() => navigation.navigate('Ventas', { userId })}
+      >
+        <View style={styles.iconWithText}>
+          <Ionicons name="cart-outline" size={24} color="white" style={styles.icon} />
+          <Text style={styles.optionText}>Ventas</Text>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.option} onPress={() => navigation.navigate('Cargue', { userId })}>
         <View style={[styles.iconWithText, { paddingRight: 14.5 }]}>
-          <CloudDownloadIcon width={24} height={24} color="white" fill="white" style={styles.icon} />
+          <Ionicons name="cloud-download-outline" size={24} color="white" style={styles.icon} />
           <Text style={styles.optionText}>Cargue</Text>
         </View>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.option} onPress={() => handleOptionPress('Main')}>
         <View style={styles.iconWithText}>
-          <CloudUploadIcon width={24} height={24} color="white" fill="white" style={styles.icon} />
+          <Ionicons name="cloud-upload-outline" size={24} color="white" style={styles.icon} />
           <Text style={styles.optionText}>Sugerido</Text>
         </View>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.option} onPress={() => handleOptionPress('Vencidas')}>
         <View style={styles.iconWithText}>
-          <Rendimiento width={24} height={24} color="white" fill="white" style={styles.icon} />
+          <Ionicons name="newspaper-outline" size={24} color="white" style={styles.icon} />
           <Text style={styles.optionText}>Rendimiento</Text>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.option} onPress={() => navigation.navigate('InicioRutas')}>
+        <View style={styles.iconWithText}>
+          <Ionicons name="map-outline" size={24} color="white" style={styles.icon} />
+          <Text style={styles.optionText}>Rutas</Text>
         </View>
       </TouchableOpacity>
     </ImageBackground>
@@ -64,7 +72,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  
+
   option: {
     backgroundColor: '#00ad53',
     padding: 20,

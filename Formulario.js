@@ -6,15 +6,17 @@ const Formulario = () => {
   const [cantidad, setCantidad] = useState("");
   const [email, setEmail] = useState("");
 
-  
+
 
   const Submit = () => {
     const formDatab = new FormData();
     formDatab.append("Cantidad", cantidad);
     formDatab.append("Email", email);
-  
-   
 
+
+
+    // ⚠️ FETCH COMENTADO TEMPORALMENTE - NO TOCAR GOOGLE SHEETS DURANTE DESARROLLO
+    /*
     fetch("https://script.google.com/macros/s/AKfycbzFJHZN1cQLtCpjlOmT0Etf6RIkoClHEuyhodBDygiqclFR4sUXYqh_39cik9xDp6FIqw/exec", {
       method: "POST",
       body: formDatab,
@@ -39,6 +41,7 @@ const Formulario = () => {
       .catch((error) => {
         console.log("Fetch Error:", error);
       });
+    */
   };
 
   return (
@@ -61,7 +64,7 @@ const Formulario = () => {
           onChangeText={(text) => setEmail(text)}
         />
 
-       
+
         <TouchableOpacity style={styles.button} onPress={Submit}>
           <Text style={styles.buttonText}>Submit</Text>
         </TouchableOpacity>

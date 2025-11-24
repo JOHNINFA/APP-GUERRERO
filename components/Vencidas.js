@@ -45,15 +45,16 @@ const orderOfProducts = [
   "CANASTAS"
 ];
 
+// ⚠️ URLS COMENTADAS TEMPORALMENTE - NO TOCAR GOOGLE SHEETS DURANTE DESARROLLO
 // Mapeo de días a URLs
 const urlsByDay = {
-  Lunes: `https://script.google.com/macros/s/AKfycbwadFyKaLcxopk-wwZUso66qjyB0x8USwsML7wDHi-4c9izm3WxUcvjzB3HvPi4npo/exec?userId=`,
-  Martes: `https://script.google.com/macros/s/AKfycbzOxY9DkMLiVHui-kJDNRYZLmSJ_mAtLxzgTWfJnlvvt3IEdK6o2RkqqacG2GgqaI7G/exec?userId=`, 
-  Miércoles: `https://script.google.com/macros/s/AKfycbz0oBHhnPrl2HJjQX8LPMuQ653QQJtORAT45wcckHYBKqDArHvb-p_f1EBCHO33BA/exec?userId=`, 
-  Jueves: `https://script.google.com/macros/s/AKfycbwdmsDhEVO1ucl2v672zuFGa6QcBc3FuO1qCBtpeEvWayLdnVjyCqf-RUSrtRBA-w5k/exec?userId=`, 
-  Viernes: `https://script.google.com/macros/s/AKfycbzUdzf5gFtQACMm3mWkaYJTxnw5IHuRd6FApvub1l5JPqKl67JL1HjujwS4mCgcreFD/exec?userId=`, 
-  Sábado: `https://script.google.com/macros/s/AKfycbz-F9sz31L2QR-VLwOK2Rl2ofSr-_AOsxduuT_ycSimcezdZgSPSGB3ud0Ehfn_G0A/exec?userId=`, 
-  
+  Lunes: null, // `https://script.google.com/macros/s/AKfycbwadFyKaLcxopk-wwZUso66qjyB0x8USwsML7wDHi-4c9izm3WxUcvjzB3HvPi4npo/exec?userId=`,
+  Martes: null, // `https://script.google.com/macros/s/AKfycbzOxY9DkMLiVHui-kJDNRYZLmSJ_mAtLxzgTWfJnlvvt3IEdK6o2RkqqacG2GgqaI7G/exec?userId=`, 
+  Miércoles: null, // `https://script.google.com/macros/s/AKfycbz0oBHhnPrl2HJjQX8LPMuQ653QQJtORAT45wcckHYBKqDArHvb-p_f1EBCHO33BA/exec?userId=`, 
+  Jueves: null, // `https://script.google.com/macros/s/AKfycbwdmsDhEVO1ucl2v672zuFGa6QcBc3FuO1qCBtpeEvWayLdnVjyCqf-RUSrtRBA-w5k/exec?userId=`, 
+  Viernes: null, // `https://script.google.com/macros/s/AKfycbzUdzf5gFtQACMm3mWkaYJTxnw5IHuRd6FApvub1l5JPqKl67JL1HjujwS4mCgcreFD/exec?userId=`, 
+  Sábado: null, // `https://script.google.com/macros/s/AKfycbz-F9sz31L2QR-VLwOK2Rl2ofSr-_AOsxduuT_ycSimcezdZgSPSGB3ud0Ehfn_G0A/exec?userId=`, 
+
 };
 
 const Vencidas = ({ userId }) => {
@@ -171,28 +172,28 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#696969',
   },
-  
+
   productHeader: {
     width: '40%', // El ancho de la columna "PRODUCTO"
     marginLeft: 24, // Mueve "PRODUCTO" hacia la derecha
   },
-  
+
   vencidasHeader: {
     width: '15%',
     marginRight: 1,
     marginLeft: 22, // Mueve "VENCIDAS" hacia la derecha
   },
-  
+
   devolucionHeader: {
     width: '25%',
     marginRight: 1, // Mueve "DEVOLUCION" hacia la izquierda
-    marginLeft:5,
+    marginLeft: 5,
   },
-  
+
   totalHeader: {
     width: '18%',
-    marginRight:15, 
-    marginLeft:-15,
+    marginRight: 15,
+    marginLeft: -15,
   },
   productHeader: {
     width: '35%', // Ajustar el ancho de la columna de productos
