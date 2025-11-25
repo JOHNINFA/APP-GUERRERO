@@ -1,16 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Vibration, ActivityIndicator, Alert, TextInput, Animated } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Vibration, ActivityIndicator, Alert, TextInput, Animated, Platform } from 'react-native';
 import Checkbox from 'expo-checkbox';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 // ⚠️ AJUSTAR ESTA URL SEGÚN EL ENTORNO
 const API_URL_OBTENER = 'http://192.168.1.19:8000/api/obtener-cargue/';
 const API_URL_ACTUALIZAR = 'http://192.168.1.19:8000/api/actualizar-check-vendedor/';
+const API_URL_VERIFICAR_ESTADO = 'http://192.168.1.19:8000/api/verificar-estado-dia/';
 
 const Cargue = ({ userId }) => {
   const [selectedDay, setSelectedDay] = useState('Lunes');
   // Fecha actual en formato YYYY-MM-DD
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [dateObject, setDateObject] = useState(new Date()); // Objeto Date para el picker
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [diaEstado, setDiaEstado] = useState(null); // Estado del día (SUGERIDO, DESPACHO, COMPLETADO)
   const [quantities, setQuantities] = useState({});
   const [checkedItems, setCheckedItems] = useState({});
   const [loading, setLoading] = useState(false);
@@ -56,8 +61,35 @@ const Cargue = ({ userId }) => {
     'CANASTILLA'
   ];
 
+  // Verificar estado del día
+  const verificarEstadoDia = async (dia, fecha) => {
+    try {
+      const url = `${API_URL_VERIFICAR_ESTADO}?vendedor_id=${userId}&dia=${dia.toUpperCase()}&fecha=${fecha}`;
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.success) {
+        setDiaEstado(data);
+        console.log('📊 Estado del día:', data.estado, '- Total productos:', data.total_productos);
+
+        // Si el día tiene datos marcados como DESPACHO, mostrar info
+        if (data.estado === 'DESPACHO' && data.tiene_datos) {
+          // No bloqueamos la edición, solo informamos
+          console.log('ℹ️', data.mensaje);
+        }
+      }
+    } catch (error) {
+      console.error('Error verificando estado:', error);
+      setDiaEstado(null);
+    }
+  };
+
   const fetchData = async () => {
     setLoading(true);
+
+    // Verificar estado del día primero
+    await verificarEstadoDia(selectedDay, selectedDate);
+
     try {
       const url = `${API_URL_OBTENER}?vendedor_id=${userId}&dia=${selectedDay.toUpperCase()}&fecha=${selectedDate}`;
       console.log('📥 Cargando cargue:', url);
@@ -171,6 +203,25 @@ const Cargue = ({ userId }) => {
 
   const dias = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
+  // Manejar cambio de fecha en el DatePicker
+  const onDateChange = (event, date) => {
+    setShowDatePicker(Platform.OS === 'ios'); // En iOS mantener visible
+
+    if (date) {
+      setDateObject(date);
+      const formattedDate = date.toISOString().split('T')[0];
+      setSelectedDate(formattedDate);
+      console.log('📅 Nueva fecha seleccionada:', formattedDate);
+    }
+  };
+
+  // Formatear fecha para mostrar
+  const formatDateForDisplay = (dateStr) => {
+    const options = { year: 'numeric', month: 'long', day: 'numeric' };
+    const date = new Date(dateStr + 'T00:00:00'); // Evitar problema de timezone
+    return date.toLocaleDateString('es-ES', options);
+  };
+
   const renderProduct = ({ item }) => {
     const scale = scaleAnims[item] || new Animated.Value(1);
     const cantidad = quantities[item] || '0';
@@ -213,18 +264,47 @@ const Cargue = ({ userId }) => {
 
   return (
     <View style={styles.container}>
+      {/* Solo mostrar el DatePicker cuando showDatePicker sea true */}
+      {showDatePicker && (
+        <DateTimePicker
+          value={dateObject}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={onDateChange}
+          maximumDate={new Date(2030, 11, 31)}
+          minimumDate={new Date(2020, 0, 1)}
+        />
+      )}
+
       <View style={styles.navbar}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.daysContainer}>
           {dias.map(dia => (
             <TouchableOpacity
               key={dia}
               style={[styles.dayButton, selectedDay === dia && styles.selectedDayButton]}
-              onPress={() => setSelectedDay(dia)}
+              onPress={() => {
+                setSelectedDay(dia);
+                setShowDatePicker(true); // Abrir calendario al tocar un día
+              }}
             >
               <Text style={[styles.dayText, selectedDay === dia && styles.selectedDayText]}>{dia}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
+      </View>
+
+      {/* Barra de Información del Día Seleccionado */}
+      <View style={styles.infoBar}>
+        <Text style={styles.infoDateText}>📅 {formatDateForDisplay(selectedDate)}</Text>
+        {diaEstado?.tiene_datos && (
+          <View style={[styles.miniBadge, {
+            backgroundColor: diaEstado.estado === 'DESPACHO' ? '#dc3545' : '#007bff' // Rojo si tiene datos
+          }]}>
+            <Text style={styles.miniBadgeText}>
+              {diaEstado.estado === 'DESPACHO' ? '⚠️ DÍA FINALIZADO' : 'SUGERIDO'}
+            </Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.titleContainer}>
@@ -259,11 +339,12 @@ const Cargue = ({ userId }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 20,
+    padding: 5, // Reducido para dar más ancho a los productos
+    paddingTop: 5,
     backgroundColor: '#f5f5f5',
   },
   navbar: {
-    marginBottom: 10,
+    marginBottom: 2, // Reducido para acercar a títulos
   },
   daysContainer: {
     flexDirection: 'row',
@@ -279,7 +360,7 @@ const styles = StyleSheet.create({
     marginRight: 12,
     borderWidth: 1,
     borderColor: '#ddd',
-    marginTop: 30,
+    marginTop: 35, // Aumentado para bajar más los botones
     elevation: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -299,17 +380,22 @@ const styles = StyleSheet.create({
   selectedDayText: {
     color: 'black',
   },
+  dayDateText: {
+    fontSize: 10,
+    color: '#666',
+    marginTop: 2,
+  },
   titleContainer: {
-    flexDirection: 'row', // Asegúrate de que los elementos estén en fila
-    alignItems: 'center', // Alinea los elementos verticalmente en el centro
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#003d88',
     borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    marginTop: -10,
-    marginBottom: 10,
-    marginLeft: -5, // Ampliar franja a la izquierda
-    paddingLeft: 15, // Compensar para que los títulos no se muevan
+    marginTop: 2, // Reducido para acercar a días
+    marginBottom: 5,
+    marginLeft: -5,
+    paddingLeft: 15,
   },
   title: {
     // Otros estilos generales para el texto
@@ -408,10 +494,65 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     marginTop: 10,
+    marginBottom: 40, // Espacio para los botones de Android
   },
   reloadButtonText: {
     color: 'white',
     fontSize: 18,
+    fontWeight: 'bold',
+  },
+  // Estilos para el selector de fecha
+  dateSelector: {
+    backgroundColor: '#007bff',
+    padding: 15,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+    borderRadius: 8,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+  },
+  dateSelectorText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  estadoBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    elevation: 2,
+  },
+  estadoBadgeText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  // Estilos para la barra de info
+  infoBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 5,
+    marginBottom: 5,
+  },
+  infoDateText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: 'bold',
+  },
+  miniBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  miniBadgeText: {
+    color: 'white',
+    fontSize: 10,
     fontWeight: 'bold',
   },
 });
