@@ -246,6 +246,7 @@ export const guardarVenta = async (venta) => {
             const ventaBackend = {
                 vendedor_id: venta.vendedor, // Asegurarse que sea el ID correcto (ej: ID1)
                 cliente_nombre: venta.cliente_nombre,
+                nombre_negocio: venta.cliente_negocio || '', // Nombre del negocio
                 // cliente: venta.cliente_id, // Si tuviéramos el ID de ClienteRuta real
                 total: venta.total,
                 detalles: venta.productos,

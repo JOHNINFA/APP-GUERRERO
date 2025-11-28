@@ -35,6 +35,7 @@ export const enviarVentaRuta = async (ventaData) => {
 
         if (ventaData.ruta) formData.append('ruta', ventaData.ruta);
         formData.append('cliente_nombre', ventaData.cliente_nombre);
+        if (ventaData.nombre_negocio) formData.append('nombre_negocio', ventaData.nombre_negocio);
         if (ventaData.cliente) formData.append('cliente', ventaData.cliente);
         formData.append('total', ventaData.total);
         formData.append('metodo_pago', ventaData.metodo_pago);

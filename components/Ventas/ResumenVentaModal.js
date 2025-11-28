@@ -41,13 +41,16 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                     </View>
 
                     <ScrollView style={styles.scrollView}>
-                        {/* Cliente */}
+                        {/* Negocio y Cliente */}
                         <View style={styles.seccion}>
-                            <Text style={styles.label}>Cliente:</Text>
-                            <Text style={styles.valor}>{cliente_nombre}</Text>
                             {cliente_negocio && (
-                                <Text style={styles.subValor}>{cliente_negocio}</Text>
+                                <>
+                                    <Text style={styles.label}>Negocio:</Text>
+                                    <Text style={styles.valor}>{cliente_negocio}</Text>
+                                </>
                             )}
+                            <Text style={[styles.label, cliente_negocio && { marginTop: 8 }]}>Cliente:</Text>
+                            <Text style={styles.valor}>{cliente_nombre}</Text>
                         </View>
 
                         <View style={styles.divider} />
