@@ -61,8 +61,8 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente }) 
                 <Ionicons name="person" size={24} color="#003d88" />
             </View>
             <View style={styles.clienteInfo}>
-                <Text style={styles.clienteNombre}>{item.nombre}</Text>
-                <Text style={styles.clienteNegocio}>{item.negocio}</Text>
+                <Text style={styles.clienteNombre}>{item.negocio}</Text>
+                <Text style={styles.clienteNegocio}>{item.nombre}</Text>
                 {item.celular && (
                     <Text style={styles.clienteDetalle}>📞 {item.celular}</Text>
                 )}
@@ -100,7 +100,6 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente }) 
                         value={busqueda}
                         onChangeText={setBusqueda}
                         autoCapitalize="characters"
-                        autoFocus
                     />
                     {busqueda.length > 0 && (
                         <TouchableOpacity onPress={() => setBusqueda('')}>

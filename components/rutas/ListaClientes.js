@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList, Linking, Alert, ActivityIndicator, Vibration, Modal, Animated } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
-import { obtenerClientesPorRutaYDia, marcarClienteVisitado, limpiarTodasLasVisitas } from '../../services/sheetsService';
+import { obtenerClientesPorRutaYDia, marcarClienteVisitado, limpiarTodasLasVisitas } from '../../services/rutasApiService';
 import { Ionicons } from '@expo/vector-icons';
 
 const ListaClientes = ({ route, navigation }) => {
@@ -17,17 +17,17 @@ const ListaClientes = ({ route, navigation }) => {
 
   useEffect(() => {
     cargarClientes();
-    
+
     // Monitorear conexión a internet
     const unsubscribe = NetInfo.addEventListener(state => {
       setIsConnected(state.isConnected);
-      
+
       // Si se reconecta, sincronizar pendientes
       if (state.isConnected) {
         sincronizarPendientes();
       }
     });
-    
+
     return () => unsubscribe();
   }, []);
 
@@ -37,7 +37,7 @@ const ListaClientes = ({ route, navigation }) => {
       const { userId } = route.params;
       // Incluir userId en la clave de caché para que cada usuario tenga su propio caché
       const cacheKey = `clientes_${userId}_${nombreRutaCompleto}_${dia}`;
-      
+
       // 1. Si no es recarga forzada, intentar cargar desde caché primero (RÁPIDO)
       if (!forzarRecarga) {
         try {
@@ -56,10 +56,10 @@ const ListaClientes = ({ route, navigation }) => {
       // 2. Cargar desde Sheets
       const clientesObtenidos = await obtenerClientesPorRutaYDia(nombreRutaCompleto, dia);
       setClientes(clientesObtenidos);
-      
+
       // 3. Guardar en caché para la próxima vez
       await AsyncStorage.setItem(cacheKey, JSON.stringify(clientesObtenidos));
-      
+
     } catch (error) {
       console.error('Error al cargar clientes:', error);
       Alert.alert('Error', 'No se pudieron cargar los clientes');
@@ -73,17 +73,17 @@ const ListaClientes = ({ route, navigation }) => {
       const { userId } = route.params;
       const nombreRutaCompleto = rutaNombre || ruta;
       const pendientesKey = `pendientes_${userId}_${nombreRutaCompleto}_${dia}`;
-      
+
       const pendientesStr = await AsyncStorage.getItem(pendientesKey);
       if (!pendientesStr) return;
-      
+
       const pendientes = JSON.parse(pendientesStr);
-      
+
       // Sincronizar cada pendiente
       for (const pendiente of pendientes) {
         await marcarClienteVisitado(nombreRutaCompleto, pendiente.orden, true);
       }
-      
+
       // Limpiar pendientes
       await AsyncStorage.removeItem(pendientesKey);
       console.log('✅ Sincronización completada');
@@ -102,7 +102,7 @@ const ListaClientes = ({ route, navigation }) => {
     Vibration.vibrate(50);
 
     // Optimistic update - actualizar UI inmediatamente ANTES de cualquier otra cosa
-    const clientesActualizados = clientes.map(c => 
+    const clientesActualizados = clientes.map(c =>
       c.orden === cliente.orden ? { ...c, visitado: true } : c
     );
     setClientes([...clientesActualizados]); // Forzar nueva referencia de array
@@ -112,7 +112,7 @@ const ListaClientes = ({ route, navigation }) => {
     const { userId } = route.params;
     const cacheKey = `clientes_${userId}_${nombreRutaCompleto}_${dia}`;
     const pendientesKey = `pendientes_${userId}_${nombreRutaCompleto}_${dia}`;
-    
+
     try {
       await AsyncStorage.setItem(cacheKey, JSON.stringify(clientesActualizados));
     } catch (error) {
@@ -136,8 +136,8 @@ const ListaClientes = ({ route, navigation }) => {
     // Enviar a Google Sheets en segundo plano
     try {
       const resultado = await marcarClienteVisitado(
-        nombreRutaCompleto, 
-        cliente.orden, 
+        nombreRutaCompleto,
+        cliente.orden,
         true
       );
 
@@ -161,7 +161,7 @@ const ListaClientes = ({ route, navigation }) => {
   const navegarDireccion = (cliente) => {
     // Prioridad: DIRECCION, luego COORDENADAS
     let url;
-    
+
     if (cliente.direccion && cliente.direccion.trim() !== '') {
       // Usar dirección
       url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cliente.direccion)}`;
@@ -184,7 +184,7 @@ const ListaClientes = ({ route, navigation }) => {
       Alert.alert('Sin Internet', 'Necesitas conexión a internet para limpiar las visitas.');
       return;
     }
-    
+
     Alert.alert(
       'Limpiar Todas las Visitas',
       '¿Estás seguro? Esto limpiará visitas de esta ruta.',
@@ -198,7 +198,7 @@ const ListaClientes = ({ route, navigation }) => {
               setRefreshing(true);
               const nombreRutaCompleto = rutaNombre || ruta;
               const resultado = await limpiarTodasLasVisitas(nombreRutaCompleto);
-              
+
               if (resultado.success) {
                 // Recargar clientes desde Sheets (forzar recarga)
                 await cargarClientes(true);
@@ -235,7 +235,7 @@ const ListaClientes = ({ route, navigation }) => {
 
   const refrescarClientes = async () => {
     setRefreshing(true);
-    
+
     // Animación de rotación continua más rápida
     Animated.loop(
       Animated.timing(spinValue, {
@@ -244,9 +244,9 @@ const ListaClientes = ({ route, navigation }) => {
         useNativeDriver: true,
       })
     ).start();
-    
+
     await cargarClientes(true); // Forzar recarga desde Sheets
-    
+
     // Detener animación
     spinValue.setValue(0);
     setRefreshing(false);
@@ -272,7 +272,7 @@ const ListaClientes = ({ route, navigation }) => {
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.headerTop}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.goBack()}
           >
@@ -284,8 +284,8 @@ const ListaClientes = ({ route, navigation }) => {
               {clientes.length} cliente{clientes.length !== 1 ? 's' : ''} para hoy
             </Text>
           </View>
-          <TouchableOpacity 
-            style={styles.botonRefrescar} 
+          <TouchableOpacity
+            style={styles.botonRefrescar}
             onPress={refrescarClientes}
             disabled={refreshing}
           >
@@ -321,8 +321,8 @@ const ListaClientes = ({ route, navigation }) => {
         }
         ListFooterComponent={
           clientes.length > 0 && (
-            <TouchableOpacity 
-              style={[styles.botonLimpiar, refreshing && styles.botonLimpiarDisabled]} 
+            <TouchableOpacity
+              style={[styles.botonLimpiar, refreshing && styles.botonLimpiarDisabled]}
               onPress={limpiarTodo}
               disabled={refreshing}
             >
@@ -338,7 +338,7 @@ const ListaClientes = ({ route, navigation }) => {
         onScrollBeginDrag={() => setRefreshing(false)}
         renderItem={({ item: cliente }) => {
           const estaVisitado = cliente.visitado;
-          
+
           // Skeleton loader mientras se renderiza
           if (!cliente || !cliente.orden) {
             return (
@@ -348,7 +348,7 @@ const ListaClientes = ({ route, navigation }) => {
               </View>
             );
           }
-          
+
           return (
             <View style={styles.clienteCard}>
               <View style={styles.clienteHeader}>
@@ -367,9 +367,9 @@ const ListaClientes = ({ route, navigation }) => {
                         {cliente.orden}
                       </Text>
                     </View>
-                    <Text style={styles.clienteNombre}>{cliente.cliente}</Text>
+                    <Text style={styles.clienteNombre}>{cliente.tipoNegocio}</Text>
                   </View>
-                  <Text style={styles.clienteTipo}>{cliente.tipoNegocio}</Text>
+                  <Text style={styles.clienteTipo}>{cliente.cliente}</Text>
                 </View>
               </View>
 
@@ -377,7 +377,7 @@ const ListaClientes = ({ route, navigation }) => {
                 <Text style={styles.detalle}>📍 {cliente.direccion || cliente.coordenadas || 'Sin dirección'}</Text>
                 <Text style={styles.detalle}>📞 {cliente.telefono || 'Sin teléfono'}</Text>
                 {cliente.notas && cliente.notas.trim() !== '' && (
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.botonNotas}
                     onPress={() => abrirModalNotas(cliente)}
                   >
@@ -429,7 +429,7 @@ const ListaClientes = ({ route, navigation }) => {
                 <Ionicons name="close-circle" size={28} color="#666" />
               </TouchableOpacity>
             </View>
-            
+
             {clienteSeleccionado && (
               <View style={styles.modalContent}>
                 <Text style={styles.modalClienteNombre}>
@@ -442,8 +442,8 @@ const ListaClientes = ({ route, navigation }) => {
                 </View>
               </View>
             )}
-            
-            <TouchableOpacity 
+
+            <TouchableOpacity
               style={styles.modalBotonCerrar}
               onPress={cerrarModalNotas}
             >

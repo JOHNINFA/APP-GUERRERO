@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { obtenerRutasPorUsuario } from '../../services/sheetsService';
+import { obtenerRutasPorUsuario } from '../../services/rutasApiService';
 import { Ionicons } from '@expo/vector-icons';
 
 const SeleccionarRuta = ({ navigation, route }) => {
   const [rutas, setRutas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  
+
   // Obtener userId de los parámetros de navegación o de AsyncStorage
   const userId = route.params?.userId || '5'; // Default a 5 si no se pasa
 
@@ -20,15 +20,15 @@ const SeleccionarRuta = ({ navigation, route }) => {
     try {
       setLoading(true);
       setError(null);
-      
+
       // Extraer solo el número del userId (ej: "Id5" -> "5", "ID5" -> "5")
       const userIdNumero = userId.toString().replace(/[^0-9]/g, '');
-      
+
       // Obtener rutas desde Google Sheets
       const rutasObtenidas = await obtenerRutasPorUsuario(userIdNumero);
-      
+
       setRutas(rutasObtenidas);
-      
+
       if (rutasObtenidas.length === 0) {
         setError('No tienes rutas asignadas todavía.');
       }
@@ -44,13 +44,13 @@ const SeleccionarRuta = ({ navigation, route }) => {
     try {
       // Extraer solo el número del userId
       const userIdNumero = userId.toString().replace(/[^0-9]/g, '');
-      
+
       await AsyncStorage.setItem('rutaSeleccionada', ruta.id);
       await AsyncStorage.setItem('rutaNombre', ruta.nombre);
-      navigation.navigate('SeleccionarDia', { 
+      navigation.navigate('SeleccionarDia', {
         ruta: ruta.id,
         rutaNombre: ruta.nombre,
-        userId: userIdNumero 
+        userId: userIdNumero
       });
     } catch (error) {
       console.error('Error al guardar la ruta:', error);
@@ -77,7 +77,7 @@ const SeleccionarRuta = ({ navigation, route }) => {
       <View style={styles.container}>
         <View style={styles.header}>
           <View style={styles.headerTop}>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.backButton}
               onPress={() => navigation.goBack()}
             >
@@ -102,7 +102,7 @@ const SeleccionarRuta = ({ navigation, route }) => {
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.headerTop}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.goBack()}
           >
@@ -116,7 +116,7 @@ const SeleccionarRuta = ({ navigation, route }) => {
           </View>
         </View>
       </View>
-      
+
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {rutas.map((ruta) => (
           <TouchableOpacity

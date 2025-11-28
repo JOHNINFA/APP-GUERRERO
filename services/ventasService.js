@@ -3,6 +3,7 @@
 // En el futuro se conectará al API del CRM Django
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { enviarVentaRuta } from './rutasApiService';
 
 // ==================== DATOS HARDCODEADOS ====================
 
@@ -212,6 +213,8 @@ const generarIdVenta = async () => {
  * @param {Object} venta - Datos de la venta
  * @returns {Promise<Object>} Venta guardada
  */
+
+
 export const guardarVenta = async (venta) => {
     try {
         const ventas = await obtenerVentas();
@@ -225,6 +228,37 @@ export const guardarVenta = async (venta) => {
 
         ventas.push(nuevaVenta);
         await AsyncStorage.setItem('ventas', JSON.stringify(ventas));
+
+        // INTENTAR ENVIAR AL BACKEND
+        try {
+            // Adaptar estructura para el backend
+            // El backend espera: vendedor (ID), cliente_nombre, total, detalles (JSON)
+            // venta.vendedor suele ser "ID1" o "1". El backend espera ID de Vendedor.
+
+            // Formatear productos vencidos para el backend
+            const productosVencidosFormateados = (venta.vencidas || []).map(item => ({
+                id: item.id,
+                producto: item.nombre,
+                cantidad: item.cantidad,
+                motivo: item.motivo || 'No especificado'
+            }));
+
+            const ventaBackend = {
+                vendedor_id: venta.vendedor, // Asegurarse que sea el ID correcto (ej: ID1)
+                cliente_nombre: venta.cliente_nombre,
+                // cliente: venta.cliente_id, // Si tuviéramos el ID de ClienteRuta real
+                total: venta.total,
+                detalles: venta.productos,
+                metodo_pago: 'EFECTIVO',
+                productos_vencidos: productosVencidosFormateados,
+                foto_vencidos: venta.fotoVencidas || {}
+            };
+
+            await enviarVentaRuta(ventaBackend);
+            console.log('✅ Venta sincronizada con backend');
+        } catch (err) {
+            console.warn('⚠️ No se pudo sincronizar venta con backend (offline?)', err);
+        }
 
         return nuevaVenta;
     } catch (error) {

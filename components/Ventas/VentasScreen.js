@@ -148,10 +148,19 @@ const VentasScreen = ({ route }) => {
 
     // Confirmar y guardar venta
     const confirmarVenta = async () => {
-        if (!ventaTemporal) return;
+        console.log('🔵 confirmarVenta iniciado');
+        if (!ventaTemporal) {
+            console.log('❌ No hay ventaTemporal');
+            return;
+        }
+
+        console.log('📝 Venta a guardar:', ventaTemporal);
 
         try {
+            console.log('💾 Llamando a guardarVenta...');
             const ventaGuardada = await guardarVenta(ventaTemporal);
+            console.log('✅ Venta guardada:', ventaGuardada);
+
             setMostrarResumen(false);
 
             Alert.alert(
@@ -173,8 +182,8 @@ const VentasScreen = ({ route }) => {
                 ]
             );
         } catch (error) {
+            console.error('❌ Error en confirmarVenta:', error);
             Alert.alert('Error', 'No se pudo guardar la venta');
-            console.error(error);
         }
     };
 
@@ -272,6 +281,11 @@ const VentasScreen = ({ route }) => {
                         <Text style={styles.clienteNombre}>
                             {clienteSeleccionado?.negocio || 'Seleccionar Cliente'}
                         </Text>
+                        {clienteSeleccionado?.nombre && (
+                            <Text style={styles.clienteDetalle}>
+                                👤 {clienteSeleccionado.nombre}
+                            </Text>
+                        )}
                         <Text style={styles.clienteDetalle}>
                             📞 {clienteSeleccionado?.celular || 'Sin teléfono'}
                         </Text>
@@ -374,6 +388,8 @@ const VentasScreen = ({ route }) => {
                 onClose={() => setMostrarVencidas(false)}
                 onGuardar={handleGuardarVencidas}
                 tipo="vencidas"
+                datosGuardados={vencidas}
+                fotosGuardadas={fotoVencidas}
             />
 
             <ResumenVentaModal

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     Text,
@@ -8,16 +8,32 @@ import {
     StyleSheet,
     Modal,
     Image,
-    Alert
+    Alert,
+    ScrollView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { obtenerProductos, formatearMoneda } from '../../services/ventasService';
 
-const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devoluciones' }) => {
+const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devoluciones', datosGuardados = [], fotosGuardadas = {} }) => {
     const [cantidades, setCantidades] = useState({});
-    const [foto, setFoto] = useState(null);
+    const [fotos, setFotos] = useState({}); // { productoId: [uri1, uri2, ...] }
     const productos = obtenerProductos();
+
+    // Cargar datos guardados cuando se abre el modal
+    useEffect(() => {
+        if (visible) {
+            // Reconstruir cantidades desde datosGuardados
+            const cantidadesGuardadas = {};
+            datosGuardados.forEach(item => {
+                cantidadesGuardadas[item.id] = item.cantidad;
+            });
+            setCantidades(cantidadesGuardadas);
+
+            // Cargar fotos guardadas
+            setFotos(fotosGuardadas || {});
+        }
+    }, [visible, datosGuardados, fotosGuardadas]);
 
     const handleCantidadChange = (productoId, cantidad) => {
         const nuevasCantidades = { ...cantidades };
@@ -29,7 +45,7 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
         setCantidades(nuevasCantidades);
     };
 
-    const tomarFoto = async () => {
+    const tomarFoto = async (productoId) => {
         try {
             const { status } = await ImagePicker.requestCameraPermissionsAsync();
 
@@ -45,7 +61,12 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
             });
 
             if (!result.canceled) {
-                setFoto(result.assets[0].uri);
+                const nuevasFotos = { ...fotos };
+                if (!nuevasFotos[productoId]) {
+                    nuevasFotos[productoId] = [];
+                }
+                nuevasFotos[productoId].push(result.assets[0].uri);
+                setFotos(nuevasFotos);
             }
         } catch (error) {
             console.error('Error al tomar foto:', error);
@@ -53,8 +74,13 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
         }
     };
 
-    const eliminarFoto = () => {
-        setFoto(null);
+    const eliminarFoto = (productoId, fotoIndex) => {
+        const nuevasFotos = { ...fotos };
+        nuevasFotos[productoId].splice(fotoIndex, 1);
+        if (nuevasFotos[productoId].length === 0) {
+            delete nuevasFotos[productoId];
+        }
+        setFotos(nuevasFotos);
     };
 
     const handleGuardar = () => {
@@ -70,21 +96,28 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
                 };
             });
 
-        // Si es vencidas, validar que haya foto si hay productos
-        if (tipo === 'vencidas' && productosConCantidad.length > 0 && !foto) {
-            Alert.alert('Foto requerida', 'Debe tomar una foto de los productos vencidos');
-            return;
+        // Si es vencidas, validar que cada producto tenga al menos una foto
+        if (tipo === 'vencidas' && productosConCantidad.length > 0) {
+            for (const prod of productosConCantidad) {
+                if (!fotos[prod.id] || fotos[prod.id].length === 0) {
+                    Alert.alert(
+                        'Foto requerida',
+                        `Debe tomar al menos una foto del producto: ${prod.nombre}`
+                    );
+                    return;
+                }
+            }
         }
 
-        onGuardar(productosConCantidad, foto);
+        onGuardar(productosConCantidad, fotos);
         setCantidades({});
-        setFoto(null);
+        setFotos({});
         onClose();
     };
 
     const handleCancelar = () => {
         setCantidades({});
-        setFoto(null);
+        setFotos({});
         onClose();
     };
 
@@ -92,40 +125,71 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
 
     const renderProducto = ({ item }) => {
         const cantidad = cantidades[item.id] || 0;
+        const fotosProducto = fotos[item.id] || [];
 
         return (
             <View style={styles.productoItem}>
-                <View style={styles.productoInfo}>
-                    <Text style={styles.productoNombre}>{item.nombre}</Text>
+                <View style={styles.productoHeader}>
+                    <View style={styles.productoInfo}>
+                        <Text style={styles.productoNombre}>{item.nombre}</Text>
+                    </View>
+
+                    <View style={styles.cantidadControl}>
+                        <TouchableOpacity
+                            style={[styles.btnCantidad, cantidad === 0 && styles.btnDeshabilitado]}
+                            onPress={() => handleCantidadChange(item.id, cantidad - 1)}
+                            disabled={cantidad === 0}
+                        >
+                            <Ionicons name="remove" size={18} color={cantidad === 0 ? '#ccc' : 'white'} />
+                        </TouchableOpacity>
+
+                        <TextInput
+                            style={styles.inputCantidad}
+                            value={String(cantidad)}
+                            onChangeText={(texto) => {
+                                const num = parseInt(texto) || 0;
+                                handleCantidadChange(item.id, num);
+                            }}
+                            keyboardType="numeric"
+                            selectTextOnFocus
+                        />
+
+                        <TouchableOpacity
+                            style={styles.btnCantidad}
+                            onPress={() => handleCantidadChange(item.id, cantidad + 1)}
+                        >
+                            <Ionicons name="add" size={18} color="white" />
+                        </TouchableOpacity>
+                    </View>
                 </View>
 
-                <View style={styles.cantidadControl}>
-                    <TouchableOpacity
-                        style={[styles.btnCantidad, cantidad === 0 && styles.btnDeshabilitado]}
-                        onPress={() => handleCantidadChange(item.id, cantidad - 1)}
-                        disabled={cantidad === 0}
-                    >
-                        <Ionicons name="remove" size={18} color={cantidad === 0 ? '#ccc' : 'white'} />
-                    </TouchableOpacity>
-
-                    <TextInput
-                        style={styles.inputCantidad}
-                        value={String(cantidad)}
-                        onChangeText={(texto) => {
-                            const num = parseInt(texto) || 0;
-                            handleCantidadChange(item.id, num);
-                        }}
-                        keyboardType="numeric"
-                        selectTextOnFocus
-                    />
-
-                    <TouchableOpacity
-                        style={styles.btnCantidad}
-                        onPress={() => handleCantidadChange(item.id, cantidad + 1)}
-                    >
-                        <Ionicons name="add" size={18} color="white" />
-                    </TouchableOpacity>
-                </View>
+                {/* Sección de fotos (solo si es vencidas y tiene cantidad > 0) */}
+                {tipo === 'vencidas' && cantidad > 0 && (
+                    <View style={styles.fotosSection}>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                            {fotosProducto.map((uri, index) => (
+                                <View key={index} style={styles.fotoMiniatura}>
+                                    <Image source={{ uri }} style={styles.fotoMiniaturaImagen} />
+                                    <TouchableOpacity
+                                        style={styles.btnEliminarMiniatura}
+                                        onPress={() => eliminarFoto(item.id, index)}
+                                    >
+                                        <Ionicons name="close-circle" size={20} color="white" />
+                                    </TouchableOpacity>
+                                </View>
+                            ))}
+                            <TouchableOpacity
+                                style={styles.btnAgregarFoto}
+                                onPress={() => tomarFoto(item.id)}
+                            >
+                                <Ionicons name="camera" size={24} color="#003d88" />
+                                <Text style={styles.btnAgregarFotoTexto}>
+                                    {fotosProducto.length > 0 ? '+' : 'Foto'}
+                                </Text>
+                            </TouchableOpacity>
+                        </ScrollView>
+                    </View>
+                )}
             </View>
         );
     };
@@ -148,25 +212,6 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
                     </Text>
                     <View style={{ width: 28 }} />
                 </View>
-
-                {/* Sección de Cámara (Solo para Vencidas) */}
-                {tipo === 'vencidas' && (
-                    <View style={styles.cameraSection}>
-                        {foto ? (
-                            <View style={styles.fotoContainer}>
-                                <Image source={{ uri: foto }} style={styles.fotoPreview} />
-                                <TouchableOpacity style={styles.btnEliminarFoto} onPress={eliminarFoto}>
-                                    <Ionicons name="trash" size={20} color="white" />
-                                </TouchableOpacity>
-                            </View>
-                        ) : (
-                            <TouchableOpacity style={styles.btnCamara} onPress={tomarFoto}>
-                                <Ionicons name="camera" size={24} color="#003d88" />
-                                <Text style={styles.btnCamaraTexto}>Tomar Foto Evidencia</Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
-                )}
 
                 {/* Resumen */}
                 <View style={styles.resumenContainer}>
@@ -241,50 +286,6 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#333',
     },
-    cameraSection: {
-        backgroundColor: 'white',
-        padding: 15,
-        borderBottomWidth: 1,
-        borderBottomColor: '#e0e0e0',
-        alignItems: 'center',
-    },
-    btnCamara: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#f0f8ff',
-        padding: 12,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: '#003d88',
-        borderStyle: 'dashed',
-        width: '100%',
-        justifyContent: 'center',
-    },
-    btnCamaraTexto: {
-        color: '#003d88',
-        fontWeight: 'bold',
-        marginLeft: 8,
-    },
-    fotoContainer: {
-        width: '100%',
-        height: 150,
-        borderRadius: 8,
-        overflow: 'hidden',
-        position: 'relative',
-    },
-    fotoPreview: {
-        width: '100%',
-        height: '100%',
-        resizeMode: 'cover',
-    },
-    btnEliminarFoto: {
-        position: 'absolute',
-        top: 10,
-        right: 10,
-        backgroundColor: 'rgba(255, 0, 0, 0.7)',
-        padding: 8,
-        borderRadius: 20,
-    },
     resumenContainer: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -311,8 +312,6 @@ const styles = StyleSheet.create({
         padding: 15,
     },
     productoItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
         backgroundColor: 'white',
         padding: 12,
         marginBottom: 8,
@@ -320,6 +319,10 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#e0e0e0',
         elevation: 1,
+    },
+    productoHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
     productoInfo: {
         flex: 1,
@@ -354,6 +357,49 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#66b3ff',
         paddingVertical: 4,
+    },
+    fotosSection: {
+        marginTop: 10,
+        paddingTop: 10,
+        borderTopWidth: 1,
+        borderTopColor: '#f0f0f0',
+    },
+    fotoMiniatura: {
+        width: 80,
+        height: 80,
+        marginRight: 8,
+        borderRadius: 8,
+        overflow: 'hidden',
+        position: 'relative',
+    },
+    fotoMiniaturaImagen: {
+        width: '100%',
+        height: '100%',
+        resizeMode: 'cover',
+    },
+    btnEliminarMiniatura: {
+        position: 'absolute',
+        top: 2,
+        right: 2,
+        backgroundColor: 'rgba(255, 0, 0, 0.8)',
+        borderRadius: 10,
+    },
+    btnAgregarFoto: {
+        width: 80,
+        height: 80,
+        borderRadius: 8,
+        borderWidth: 2,
+        borderColor: '#003d88',
+        borderStyle: 'dashed',
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: '#f0f8ff',
+    },
+    btnAgregarFotoTexto: {
+        fontSize: 12,
+        color: '#003d88',
+        fontWeight: 'bold',
+        marginTop: 4,
     },
     footer: {
         flexDirection: 'row',
