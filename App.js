@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 
@@ -14,6 +14,7 @@ import SeleccionarRuta from './components/rutas/SeleccionarRuta';
 import SeleccionarDia from './components/rutas/SeleccionarDia';
 import ListaClientes from './components/rutas/ListaClientes';
 import 'react-native-gesture-handler';
+import { inicializarProductos } from './services/ventasService';
 
 
 const Stack = createStackNavigator();
@@ -21,6 +22,11 @@ const Stack = createStackNavigator();
 const App = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userId, setUserId] = useState(null);
+
+  useEffect(() => {
+    // Sincronizar productos al iniciar la app
+    inicializarProductos();
+  }, []);
 
   const handleLogin = (loggedIn, username) => {
     setIsLoggedIn(loggedIn);

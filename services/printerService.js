@@ -1,8 +1,12 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { formatearMoneda } from './ventasService';
+import { obtenerConfiguracionImpresion } from './rutasApiService';
 
-export const generarTicketHTML = (venta) => {
+// URL Base para imágenes (debe coincidir con el servidor Django)
+const SERVER_URL = 'http://192.168.1.19:8000';
+
+export const generarTicketHTML = (venta, config = null) => {
   const {
     id,
     fecha,
@@ -17,6 +21,17 @@ export const generarTicketHTML = (venta) => {
     vencidas
   } = venta;
 
+  // Valores por defecto si no hay configuración
+  const nombreNegocio = config?.nombre_negocio || 'AREPAS EL GUERRERO';
+  const nitNegocio = config?.nit_negocio || 'Nit: 123456789-0';
+  const direccionNegocio = config?.direccion_negocio || '';
+  const telefonoNegocio = config?.telefono_negocio || 'Tel: 300 123 4567';
+  const encabezado = config?.encabezado_ticket || '';
+  const piePagina = config?.pie_pagina_ticket || 'Software: App Guerrero';
+  const mensajeGracias = config?.mensaje_agradecimiento || '¡Gracias por su compra!';
+  const mostrarLogo = config?.mostrar_logo !== false;
+  const logoUrl = config?.logo ? `${SERVER_URL}${config.logo}` : null;
+
   const fechaFormateada = new Date(fecha).toLocaleString('es-CO');
 
   let productosHTML = productos.map(p => `
@@ -26,8 +41,6 @@ export const generarTicketHTML = (venta) => {
       <td style="text-align: right; font-size: 12px;">${formatearMoneda(p.subtotal)}</td>
     </tr>
   `).join('');
-
-
 
   let vencidasHTML = '';
   if (vencidas && vencidas.length > 0) {
@@ -52,12 +65,17 @@ export const generarTicketHTML = (venta) => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
       </head>
       <body style="font-family: monospace; padding: 20px; width: 300px; margin: 0 auto;">
-        <div style="text-align: center; font-weight: bold; font-size: 16px; margin-bottom: 5px;">
-          AREPAS EL GUERRERO
-        </div>
-        <div style="text-align: center; font-size: 12px; margin-bottom: 10px;">
-          Nit: 123456789-0<br>
-          Tel: 300 123 4567
+        <div style="text-align: center; margin-bottom: 10px;">
+          ${mostrarLogo && logoUrl ? `<img src="${logoUrl}" style="max-width: 100px; max-height: 80px; margin-bottom: 5px;" />` : ''}
+          <div style="font-weight: bold; font-size: 16px; margin-bottom: 5px;">
+            ${nombreNegocio}
+          </div>
+          <div style="font-size: 12px;">
+            ${nitNegocio ? `Nit: ${nitNegocio}<br>` : ''}
+            ${direccionNegocio ? `${direccionNegocio}<br>` : ''}
+            ${telefonoNegocio ? `Tel: ${telefonoNegocio}` : ''}
+          </div>
+          ${encabezado ? `<div style="font-size: 11px; margin-top: 5px; font-style: italic;">${encabezado}</div>` : ''}
         </div>
         
         <div style="border-bottom: 1px dashed black; margin-bottom: 10px;"></div>
@@ -104,8 +122,8 @@ export const generarTicketHTML = (venta) => {
         ${vencidasHTML}
 
         <div style="margin-top: 20px; text-align: center; font-size: 11px;">
-          ¡Gracias por su compra!<br>
-          Software: App Guerrero
+          ${mensajeGracias}<br>
+          ${piePagina}
         </div>
       </body>
     </html>
@@ -114,7 +132,11 @@ export const generarTicketHTML = (venta) => {
 
 export const imprimirTicket = async (venta) => {
   try {
-    const html = generarTicketHTML(venta);
+    // Obtener configuración del servidor
+    const config = await obtenerConfiguracionImpresion();
+    console.log('Configuración de impresión obtenida:', config ? 'Sí' : 'No');
+
+    const html = generarTicketHTML(venta, config);
 
     const { uri } = await Print.printToFileAsync({ html });
     console.log('Ticket generado en:', uri);

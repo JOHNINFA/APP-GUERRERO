@@ -1,14 +1,14 @@
-// ⚠️ SERVICIO DE VENTAS - HARDCODED PARA DESARROLLO
-// Este servicio maneja la lógica de negocio de ventas con datos locales
-// En el futuro se conectará al API del CRM Django
+// ⚠️ SERVICIO DE VENTAS - CONECTADO A API
+// Este servicio maneja la lógica de negocio de ventas y sincroniza productos
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { enviarVentaRuta } from './rutasApiService';
 
-// ==================== DATOS HARDCODEADOS ====================
+// URL Base (debería venir de configuración)
+const API_BASE = 'http://192.168.1.19:8000/api';
 
-// Lista de productos con precios
-export const PRODUCTOS = [
+// Lista de productos por defecto (fallback)
+const PRODUCTOS_DEFAULT = [
     { id: 17, nombre: 'AREPA TIPO OBLEA 500Gr', precio: 2600.0 },
     { id: 18, nombre: 'AREPA MEDIANA 330Gr', precio: 2100.0 },
     { id: 21, nombre: 'AREPA TIPO PINCHO 330Gr', precio: 2000.0 },
@@ -45,6 +45,9 @@ export const PRODUCTOS = [
     { id: 55, nombre: 'MUTE BOYACENSE', precio: 2000.0 },
     { id: 56, nombre: 'ENVUELTO DE MAIZ 500Gr', precio: 4300.0 }
 ];
+
+// Variable mutable para mantener los productos en memoria
+let productosEnMemoria = [...PRODUCTOS_DEFAULT];
 
 // Clientes de prueba
 export const CLIENTES_PRUEBA = [
@@ -85,12 +88,67 @@ export const CLIENTES_PRUEBA = [
 // ==================== FUNCIONES DE PRODUCTOS ====================
 
 /**
- * Obtiene todos los productos
+ * Inicializa los productos cargando de caché y luego del servidor
+ */
+export const inicializarProductos = async () => {
+    try {
+        // 1. Cargar de caché local
+        const productosCacheados = await AsyncStorage.getItem('productos_cache');
+        if (productosCacheados) {
+            productosEnMemoria = JSON.parse(productosCacheados);
+            console.log('📦 Productos cargados de caché local:', productosEnMemoria.length);
+        }
+
+        // 2. Intentar actualizar del servidor
+        await sincronizarProductos();
+    } catch (error) {
+        console.error('Error inicializando productos:', error);
+    }
+};
+
+/**
+ * Descarga productos del servidor y actualiza caché
+ */
+export const sincronizarProductos = async () => {
+    try {
+        console.log('🔄 Sincronizando productos con servidor...');
+        const response = await fetch(`${API_BASE}/productos/`);
+
+        if (response.ok) {
+            const data = await response.json();
+
+            // Mapear al formato interno si es necesario
+            // El backend devuelve: { id, nombre, precio, ... }
+            // La app usa: { id, nombre, precio }
+            const productosActualizados = data.map(p => ({
+                id: p.id,
+                nombre: p.nombre,
+                precio: parseFloat(p.precio) || 0
+            }));
+
+            if (productosActualizados.length > 0) {
+                productosEnMemoria = productosActualizados;
+                await AsyncStorage.setItem('productos_cache', JSON.stringify(productosEnMemoria));
+                console.log('✅ Productos sincronizados y actualizados:', productosEnMemoria.length);
+            }
+        } else {
+            console.warn('⚠️ No se pudieron descargar productos:', response.status);
+        }
+    } catch (error) {
+        console.error('❌ Error sincronizando productos (offline?):', error.message);
+    }
+};
+
+/**
+ * Obtiene todos los productos (síncrono, desde memoria)
  * @returns {Array} Lista de productos
  */
 export const obtenerProductos = () => {
-    return PRODUCTOS;
+    return productosEnMemoria;
 };
+
+// Exportar PRODUCTOS como getter para compatibilidad
+export const PRODUCTOS = productosEnMemoria;
 
 /**
  * Busca productos por nombre
@@ -229,37 +287,29 @@ export const guardarVenta = async (venta) => {
         ventas.push(nuevaVenta);
         await AsyncStorage.setItem('ventas', JSON.stringify(ventas));
 
-        // INTENTAR ENVIAR AL BACKEND
-        try {
-            // Adaptar estructura para el backend
-            // El backend espera: vendedor (ID), cliente_nombre, total, detalles (JSON)
-            // venta.vendedor suele ser "ID1" o "1". El backend espera ID de Vendedor.
+        // Formatear productos vencidos para el backend
+        const productosVencidosFormateados = (venta.vencidas || []).map(item => ({
+            id: item.id,
+            producto: item.nombre,
+            cantidad: item.cantidad,
+            motivo: item.motivo || 'No especificado'
+        }));
 
-            // Formatear productos vencidos para el backend
-            const productosVencidosFormateados = (venta.vencidas || []).map(item => ({
-                id: item.id,
-                producto: item.nombre,
-                cantidad: item.cantidad,
-                motivo: item.motivo || 'No especificado'
-            }));
+        const ventaBackend = {
+            vendedor_id: venta.vendedor,
+            cliente_nombre: venta.cliente_nombre,
+            nombre_negocio: venta.cliente_negocio || '',
+            total: venta.total,
+            detalles: venta.productos,
+            metodo_pago: 'EFECTIVO',
+            productos_vencidos: productosVencidosFormateados,
+            foto_vencidos: venta.fotoVencidas || {}
+        };
 
-            const ventaBackend = {
-                vendedor_id: venta.vendedor, // Asegurarse que sea el ID correcto (ej: ID1)
-                cliente_nombre: venta.cliente_nombre,
-                nombre_negocio: venta.cliente_negocio || '', // Nombre del negocio
-                // cliente: venta.cliente_id, // Si tuviéramos el ID de ClienteRuta real
-                total: venta.total,
-                detalles: venta.productos,
-                metodo_pago: 'EFECTIVO',
-                productos_vencidos: productosVencidosFormateados,
-                foto_vencidos: venta.fotoVencidas || {}
-            };
-
-            await enviarVentaRuta(ventaBackend);
-            console.log('✅ Venta sincronizada con backend');
-        } catch (err) {
-            console.warn('⚠️ No se pudo sincronizar venta con backend (offline?)', err);
-        }
+        // ENVIAR EN SEGUNDO PLANO (no bloquea la UI)
+        enviarVentaRuta(ventaBackend)
+            .then(() => console.log('✅ Venta sincronizada con backend'))
+            .catch(err => console.warn('⚠️ No se pudo sincronizar venta:', err.message));
 
         return nuevaVenta;
     } catch (error) {

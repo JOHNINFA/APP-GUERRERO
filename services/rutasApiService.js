@@ -97,10 +97,31 @@ export const limpiarTodasLasVisitas = async (ruta) => {
     return { success: true };
 };
 
+export const obtenerConfiguracionImpresion = async () => {
+    try {
+        const response = await fetch(`${API_BASE}/configuracion-impresion/`);
+        if (response.ok) {
+            const data = await response.json();
+            // El backend devuelve una lista, tomamos el primero activo o el primero
+            if (Array.isArray(data) && data.length > 0) {
+                return data.find(c => c.activo) || data[0];
+            } else if (data && data.id) {
+                // Si devuelve un solo objeto
+                return data;
+            }
+        }
+        return null;
+    } catch (error) {
+        console.error('Error obteniendo configuración de impresión:', error);
+        return null;
+    }
+};
+
 export default {
     obtenerRutasPorUsuario,
     obtenerClientesPorRutaYDia,
     enviarVentaRuta,
     marcarClienteVisitado,
-    limpiarTodasLasVisitas
+    limpiarTodasLasVisitas,
+    obtenerConfiguracionImpresion
 };

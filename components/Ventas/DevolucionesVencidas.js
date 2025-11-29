@@ -57,7 +57,9 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
             const result = await ImagePicker.launchCameraAsync({
                 mediaTypes: ImagePicker.MediaTypeOptions.Images,
                 allowsEditing: false,
-                quality: 0.5,
+                quality: 0.3,
+                base64: false,
+                exif: false,
             });
 
             if (!result.canceled) {
