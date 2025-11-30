@@ -1,16 +1,48 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     Text,
     Modal,
     StyleSheet,
     TouchableOpacity,
-    ScrollView
+    ScrollView,
+    TextInput,
+    Linking
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { formatearMoneda } from '../../services/ventasService';
 
+// Métodos de pago disponibles
+const METODOS_PAGO = [
+    { id: 'EFECTIVO', nombre: 'Efectivo', icono: 'cash-outline' },
+    { id: 'NEQUI', nombre: 'Nequi', icono: 'phone-portrait-outline' },
+    { id: 'DAVIPLATA', nombre: 'Daviplata', icono: 'phone-portrait-outline' },
+    { id: 'TARJETA', nombre: 'Tarjeta', icono: 'card-outline' },
+    { id: 'TRANSFERENCIA', nombre: 'Transferencia', icono: 'swap-horizontal-outline' },
+];
+
 const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
+    const [fechaVenta, setFechaVenta] = useState(new Date());
+    const [mostrarDatePicker, setMostrarDatePicker] = useState(false);
+    const [metodoPago, setMetodoPago] = useState('EFECTIVO');
+    const [enviarWhatsApp, setEnviarWhatsApp] = useState(false);
+    const [numeroWhatsApp, setNumeroWhatsApp] = useState('');
+    const [enviarCorreo, setEnviarCorreo] = useState(false);
+    const [correoDestino, setCorreoDestino] = useState('');
+
+    // Resetear valores cuando se abre el modal
+    useEffect(() => {
+        if (visible) {
+            setFechaVenta(new Date());
+            setMetodoPago('EFECTIVO');
+            setEnviarWhatsApp(false);
+            setNumeroWhatsApp(venta?.cliente_celular || '');
+            setEnviarCorreo(false);
+            setCorreoDestino('');
+        }
+    }, [visible]);
+
     if (!venta) return null;
 
     const {
@@ -22,6 +54,33 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
         descuento,
         total
     } = venta;
+
+    // Formatear fecha para mostrar
+    const formatearFecha = (date) => {
+        const dias = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+        const dia = dias[date.getDay()];
+        const dd = date.getDate().toString().padStart(2, '0');
+        const mm = (date.getMonth() + 1).toString().padStart(2, '0');
+        const yyyy = date.getFullYear();
+        return `${dia}, ${dd}/${mm}/${yyyy}`;
+    };
+
+    // Manejar cambio de fecha
+    const onChangeFecha = (event, selectedDate) => {
+        setMostrarDatePicker(false);
+        if (selectedDate) {
+            setFechaVenta(selectedDate);
+        }
+    };
+
+    // Confirmar con la fecha y método de pago seleccionados
+    const handleConfirmar = () => {
+        const opcionesEnvio = {
+            whatsapp: enviarWhatsApp ? numeroWhatsApp : null,
+            correo: enviarCorreo ? correoDestino : null
+        };
+        onConfirmar(fechaVenta, metodoPago, opcionesEnvio);
+    };
 
     return (
         <Modal
@@ -41,6 +100,29 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                     </View>
 
                     <ScrollView style={styles.scrollView}>
+                        {/* Fecha de la Venta */}
+                        <View style={styles.seccionFecha}>
+                            <Text style={styles.labelFecha}>📅 Fecha de la Venta:</Text>
+                            <TouchableOpacity 
+                                style={styles.selectorFecha}
+                                onPress={() => setMostrarDatePicker(true)}
+                            >
+                                <Text style={styles.fechaTexto}>{formatearFecha(fechaVenta)}</Text>
+                                <Ionicons name="calendar-outline" size={20} color="#003d88" />
+                            </TouchableOpacity>
+                        </View>
+
+                        {mostrarDatePicker && (
+                            <DateTimePicker
+                                value={fechaVenta}
+                                mode="date"
+                                display="default"
+                                onChange={onChangeFecha}
+                            />
+                        )}
+
+                        <View style={styles.divider} />
+
                         {/* Negocio y Cliente */}
                         <View style={styles.seccion}>
                             {cliente_negocio && (
@@ -93,6 +175,94 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
 
                         <View style={styles.divider} />
 
+                        {/* Método de Pago */}
+                        <View style={styles.seccion}>
+                            <Text style={styles.seccionTitulo}>💳 Método de Pago</Text>
+                            <View style={styles.metodosPagoContainer}>
+                                {METODOS_PAGO.map((metodo) => (
+                                    <TouchableOpacity
+                                        key={metodo.id}
+                                        style={[
+                                            styles.metodoPagoBtn,
+                                            metodoPago === metodo.id && styles.metodoPagoBtnActivo
+                                        ]}
+                                        onPress={() => setMetodoPago(metodo.id)}
+                                    >
+                                        <Ionicons 
+                                            name={metodo.icono} 
+                                            size={18} 
+                                            color={metodoPago === metodo.id ? 'white' : '#003d88'} 
+                                        />
+                                        <Text style={[
+                                            styles.metodoPagoTexto,
+                                            metodoPago === metodo.id && styles.metodoPagoTextoActivo
+                                        ]}>
+                                            {metodo.nombre}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        </View>
+
+                        <View style={styles.divider} />
+
+                        {/* Opciones de Envío */}
+                        <View style={styles.seccion}>
+                            <Text style={styles.seccionTitulo}>📤 Opciones de Envío</Text>
+                            
+                            {/* WhatsApp */}
+                            <TouchableOpacity 
+                                style={styles.checkboxRow}
+                                onPress={() => setEnviarWhatsApp(!enviarWhatsApp)}
+                            >
+                                <View style={[styles.checkbox, enviarWhatsApp && styles.checkboxActivoWhatsApp]}>
+                                    {enviarWhatsApp && <Ionicons name="checkmark" size={16} color="white" />}
+                                </View>
+                                <Ionicons name="logo-whatsapp" size={20} color="#25D366" />
+                                <Text style={styles.checkboxLabel}>WhatsApp</Text>
+                            </TouchableOpacity>
+                            
+                            {enviarWhatsApp && (
+                                <View style={styles.inputContainer}>
+                                    <TextInput
+                                        style={styles.whatsappInput}
+                                        value={numeroWhatsApp}
+                                        onChangeText={setNumeroWhatsApp}
+                                        placeholder="Número: 3001234567"
+                                        keyboardType="phone-pad"
+                                        maxLength={10}
+                                    />
+                                </View>
+                            )}
+
+                            {/* Correo */}
+                            <TouchableOpacity 
+                                style={[styles.checkboxRow, { marginTop: 12 }]}
+                                onPress={() => setEnviarCorreo(!enviarCorreo)}
+                            >
+                                <View style={[styles.checkbox, enviarCorreo && styles.checkboxActivoCorreo]}>
+                                    {enviarCorreo && <Ionicons name="checkmark" size={16} color="white" />}
+                                </View>
+                                <Ionicons name="mail-outline" size={20} color="#EA4335" />
+                                <Text style={styles.checkboxLabel}>Correo electrónico</Text>
+                            </TouchableOpacity>
+                            
+                            {enviarCorreo && (
+                                <View style={styles.inputContainer}>
+                                    <TextInput
+                                        style={styles.correoInput}
+                                        value={correoDestino}
+                                        onChangeText={setCorreoDestino}
+                                        placeholder="correo@ejemplo.com"
+                                        keyboardType="email-address"
+                                        autoCapitalize="none"
+                                    />
+                                </View>
+                            )}
+                        </View>
+
+                        <View style={styles.divider} />
+
                         {/* Totales */}
                         <View style={styles.totalesContainer}>
                             <View style={styles.totalRow}>
@@ -111,6 +281,10 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                                 <Text style={styles.granTotalLabel}>TOTAL A PAGAR:</Text>
                                 <Text style={styles.granTotalValor}>{formatearMoneda(total)}</Text>
                             </View>
+                            <View style={styles.totalRow}>
+                                <Text style={styles.totalLabel}>Método:</Text>
+                                <Text style={[styles.totalValor, { color: '#003d88' }]}>{metodoPago}</Text>
+                            </View>
                         </View>
                     </ScrollView>
 
@@ -126,7 +300,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
 
                         <TouchableOpacity
                             style={styles.btnConfirmar}
-                            onPress={onConfirmar}
+                            onPress={handleConfirmar}
                         >
                             <Ionicons name="checkmark-circle" size={20} color="white" />
                             <Text style={styles.btnConfirmarTexto}>Confirmar</Text>
@@ -168,6 +342,30 @@ const styles = StyleSheet.create({
     },
     scrollView: {
         padding: 15,
+    },
+    seccionFecha: {
+        marginBottom: 10,
+    },
+    labelFecha: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#003d88',
+        marginBottom: 8,
+    },
+    selectorFecha: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: '#f0f8ff',
+        padding: 12,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#003d88',
+    },
+    fechaTexto: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#003d88',
     },
     seccion: {
         marginBottom: 10,
@@ -251,6 +449,84 @@ const styles = StyleSheet.create({
         fontSize: 18,
         fontWeight: 'bold',
         color: '#00ad53',
+    },
+    // Estilos Método de Pago
+    metodosPagoContainer: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+    },
+    metodoPagoBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: '#003d88',
+        backgroundColor: '#f0f8ff',
+        gap: 5,
+    },
+    metodoPagoBtnActivo: {
+        backgroundColor: '#003d88',
+    },
+    metodoPagoTexto: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#003d88',
+    },
+    metodoPagoTextoActivo: {
+        color: 'white',
+    },
+    // Estilos WhatsApp
+    checkboxRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    checkbox: {
+        width: 24,
+        height: 24,
+        borderRadius: 4,
+        borderWidth: 2,
+        borderColor: '#003d88',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    checkboxActivo: {
+        backgroundColor: '#003d88',
+    },
+    checkboxActivoWhatsApp: {
+        backgroundColor: '#25D366',
+    },
+    checkboxActivoCorreo: {
+        backgroundColor: '#EA4335',
+    },
+    checkboxLabel: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#333',
+        marginLeft: 8,
+    },
+    inputContainer: {
+        marginTop: 8,
+        marginLeft: 34,
+    },
+    whatsappInput: {
+        borderWidth: 1,
+        borderColor: '#25D366',
+        borderRadius: 8,
+        padding: 10,
+        fontSize: 14,
+        backgroundColor: '#f0fff0',
+    },
+    correoInput: {
+        borderWidth: 1,
+        borderColor: '#EA4335',
+        borderRadius: 8,
+        padding: 10,
+        fontSize: 14,
+        backgroundColor: '#fff5f5',
     },
     footer: {
         flexDirection: 'row',

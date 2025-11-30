@@ -53,8 +53,8 @@ const ListaClientes = ({ route, navigation }) => {
         }
       }
 
-      // 2. Cargar desde Sheets
-      const clientesObtenidos = await obtenerClientesPorRutaYDia(nombreRutaCompleto, dia);
+      // 2. Cargar desde el backend (usar el ID de la ruta, no el nombre)
+      const clientesObtenidos = await obtenerClientesPorRutaYDia(ruta, dia);
       setClientes(clientesObtenidos);
 
       // 3. Guardar en caché para la próxima vez
@@ -367,23 +367,20 @@ const ListaClientes = ({ route, navigation }) => {
                         {cliente.orden}
                       </Text>
                     </View>
-                    <Text style={styles.clienteNombre}>{cliente.tipoNegocio}</Text>
+                    <Text style={styles.clienteNombre}>{cliente.nombre_negocio || 'Sin nombre'}</Text>
                   </View>
-                  <Text style={styles.clienteTipo}>{cliente.cliente}</Text>
+                  <Text style={styles.clienteTipo}>👤 {cliente.nombre_contacto || 'Sin contacto'}</Text>
+                  {cliente.tipo_negocio && (
+                    <Text style={styles.clienteTipoNegocio}>🏪 {cliente.tipo_negocio}</Text>
+                  )}
                 </View>
               </View>
 
               <View style={styles.clienteDetalles}>
-                <Text style={styles.detalle}>📍 {cliente.direccion || cliente.coordenadas || 'Sin dirección'}</Text>
+                <Text style={styles.detalle}>📍 {cliente.direccion || 'Sin dirección'}</Text>
                 <Text style={styles.detalle}>📞 {cliente.telefono || 'Sin teléfono'}</Text>
-                {cliente.notas && cliente.notas.trim() !== '' && (
-                  <TouchableOpacity
-                    style={styles.botonNotas}
-                    onPress={() => abrirModalNotas(cliente)}
-                  >
-                    <Ionicons name="document-text-outline" size={16} color="#003d82" />
-                    <Text style={styles.botonNotasTexto}>Ver Notas</Text>
-                  </TouchableOpacity>
+                {cliente.dia_visita && (
+                  <Text style={styles.detalleDias}>{cliente.dia_visita}</Text>
                 )}
               </View>
 
@@ -399,6 +396,24 @@ const ListaClientes = ({ route, navigation }) => {
                   <Text style={styles.botonTexto}>
                     {estaVisitado ? '✓ Visitado' : 'Marcar'}
                   </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.botonVender}
+                  onPress={() => navigation.navigate('Ventas', {
+                    clientePreseleccionado: {
+                      id: cliente.id,
+                      nombre_negocio: cliente.nombre_negocio,
+                      nombre_contacto: cliente.nombre_contacto,
+                      direccion: cliente.direccion,
+                      telefono: cliente.telefono
+                    },
+                    fromRuta: true,
+                    rutaId: ruta,
+                    rutaNombre: rutaNombre
+                  })}
+                >
+                  <Text style={styles.botonTexto}>Vender</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -639,7 +654,15 @@ const styles = StyleSheet.create({
   clienteTipo: {
     fontSize: 14,
     color: '#666',
-    marginLeft: 22,
+    marginLeft: 42,
+    marginTop: 2,
+  },
+  clienteTipoNegocio: {
+    fontSize: 13,
+    color: '#888',
+    marginLeft: 42,
+    marginTop: 2,
+    fontStyle: 'italic',
   },
   clienteDetalles: {
     marginBottom: 15,
@@ -648,6 +671,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#555',
     marginBottom: 5,
+  },
+  detalleDias: {
+    fontSize: 13,
+    color: '#003d82',
+    marginTop: 5,
+    fontWeight: '500',
   },
   botonesContainer: {
     flexDirection: 'row',
@@ -663,6 +692,14 @@ const styles = StyleSheet.create({
   },
   botonVisitado: {
     backgroundColor: '#28a745',
+  },
+  botonVender: {
+    flex: 1,
+    backgroundColor: '#28a745',
+    padding: 12,
+    borderRadius: 8,
+    marginRight: 10,
+    alignItems: 'center',
   },
   botonNavegar: {
     flex: 1,

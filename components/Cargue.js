@@ -11,8 +11,14 @@ const API_URL_VERIFICAR_ESTADO = 'http://192.168.1.19:8000/api/verificar-estado-
 
 const Cargue = ({ userId }) => {
   const [selectedDay, setSelectedDay] = useState('Lunes');
-  // Fecha actual en formato YYYY-MM-DD
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  // Fecha actual en formato YYYY-MM-DD (usando fecha local, no UTC)
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const hoy = new Date();
+    const year = hoy.getFullYear();
+    const month = String(hoy.getMonth() + 1).padStart(2, '0');
+    const day = String(hoy.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  });
   const [dateObject, setDateObject] = useState(new Date()); // Objeto Date para el picker
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [diaEstado, setDiaEstado] = useState(null); // Estado del día (SUGERIDO, DESPACHO, COMPLETADO)
@@ -64,7 +70,8 @@ const Cargue = ({ userId }) => {
   // Verificar estado del día
   const verificarEstadoDia = async (dia, fecha) => {
     try {
-      const url = `${API_URL_VERIFICAR_ESTADO}?vendedor_id=${userId}&dia=${dia.toUpperCase()}&fecha=${fecha}`;
+      const diaServidor = diasParaServidor[dia] || dia.toUpperCase().replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U');
+      const url = `${API_URL_VERIFICAR_ESTADO}?vendedor_id=${userId}&dia=${diaServidor}&fecha=${fecha}`;
       const response = await fetch(url);
       const data = await response.json();
 
@@ -91,7 +98,8 @@ const Cargue = ({ userId }) => {
     await verificarEstadoDia(selectedDay, selectedDate);
 
     try {
-      const url = `${API_URL_OBTENER}?vendedor_id=${userId}&dia=${selectedDay.toUpperCase()}&fecha=${selectedDate}`;
+      const diaServidor = diasParaServidor[selectedDay] || selectedDay.toUpperCase();
+      const url = `${API_URL_OBTENER}?vendedor_id=${userId}&dia=${diaServidor}&fecha=${selectedDate}`;
       console.log('📥 Cargando cargue:', url);
 
       const response = await fetch(url);
@@ -108,11 +116,17 @@ const Cargue = ({ userId }) => {
               V: data[prod].v || false,
               D: data[prod].d || false
             };
+            // Debug: mostrar checks recibidos
+            if (data[prod].d) {
+              console.log(`✅ ${prod}: D=${data[prod].d}, V=${data[prod].v}`);
+            }
           } else {
             newQuantities[prod] = '0';
             newCheckedItems[prod] = { V: false, D: false };
           }
         });
+        
+        console.log('📊 Checks cargados:', JSON.stringify(newCheckedItems).substring(0, 500));
 
         setQuantities(newQuantities);
         setCheckedItems(newCheckedItems);
@@ -165,14 +179,24 @@ const Cargue = ({ userId }) => {
       }
     }
 
-    // Actualizar en el servidor
+    // Optimistic update - actualizar UI inmediatamente
+    setCheckedItems(prev => ({
+      ...prev,
+      [productName]: {
+        ...prev[productName],
+        V: nuevoValorV
+      }
+    }));
+    Vibration.vibrate(30);
+
+    // Actualizar en el servidor en background
     try {
       const response = await fetch(API_URL_ACTUALIZAR, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           vendedor_id: userId,
-          dia: selectedDay.toUpperCase(),
+          dia: diasParaServidor[selectedDay] || selectedDay.toUpperCase(),
           fecha: selectedDate,
           producto: productName,
           v: nuevoValorV
@@ -182,26 +206,43 @@ const Cargue = ({ userId }) => {
       const result = await response.json();
 
       if (response.ok) {
-        // Actualizar estado local
+        console.log(`✅ Check V actualizado: ${productName} = ${nuevoValorV}`);
+      } else {
+        // Revertir si hay error
         setCheckedItems(prev => ({
           ...prev,
           [productName]: {
             ...prev[productName],
-            V: nuevoValorV
+            V: !nuevoValorV
           }
         }));
-        Vibration.vibrate(30);
-        console.log(`✅ Check V actualizado: ${productName} = ${nuevoValorV}`);
-      } else {
         Alert.alert('Error', result.message || 'No se pudo actualizar el check');
       }
     } catch (error) {
+      // Revertir si hay error de conexión
+      setCheckedItems(prev => ({
+        ...prev,
+        [productName]: {
+          ...prev[productName],
+          V: !nuevoValorV
+        }
+      }));
       console.error('Error actualizando check:', error);
       Alert.alert('Error', 'Error de conexión con el CRM');
     }
   };
 
-  const dias = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+  const dias = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
+  
+  // Mapeo para enviar al servidor sin tildes
+  const diasParaServidor = {
+    'Lunes': 'LUNES',
+    'Martes': 'MARTES',
+    'Miercoles': 'MIERCOLES',
+    'Jueves': 'JUEVES',
+    'Viernes': 'VIERNES',
+    'Sabado': 'SABADO'
+  };
 
   // Manejar cambio de fecha en el DatePicker
   const onDateChange = (event, date) => {
@@ -209,7 +250,11 @@ const Cargue = ({ userId }) => {
 
     if (date) {
       setDateObject(date);
-      const formattedDate = date.toISOString().split('T')[0];
+      // Usar fecha local en lugar de toISOString() que convierte a UTC
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const formattedDate = `${year}-${month}-${day}`;
       setSelectedDate(formattedDate);
       console.log('📅 Nueva fecha seleccionada:', formattedDate);
     }
@@ -298,10 +343,10 @@ const Cargue = ({ userId }) => {
         <Text style={styles.infoDateText}>📅 {formatDateForDisplay(selectedDate)}</Text>
         {diaEstado?.tiene_datos && (
           <View style={[styles.miniBadge, {
-            backgroundColor: diaEstado.estado === 'DESPACHO' ? '#dc3545' : '#007bff' // Rojo si tiene datos
+            backgroundColor: diaEstado.completado ? '#dc3545' : '#007bff'
           }]}>
             <Text style={styles.miniBadgeText}>
-              {diaEstado.estado === 'DESPACHO' ? '⚠️ DÍA FINALIZADO' : 'SUGERIDO'}
+              {diaEstado.completado ? '⚠️ DÍA FINALIZADO' : 'SUGERIDO'}
             </Text>
           </View>
         )}

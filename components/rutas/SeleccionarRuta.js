@@ -4,13 +4,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { obtenerRutasPorUsuario } from '../../services/rutasApiService';
 import { Ionicons } from '@expo/vector-icons';
 
-const SeleccionarRuta = ({ navigation, route }) => {
+const SeleccionarRuta = ({ navigation, route, userId: propUserId }) => {
   const [rutas, setRutas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Obtener userId de los parámetros de navegación o de AsyncStorage
-  const userId = route.params?.userId || '5'; // Default a 5 si no se pasa
+  // Obtener userId de props o de los parámetros de navegación
+  const userId = propUserId || route.params?.userId || 'ID1';
 
   useEffect(() => {
     cargarRutas();
@@ -21,11 +21,11 @@ const SeleccionarRuta = ({ navigation, route }) => {
       setLoading(true);
       setError(null);
 
-      // Extraer solo el número del userId (ej: "Id5" -> "5", "ID5" -> "5")
-      const userIdNumero = userId.toString().replace(/[^0-9]/g, '');
-
-      // Obtener rutas desde Google Sheets
-      const rutasObtenidas = await obtenerRutasPorUsuario(userIdNumero);
+      // Usar el userId directamente (ya viene como "ID1", "ID2", etc.)
+      console.log('SeleccionarRuta - userId recibido:', userId);
+      
+      // Obtener rutas desde el backend
+      const rutasObtenidas = await obtenerRutasPorUsuario(userId);
 
       setRutas(rutasObtenidas);
 
@@ -42,15 +42,12 @@ const SeleccionarRuta = ({ navigation, route }) => {
 
   const handleSeleccionarRuta = async (ruta) => {
     try {
-      // Extraer solo el número del userId
-      const userIdNumero = userId.toString().replace(/[^0-9]/g, '');
-
-      await AsyncStorage.setItem('rutaSeleccionada', ruta.id);
+      await AsyncStorage.setItem('rutaSeleccionada', ruta.id.toString());
       await AsyncStorage.setItem('rutaNombre', ruta.nombre);
       navigation.navigate('SeleccionarDia', {
         ruta: ruta.id,
         rutaNombre: ruta.nombre,
-        userId: userIdNumero
+        userId: userId // Pasar el userId completo (ID1, ID2, etc.)
       });
     } catch (error) {
       console.error('Error al guardar la ruta:', error);

@@ -188,14 +188,14 @@ const ProductList = ({ selectedDay, userId }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    paddingBottom: 80, // Espacio para el botón flotante
+    paddingBottom: 100, // Espacio para el botón flotante
   },
   scrollContainer: {
     padding: 10,
   },
   sendButton: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 40,
     left: 20,
     right: 20,
     backgroundColor: '#00ad53',

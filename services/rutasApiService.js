@@ -2,11 +2,16 @@ const API_BASE = 'http://192.168.1.19:8000/api';
 
 export const obtenerRutasPorUsuario = async (userId) => {
     try {
-        // userId viene como "5" o "ID5". El backend espera "ID5".
-        const idVendedor = userId.toString().startsWith('ID') ? userId : `ID${userId}`;
+        // userId puede venir como "1", "5", "ID1", "ID5". El backend espera "ID1", "ID5".
+        let idVendedor = userId.toString().toUpperCase();
+        if (!idVendedor.startsWith('ID')) {
+            idVendedor = `ID${idVendedor}`;
+        }
 
+        console.log('rutasApiService - Buscando rutas para vendedor:', idVendedor);
         const response = await fetch(`${API_BASE}/rutas/?vendedor_id=${idVendedor}`);
         const data = await response.json();
+        console.log('rutasApiService - Rutas encontradas:', data);
         return data;
     } catch (error) {
         console.error('Error al obtener rutas:', error);
@@ -16,8 +21,18 @@ export const obtenerRutasPorUsuario = async (userId) => {
 
 export const obtenerClientesPorRutaYDia = async (rutaId, dia) => {
     try {
-        const response = await fetch(`${API_BASE}/clientes-ruta/?ruta=${rutaId}&dia=${dia}`);
+        const url = `${API_BASE}/clientes-ruta/?ruta=${rutaId}&dia=${dia}`;
+        console.log('rutasApiService - Obteniendo clientes desde:', url);
+        const response = await fetch(url);
+        
+        // Verificar si la respuesta es OK
+        if (!response.ok) {
+            console.error('Error HTTP:', response.status, response.statusText);
+            return [];
+        }
+        
         const data = await response.json();
+        console.log('rutasApiService - Clientes encontrados:', data.length);
         return data;
     } catch (error) {
         console.error('Error al obtener clientes:', error);
@@ -39,6 +54,11 @@ export const enviarVentaRuta = async (ventaData) => {
         if (ventaData.cliente) formData.append('cliente', ventaData.cliente);
         formData.append('total', ventaData.total);
         formData.append('metodo_pago', ventaData.metodo_pago);
+        
+        // Fecha de la venta (si viene, usarla; si no, el backend usa la fecha actual)
+        if (ventaData.fecha) {
+            formData.append('fecha', ventaData.fecha);
+        }
 
         // JSON Fields deben enviarse como string
         formData.append('detalles', JSON.stringify(ventaData.detalles || []));

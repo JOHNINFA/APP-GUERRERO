@@ -6,49 +6,114 @@ import {
     TouchableOpacity,
     FlatList,
     StyleSheet,
-    Modal
+    Modal,
+    ActivityIndicator,
+    SectionList
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { obtenerClientes, buscarClientes } from '../../services/ventasService';
+import { API_URL } from '../../config';
 
-const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente }) => {
-    const [clientes, setClientes] = useState([]);
+// Mapeo de días
+const DIAS_SEMANA = {
+    0: 'DOMINGO',
+    1: 'LUNES',
+    2: 'MARTES',
+    3: 'MIERCOLES',
+    4: 'JUEVES',
+    5: 'VIERNES',
+    6: 'SABADO'
+};
+
+const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, userId, diaSeleccionado }) => {
+    const [clientesDelDia, setClientesDelDia] = useState([]);
+    const [todosLosClientes, setTodosLosClientes] = useState([]);
     const [busqueda, setBusqueda] = useState('');
-    const [clientesFiltrados, setClientesFiltrados] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [mostrarTodos, setMostrarTodos] = useState(false);
+    const [diaActual, setDiaActual] = useState('');
 
     useEffect(() => {
         if (visible) {
-            cargarClientes();
+            // Usar el día seleccionado o el día actual
+            const dia = diaSeleccionado || DIAS_SEMANA[new Date().getDay()];
+            setDiaActual(dia);
+            cargarClientes(dia);
         }
-    }, [visible]);
+    }, [visible, diaSeleccionado]);
 
-    useEffect(() => {
-        filtrarClientes();
-    }, [busqueda, clientes]);
+    const cargarClientes = async (dia) => {
+        setLoading(true);
+        try {
+            // 1. Cargar clientes del día actual
+            const urlDia = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}&dia=${dia}`;
+            console.log('📥 Cargando clientes del día:', urlDia);
+            
+            const responseDia = await fetch(urlDia);
+            if (responseDia.ok) {
+                const dataDia = await responseDia.json();
+                const clientesFormateados = dataDia.map(c => ({
+                    id: c.id.toString(),
+                    nombre: c.nombre_contacto || c.nombre_negocio,
+                    negocio: c.nombre_negocio,
+                    celular: c.telefono || '',
+                    direccion: c.direccion || '',
+                    dia_visita: c.dia_visita,
+                    esDeRuta: true
+                }));
+                setClientesDelDia(clientesFormateados);
+                console.log('✅ Clientes del día cargados:', clientesFormateados.length);
+            }
 
-    const cargarClientes = async () => {
-        const data = await obtenerClientes();
-        setClientes(data);
-        setClientesFiltrados(data);
+            // 2. Cargar todos los clientes de la ruta (sin filtro de día)
+            const urlTodos = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
+            const responseTodos = await fetch(urlTodos);
+            if (responseTodos.ok) {
+                const dataTodos = await responseTodos.json();
+                const todosFormateados = dataTodos.map(c => ({
+                    id: c.id.toString(),
+                    nombre: c.nombre_contacto || c.nombre_negocio,
+                    negocio: c.nombre_negocio,
+                    celular: c.telefono || '',
+                    direccion: c.direccion || '',
+                    dia_visita: c.dia_visita,
+                    esDeRuta: true
+                }));
+                setTodosLosClientes(todosFormateados);
+                console.log('✅ Todos los clientes cargados:', todosFormateados.length);
+            }
+        } catch (error) {
+            console.error('❌ Error cargando clientes:', error);
+        } finally {
+            setLoading(false);
+        }
     };
 
-    const filtrarClientes = async () => {
+    // Filtrar clientes según búsqueda
+    const getClientesFiltrados = () => {
+        const listaBase = mostrarTodos ? todosLosClientes : clientesDelDia;
+        
         if (busqueda.trim() === '') {
-            setClientesFiltrados(clientes);
-        } else {
-            const filtrados = await buscarClientes(busqueda);
-            setClientesFiltrados(filtrados);
+            return listaBase;
         }
+
+        const queryLower = busqueda.toLowerCase();
+        return listaBase.filter(c =>
+            c.nombre?.toLowerCase().includes(queryLower) ||
+            c.negocio?.toLowerCase().includes(queryLower) ||
+            c.direccion?.toLowerCase().includes(queryLower)
+        );
     };
 
     const handleSelectCliente = (cliente) => {
         onSelectCliente(cliente);
         setBusqueda('');
+        setMostrarTodos(false);
         onClose();
     };
 
     const handleNuevoCliente = () => {
         onNuevoCliente();
+        setMostrarTodos(false);
         onClose();
     };
 
@@ -58,21 +123,28 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente }) 
             onPress={() => handleSelectCliente(item)}
         >
             <View style={styles.clienteIcono}>
-                <Ionicons name="person" size={24} color="#003d88" />
+                <Ionicons name="storefront" size={24} color="#003d88" />
             </View>
             <View style={styles.clienteInfo}>
                 <Text style={styles.clienteNombre}>{item.negocio}</Text>
-                <Text style={styles.clienteNegocio}>{item.nombre}</Text>
+                {item.nombre && item.nombre !== item.negocio && (
+                    <Text style={styles.clienteContacto}>👤 {item.nombre}</Text>
+                )}
                 {item.celular && (
                     <Text style={styles.clienteDetalle}>📞 {item.celular}</Text>
                 )}
                 {item.direccion && (
                     <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
                 )}
+                {item.dia_visita && (
+                    <Text style={styles.clienteDia}>📅 {item.dia_visita}</Text>
+                )}
             </View>
             <Ionicons name="chevron-forward" size={20} color="#666" />
         </TouchableOpacity>
     );
+
+    const clientesFiltrados = getClientesFiltrados();
 
     return (
         <Modal
@@ -91,15 +163,48 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente }) 
                     <View style={{ width: 28 }} />
                 </View>
 
+                {/* Tabs: Hoy / Todos */}
+                <View style={styles.tabsContainer}>
+                    <TouchableOpacity
+                        style={[styles.tab, !mostrarTodos && styles.tabActivo]}
+                        onPress={() => setMostrarTodos(false)}
+                    >
+                        <Ionicons name="today" size={18} color={!mostrarTodos ? 'white' : '#003d88'} />
+                        <Text style={[styles.tabTexto, !mostrarTodos && styles.tabTextoActivo]}>
+                            Hoy ({diaActual})
+                        </Text>
+                        <View style={[styles.badge, !mostrarTodos && styles.badgeActivo]}>
+                            <Text style={[styles.badgeTexto, !mostrarTodos && styles.badgeTextoActivo]}>
+                                {clientesDelDia.length}
+                            </Text>
+                        </View>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity
+                        style={[styles.tab, mostrarTodos && styles.tabActivo]}
+                        onPress={() => setMostrarTodos(true)}
+                    >
+                        <Ionicons name="people" size={18} color={mostrarTodos ? 'white' : '#003d88'} />
+                        <Text style={[styles.tabTexto, mostrarTodos && styles.tabTextoActivo]}>
+                            Todos
+                        </Text>
+                        <View style={[styles.badge, mostrarTodos && styles.badgeActivo]}>
+                            <Text style={[styles.badgeTexto, mostrarTodos && styles.badgeTextoActivo]}>
+                                {todosLosClientes.length}
+                            </Text>
+                        </View>
+                    </TouchableOpacity>
+                </View>
+
                 {/* Búsqueda */}
                 <View style={styles.busquedaContainer}>
                     <Ionicons name="search" size={20} color="#666" style={styles.iconoBusqueda} />
                     <TextInput
                         style={styles.inputBusqueda}
-                        placeholder="Buscar por nombre o negocio..."
+                        placeholder="Buscar por nombre, negocio o dirección..."
                         value={busqueda}
                         onChangeText={setBusqueda}
-                        autoCapitalize="characters"
+                        autoCapitalize="none"
                     />
                     {busqueda.length > 0 && (
                         <TouchableOpacity onPress={() => setBusqueda('')}>
@@ -117,20 +222,42 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente }) 
                     <Text style={styles.btnNuevoClienteTexto}>Nuevo Cliente</Text>
                 </TouchableOpacity>
 
+                {/* Loading */}
+                {loading && (
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="large" color="#003d88" />
+                        <Text style={styles.loadingText}>Cargando clientes...</Text>
+                    </View>
+                )}
+
                 {/* Lista de Clientes */}
-                <FlatList
-                    data={clientesFiltrados}
-                    renderItem={renderCliente}
-                    keyExtractor={(item) => item.id}
-                    style={styles.lista}
-                    contentContainerStyle={styles.listaContent}
-                    ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <Ionicons name="people-outline" size={48} color="#ccc" />
-                            <Text style={styles.emptyTexto}>No se encontraron clientes</Text>
-                        </View>
-                    }
-                />
+                {!loading && (
+                    <FlatList
+                        data={clientesFiltrados}
+                        renderItem={renderCliente}
+                        keyExtractor={(item) => item.id}
+                        style={styles.lista}
+                        contentContainerStyle={styles.listaContent}
+                        ListEmptyComponent={
+                            <View style={styles.emptyContainer}>
+                                <Ionicons name="people-outline" size={48} color="#ccc" />
+                                <Text style={styles.emptyTexto}>
+                                    {mostrarTodos 
+                                        ? 'No hay clientes en tu ruta' 
+                                        : `No hay clientes para ${diaActual}`}
+                                </Text>
+                                {!mostrarTodos && (
+                                    <TouchableOpacity 
+                                        style={styles.btnVerTodos}
+                                        onPress={() => setMostrarTodos(true)}
+                                    >
+                                        <Text style={styles.btnVerTodosTexto}>Ver todos los clientes</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                        }
+                    />
+                )}
             </View>
         </Modal>
     );
@@ -159,6 +286,54 @@ const styles = StyleSheet.create({
         fontSize: 20,
         fontWeight: 'bold',
         color: '#333',
+    },
+    tabsContainer: {
+        flexDirection: 'row',
+        backgroundColor: 'white',
+        padding: 10,
+        gap: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#e0e0e0',
+    },
+    tab: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 12,
+        borderRadius: 8,
+        backgroundColor: '#f0f8ff',
+        borderWidth: 1,
+        borderColor: '#003d88',
+        gap: 6,
+    },
+    tabActivo: {
+        backgroundColor: '#003d88',
+    },
+    tabTexto: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#003d88',
+    },
+    tabTextoActivo: {
+        color: 'white',
+    },
+    badge: {
+        backgroundColor: '#003d88',
+        borderRadius: 10,
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+    },
+    badgeActivo: {
+        backgroundColor: 'rgba(255,255,255,0.3)',
+    },
+    badgeTexto: {
+        color: 'white',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    badgeTextoActivo: {
+        color: 'white',
     },
     busquedaContainer: {
         flexDirection: 'row',
@@ -190,6 +365,15 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: 'bold',
         marginLeft: 8,
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    loadingText: {
+        marginTop: 10,
+        color: '#666',
     },
     lista: {
         flex: 1,
@@ -224,17 +408,23 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: 'bold',
         color: '#333',
-        marginBottom: 4,
+        marginBottom: 2,
     },
-    clienteNegocio: {
+    clienteContacto: {
         fontSize: 14,
         color: '#666',
-        marginBottom: 4,
+        marginBottom: 2,
     },
     clienteDetalle: {
         fontSize: 12,
         color: '#999',
         marginTop: 2,
+    },
+    clienteDia: {
+        fontSize: 11,
+        color: '#003d88',
+        marginTop: 4,
+        fontWeight: '600',
     },
     emptyContainer: {
         flex: 1,
@@ -246,6 +436,17 @@ const styles = StyleSheet.create({
         fontSize: 16,
         color: '#999',
         marginTop: 10,
+        textAlign: 'center',
+    },
+    btnVerTodos: {
+        marginTop: 15,
+        padding: 12,
+        backgroundColor: '#003d88',
+        borderRadius: 8,
+    },
+    btnVerTodosTexto: {
+        color: 'white',
+        fontWeight: 'bold',
     },
 });
 

@@ -132,9 +132,15 @@ export const generarTicketHTML = (venta, config = null) => {
 
 export const imprimirTicket = async (venta) => {
   try {
-    // Obtener configuración del servidor
-    const config = await obtenerConfiguracionImpresion();
-    console.log('Configuración de impresión obtenida:', config ? 'Sí' : 'No');
+    // Intentar obtener configuración del servidor, usar null si falla (offline)
+    let config = null;
+    try {
+      config = await obtenerConfiguracionImpresion();
+      console.log('✅ Configuración de impresión obtenida del servidor');
+    } catch (configError) {
+      console.log('📴 Sin conexión, usando configuración por defecto para ticket');
+      // Continúa con config = null, usará valores por defecto
+    }
 
     const html = generarTicketHTML(venta, config);
 
@@ -144,6 +150,52 @@ export const imprimirTicket = async (venta) => {
     await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
   } catch (error) {
     console.error('Error al imprimir ticket:', error);
+    throw error;
+  }
+};
+
+// Generar solo el PDF del ticket (para compartir por WhatsApp)
+export const generarTicketPDF = async (venta) => {
+  try {
+    // Intentar obtener configuración del servidor
+    let config = null;
+    try {
+      config = await obtenerConfiguracionImpresion();
+    } catch (configError) {
+      console.log('📴 Sin conexión, usando configuración por defecto');
+    }
+
+    const html = generarTicketHTML(venta, config);
+    const { uri } = await Print.printToFileAsync({ html });
+    console.log('PDF generado en:', uri);
+    
+    return uri;
+  } catch (error) {
+    console.error('Error al generar PDF:', error);
+    throw error;
+  }
+};
+
+// Compartir ticket por WhatsApp (genera PDF y abre selector de compartir)
+export const compartirTicketWhatsApp = async (venta) => {
+  try {
+    // Generar el PDF
+    const pdfUri = await generarTicketPDF(venta);
+    
+    // Verificar si se puede compartir
+    const isAvailable = await Sharing.isAvailableAsync();
+    
+    if (isAvailable) {
+      await Sharing.shareAsync(pdfUri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Enviar ticket',
+        UTI: 'com.adobe.pdf'
+      });
+    } else {
+      throw new Error('Compartir no disponible en este dispositivo');
+    }
+  } catch (error) {
+    console.error('Error al compartir ticket:', error);
     throw error;
   }
 };

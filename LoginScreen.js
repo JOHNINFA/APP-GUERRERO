@@ -8,13 +8,13 @@ const LoginScreen = ({ onLogin }) => {
   // ⚠️ USUARIOS HARDCODEADOS PARA DESARROLLO - Mapeados a IDs del CRM
   // Estos IDs corresponden a CargueID1, CargueID2, etc. en el backend Django
   const users = {
-    'ID1': '1234',      // Usuario ID1 del CRM
-    'ID2': '1234',      // Usuario ID2 del CRM
-    'ID3': '1234',      // Usuario ID3 del CRM
-    'ID4': '1234',      // Usuario ID4 del CRM
-    'ID5': '1234',      // Usuario ID5 del CRM
-    'ID6': '1234',      // Usuario ID6 del CRM
-    'admin': 'admin',   // Usuario administrador de prueba
+    'ID1': { password: '1234', nombre: 'CARLOS' },
+    'ID2': { password: '1234', nombre: 'VENDEDOR 2' },
+    'ID3': { password: '1234', nombre: 'VENDEDOR 3' },
+    'ID4': { password: '1234', nombre: 'VENDEDOR 4' },
+    'ID5': { password: '1234', nombre: 'VENDEDOR 5' },
+    'ID6': { password: '1234', nombre: 'VENDEDOR 6' },
+    'admin': { password: 'admin', nombre: 'ADMINISTRADOR' },
   };
 
   // ⚠️ URL COMENTADA TEMPORALMENTE - NO TOCAR GOOGLE SHEETS DURANTE DESARROLLO
@@ -22,8 +22,10 @@ const LoginScreen = ({ onLogin }) => {
 
   const handleLogin = () => {
     // Verifica las credenciales ingresadas
-    if (users[username] && users[username] === password) {
-      onLogin(true, username); // Pasa el nombre de usuario para identificar al usuario
+    const user = users[username];
+    if (user && user.password === password) {
+      // Pasa el ID y el nombre del vendedor
+      onLogin(true, username, user.nombre);
     } else {
       Alert.alert('Error', 'Nombre de usuario o contraseña incorrectos.');
     }

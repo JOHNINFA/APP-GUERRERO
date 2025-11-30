@@ -22,15 +22,17 @@ const Stack = createStackNavigator();
 const App = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userId, setUserId] = useState(null);
+  const [vendedorNombre, setVendedorNombre] = useState(null);
 
   useEffect(() => {
     // Sincronizar productos al iniciar la app
     inicializarProductos();
   }, []);
 
-  const handleLogin = (loggedIn, username) => {
+  const handleLogin = (loggedIn, username, nombre) => {
     setIsLoggedIn(loggedIn);
     setUserId(username);
+    setVendedorNombre(nombre);
   };
 
   return (
@@ -44,7 +46,7 @@ const App = () => {
             {(props) => <MainScreen {...props} userId={userId} />}
           </Stack.Screen>
           <Stack.Screen name="Ventas">
-            {(props) => <VentasScreen {...props} userId={userId} />}
+            {(props) => <VentasScreen {...props} userId={userId} vendedorNombre={vendedorNombre} />}
           </Stack.Screen>
           <Stack.Screen name="Cargue">
             {(props) => <Cargue {...props} userId={userId} />}

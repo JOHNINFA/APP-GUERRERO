@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { FlatList, Text, TouchableOpacity, View, StyleSheet } from 'react-native';
-import Navbar from './Navbar'; // Importa el componente Navbar
+import { FlatList, Text, TouchableOpacity, View, StyleSheet, ActivityIndicator } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import Navbar from './Navbar';
+import { API_URL } from '../config';
 
 const orderOfProducts = [
   "AREPA TIPO OBLEA",
@@ -45,27 +47,50 @@ const orderOfProducts = [
   "CANASTAS"
 ];
 
-// ⚠️ URLS COMENTADAS TEMPORALMENTE - NO TOCAR GOOGLE SHEETS DURANTE DESARROLLO
-// Mapeo de días a URLs
-const urlsByDay = {
-  Lunes: null, // `https://script.google.com/macros/s/AKfycbwadFyKaLcxopk-wwZUso66qjyB0x8USwsML7wDHi-4c9izm3WxUcvjzB3HvPi4npo/exec?userId=`,
-  Martes: null, // `https://script.google.com/macros/s/AKfycbzOxY9DkMLiVHui-kJDNRYZLmSJ_mAtLxzgTWfJnlvvt3IEdK6o2RkqqacG2GgqaI7G/exec?userId=`, 
-  Miércoles: null, // `https://script.google.com/macros/s/AKfycbz0oBHhnPrl2HJjQX8LPMuQ653QQJtORAT45wcckHYBKqDArHvb-p_f1EBCHO33BA/exec?userId=`, 
-  Jueves: null, // `https://script.google.com/macros/s/AKfycbwdmsDhEVO1ucl2v672zuFGa6QcBc3FuO1qCBtpeEvWayLdnVjyCqf-RUSrtRBA-w5k/exec?userId=`, 
-  Viernes: null, // `https://script.google.com/macros/s/AKfycbzUdzf5gFtQACMm3mWkaYJTxnw5IHuRd6FApvub1l5JPqKl67JL1HjujwS4mCgcreFD/exec?userId=`, 
-  Sábado: null, // `https://script.google.com/macros/s/AKfycbz-F9sz31L2QR-VLwOK2Rl2ofSr-_AOsxduuT_ycSimcezdZgSPSGB3ud0Ehfn_G0A/exec?userId=`, 
-
+// Mapeo de días en español
+const diasSemana = {
+  0: 'Domingo',
+  1: 'Lunes',
+  2: 'Martes',
+  3: 'Miércoles',
+  4: 'Jueves',
+  5: 'Viernes',
+  6: 'Sábado'
 };
 
 const Vencidas = ({ userId }) => {
   const [selectedDay, setSelectedDay] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [quantities, setQuantities] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  // Obtener datos de la API de Google Apps Script
+  // Formatear fecha para mostrar
+  const formatDateDisplay = (date) => {
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+  };
+
+  // Formatear fecha para API (YYYY-MM-DD)
+  const formatDateAPI = (date) => {
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const year = date.getFullYear();
+    return `${year}-${month}-${day}`;
+  };
+
+  // Obtener datos del servidor Django
   useEffect(() => {
     if (selectedDay) {
-      // Obtener la URL correspondiente al día seleccionado
-      const url = `${urlsByDay[selectedDay]}${userId}`;
+      setLoading(true);
+      setError(null);
+      
+      const fechaFormateada = formatDateAPI(selectedDate);
+      const url = `${API_URL}/api/rendimiento-cargue/?dia=${encodeURIComponent(selectedDay)}&fecha=${fechaFormateada}`;
+      
       fetch(url)
         .then(response => {
           if (!response.ok) {
@@ -74,16 +99,50 @@ const Vencidas = ({ userId }) => {
           return response.json();
         })
         .then(data => {
-          setQuantities(data);
+          if (data.success) {
+            // Convertir array a objeto indexado por nombre de producto
+            const quantitiesObj = {};
+            data.data.forEach(item => {
+              quantitiesObj[item.producto] = {
+                vencidas: item.vencidas || 0,
+                devoluciones: item.devoluciones || 0,
+                total: item.total || 0
+              };
+            });
+            setQuantities(quantitiesObj);
+          } else {
+            setError(data.error || 'Error al cargar datos');
+          }
+          setLoading(false);
         })
-        .catch(error => console.error('Error al obtener datos:', error));
+        .catch(error => {
+          console.error('Error al obtener datos:', error);
+          setError('Error de conexión con el servidor');
+          setLoading(false);
+        });
     }
-  }, [selectedDay, userId]);
+  }, [selectedDay, selectedDate]);
+
+  // Manejar cambio de fecha
+  const onDateChange = (event, date) => {
+    setShowDatePicker(false);
+    if (date) {
+      setSelectedDate(date);
+      // Actualizar el día seleccionado basado en la fecha
+      const diaSemana = diasSemana[date.getDay()];
+      setSelectedDay(diaSemana);
+    }
+  };
+
+  // Manejar selección de día desde Navbar
+  const handleDaySelected = (day) => {
+    setSelectedDay(day);
+  };
 
   const renderItem = ({ item }) => {
-    const vencidas = quantities[item]?.vencidas || '0';
-    const devoluciones = quantities[item]?.devoluciones || '0';
-    const total = quantities[item]?.quantity || '0';
+    const vencidas = quantities[item]?.vencidas || 0;
+    const devoluciones = quantities[item]?.devoluciones || 0;
+    const total = quantities[item]?.total || 0;
 
     return (
       <View style={styles.productContainer}>
@@ -107,8 +166,27 @@ const Vencidas = ({ userId }) => {
     <View style={styles.container}>
       {/* Navbar con selección de días */}
       <View style={styles.navbarWrapper}>
-        <Navbar selectedDay={selectedDay} onDaySelected={setSelectedDay} />
+        <Navbar selectedDay={selectedDay} onDaySelected={handleDaySelected} />
       </View>
+
+      {/* Selector de fecha */}
+      <TouchableOpacity 
+        style={styles.dateSelector}
+        onPress={() => setShowDatePicker(true)}
+      >
+        <Text style={styles.dateSelectorText}>
+          📅 Fecha: {formatDateDisplay(selectedDate)}
+        </Text>
+      </TouchableOpacity>
+
+      {showDatePicker && (
+        <DateTimePicker
+          value={selectedDate}
+          mode="date"
+          display="default"
+          onChange={onDateChange}
+        />
+      )}
 
       <View style={styles.contentContainer}>
         {/* Títulos de columnas fijos */}
@@ -120,10 +198,21 @@ const Vencidas = ({ userId }) => {
         </View>
 
         {!selectedDay && (
-          <Text style={styles.alertText}>Por favor, seleccione un día para ingresar cantidades.</Text>
+          <Text style={styles.alertText}>Por favor, seleccione un día para ver el rendimiento.</Text>
         )}
 
-        {selectedDay && (
+        {loading && (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="green" />
+            <Text style={styles.loadingText}>Cargando datos...</Text>
+          </View>
+        )}
+
+        {error && (
+          <Text style={styles.errorText}>{error}</Text>
+        )}
+
+        {selectedDay && !loading && !error && (
           <FlatList
             data={orderOfProducts}
             renderItem={renderItem}
@@ -139,11 +228,26 @@ const Vencidas = ({ userId }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5', // Gris suave
+    backgroundColor: '#f5f5f5',
   },
   navbarWrapper: {
-    marginTop: 0, // Ajusta según la altura del Navbar
-    zIndex: 10, // Asegúrate de que esté por encima de otros elementos
+    marginTop: 0,
+    zIndex: 10,
+  },
+  dateSelector: {
+    backgroundColor: 'white',
+    padding: 12,
+    marginHorizontal: 20,
+    marginVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'green',
+    alignItems: 'center',
+  },
+  dateSelectorText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
   },
   contentContainer: {
     flex: 1,
@@ -155,6 +259,23 @@ const styles = StyleSheet.create({
     color: 'red',
     textAlign: 'center',
     marginBottom: 20,
+    marginTop: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 50,
+  },
+  loadingText: {
+    marginTop: 10,
+    color: '#666',
+  },
+  errorText: {
+    color: 'red',
+    textAlign: 'center',
+    marginTop: 20,
+    fontSize: 14,
   },
   headerRow: {
     flexDirection: 'row',
@@ -163,7 +284,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#ddd',
     paddingBottom: 5,
     marginBottom: 3,
-    backgroundColor: '#f5f5f5', // Igual al fondo de la pantalla
+    backgroundColor: '#f5f5f5',
   },
   headerText: {
     fontSize: 11,
@@ -172,40 +293,33 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#696969',
   },
-
   productHeader: {
-    width: '40%', // El ancho de la columna "PRODUCTO"
-    marginLeft: 24, // Mueve "PRODUCTO" hacia la derecha
+    width: '40%',
+    marginLeft: 24,
   },
-
   vencidasHeader: {
     width: '15%',
     marginRight: 1,
-    marginLeft: 22, // Mueve "VENCIDAS" hacia la derecha
+    marginLeft: 22,
   },
-
   devolucionHeader: {
     width: '25%',
-    marginRight: 1, // Mueve "DEVOLUCION" hacia la izquierda
+    marginRight: 1,
     marginLeft: 5,
   },
-
   totalHeader: {
     width: '18%',
     marginRight: 15,
     marginLeft: -15,
   },
-  productHeader: {
-    width: '35%', // Ajustar el ancho de la columna de productos
-  },
   quantityHeader: {
-    width: '20%', // Ajustar el ancho de las columnas de cantidad, devoluciones y total
+    width: '20%',
   },
   productContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 15,
-    justifyContent: 'space-between', // Asegura que los botones estén separados
+    justifyContent: 'space-between',
   },
   productButton: {
     backgroundColor: 'white',
@@ -219,9 +333,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 2,
     width: '40%',
-    minHeight: 47, // Asegura una altura mínima
+    minHeight: 47,
     justifyContent: 'center',
-    alignItems: 'center', // Centra el contenido
+    alignItems: 'center',
   },
   productName: {
     fontSize: 11,
@@ -241,9 +355,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 2,
     width: '19%',
-    minHeight: 47, // Asegura una altura mínima
+    minHeight: 47,
     justifyContent: 'center',
-    alignItems: 'center', // Centra el contenido
+    alignItems: 'center',
   },
   quantityText: {
     fontSize: 12,

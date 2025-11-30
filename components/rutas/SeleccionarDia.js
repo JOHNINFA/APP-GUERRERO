@@ -40,6 +40,16 @@ const SeleccionarDia = ({ navigation, route }) => {
       }),
     ]).start();
 
+    // Mapeo de código a nombre completo para el backend
+    const diaParaBackend = {
+      'L': 'LUNES',
+      'M': 'MARTES', 
+      'X': 'MIERCOLES',
+      'J': 'JUEVES',
+      'V': 'VIERNES',
+      'S': 'SABADO'
+    };
+
     // Delay de 300ms antes de navegar
     setTimeout(async () => {
       try {
@@ -48,7 +58,7 @@ const SeleccionarDia = ({ navigation, route }) => {
         navigation.navigate('ListaClientes', { 
           ruta: route.params.ruta,
           rutaNombre: route.params.rutaNombre,
-          dia: dia.codigo,
+          dia: diaParaBackend[dia.codigo], // Enviar nombre completo al backend
           userId: route.params.userId
         });
       } catch (error) {
