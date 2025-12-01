@@ -1,33 +1,50 @@
 import React, { useState } from 'react';
-import { View, TextInput, Button, StyleSheet, Alert, ImageBackground, StatusBar } from 'react-native';
+import { View, TextInput, Button, StyleSheet, Alert, ImageBackground, StatusBar, ActivityIndicator } from 'react-native';
+import { API_URL } from './config';
 
 const LoginScreen = ({ onLogin }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  // ⚠️ USUARIOS HARDCODEADOS PARA DESARROLLO - Mapeados a IDs del CRM
-  // Estos IDs corresponden a CargueID1, CargueID2, etc. en el backend Django
-  const users = {
-    'ID1': { password: '1234', nombre: 'CARLOS' },
-    'ID2': { password: '1234', nombre: 'VENDEDOR 2' },
-    'ID3': { password: '1234', nombre: 'VENDEDOR 3' },
-    'ID4': { password: '1234', nombre: 'VENDEDOR 4' },
-    'ID5': { password: '1234', nombre: 'VENDEDOR 5' },
-    'ID6': { password: '1234', nombre: 'VENDEDOR 6' },
-    'admin': { password: 'admin', nombre: 'ADMINISTRADOR' },
-  };
+  const handleLogin = async () => {
+    if (!username || !password) {
+      Alert.alert('Error', 'Por favor ingrese usuario y contraseña');
+      return;
+    }
 
-  // ⚠️ URL COMENTADA TEMPORALMENTE - NO TOCAR GOOGLE SHEETS DURANTE DESARROLLO
-  const API_URL = null; // 'https://script.google.com/macros/s/AKfycbxwYn4Ea1FMWIHXgjBTRSvTf5CJZ-J6B5iyahxUnH0yTmIc2lNQ0NncUh_2pprMyjo/exec';
+    setLoading(true);
 
-  const handleLogin = () => {
-    // Verifica las credenciales ingresadas
-    const user = users[username];
-    if (user && user.password === password) {
-      // Pasa el ID y el nombre del vendedor
-      onLogin(true, username, user.nombre);
-    } else {
-      Alert.alert('Error', 'Nombre de usuario o contraseña incorrectos.');
+    try {
+      // Hacer petición al backend
+      const response = await fetch(`${API_URL}/api/vendedores/login/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id_vendedor: username,
+          password: password
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        // Login exitoso
+        onLogin(true, data.vendedor.id_vendedor, data.vendedor.nombre);
+      } else {
+        // Login fallido
+        Alert.alert('Error', data.error || 'Credenciales incorrectas');
+      }
+    } catch (error) {
+      console.error('Error de conexión:', error);
+      Alert.alert(
+        'Error de Conexión',
+        'No se pudo conectar con el servidor. Verifica que el backend esté corriendo.'
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -40,6 +57,8 @@ const LoginScreen = ({ onLogin }) => {
           placeholder="Nombre de usuario"
           value={username}
           onChangeText={setUsername}
+          editable={!loading}
+          autoCapitalize="characters"
         />
         <TextInput
           style={styles.input}
@@ -47,8 +66,13 @@ const LoginScreen = ({ onLogin }) => {
           secureTextEntry
           value={password}
           onChangeText={setPassword}
+          editable={!loading}
         />
-        <Button title="Iniciar sesión" onPress={handleLogin} />
+        {loading ? (
+          <ActivityIndicator size="large" color="#003d88" style={{ marginTop: 10 }} />
+        ) : (
+          <Button title="Iniciar sesión" onPress={handleLogin} />
+        )}
       </View>
     </ImageBackground>
   );
