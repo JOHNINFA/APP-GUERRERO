@@ -33,7 +33,7 @@ const productos = [
   { name: 'AREPA SUPER OBLEA 500Gr', image: require('../images/arepa-superoblea.jpeg') },
   { name: 'LIBRA MASA', image: require('../images/masa.jpeg') },
   { name: 'MUTE BOYACENSE', image: require('../images/maiz-peto.jpeg') },
-  { name: 'ENVUELTO DE MAIZ 500Gr', image: require('../images/envueltos.jpeg') },
+  { name: 'ENVUELTO DE MAÍZ 500Gr', image: require('../images/envueltos.jpeg') },
   { name: 'CANASTILLA', image: require('../images/canasta.png') },
 ];
 

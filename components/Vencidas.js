@@ -5,46 +5,42 @@ import Navbar from './Navbar';
 import { API_URL } from '../config';
 
 const orderOfProducts = [
-  "AREPA TIPO OBLEA",
-  "AREPA MEDIANA",
-  "AREPA TIPO PINCHO",
-  "AREPA CON QUESO - CORRIENTE",
-  "AREPA CON QUESO- ESPECIAL GRANDE",
-  "AREPA CON QUESO- ESPECIAL PEQUEÑA",
-  "AREPA CON QUESO MINI X 10",
-  "AREPA CON QUESO CUADRADA",
-  "AREPA DE CHOCLO-CORRIENTE",
-  "AREPA DE CHOCLO CON QUESO GRANDE",
-  "AREPA DE CHOCLO CON QUESO PEQUEÑA",
-  "AREPA BOYACENSE X5",
-  "AREPA BOYACENSE X10",
-  "AREPA SANTADERANA",
-  "ALMOJABANAS X5",
-  "ALMOJABANAS X10",
-  "AREPA CON SEMILLA DE QUINUA",
-  "AREPA CON SEMILLA DE CHIA",
-  "AREPA CON SEMILLA DE AJONJOLI",
-  "AREPA CON SEMILLA DE LINANZA",
-  "AREPA CON SEMILLA DE GIRASOL",
-  "AREPA CHORICERA",
-  "AREPA LONCHERIA",
-  "AREPA CON MARGARINA Y SAL",
-  "YUCAREPA",
-  "AREPA TIPO ASADERO X 10",
-  "AREPA PARA RELLENAR # 1",
-  "AREPA PARA RELLENAR #2",
-  "AREPA PARA RELLENAR #3",
-  "PORCION DE AREPAS X 2 UND",
-  "PORCION DE AREPAS X 3 UND",
-  "PORCION DE AREPAS X 4 UND",
-  "PORCION DE AREPAS X 5 UND",
-  "AREPA SUPER OBLEA",
-  "BLOQUE DE MASA",
-  "LIBRAS DE MASA",
+  "AREPA TIPO OBLEA 500Gr",
+  "AREPA MEDIANA 330Gr",
+  "AREPA TIPO PINCHO 330Gr",
+  "AREPA QUESO CORRIENTE 450Gr",
+  "AREPA QUESO ESPECIAL GRANDE 600Gr",
+  "AREPA CON QUESO ESPECIAL PEQUEÑA 600Gr",
+  "AREPA QUESO MINI X10",
+  "AREPA CON QUESO CUADRADA 450Gr",
+  "AREPA DE CHOCLO CORRIENTE 300Gr",
+  "AREPA DE CHOCLO CON QUESO GRANDE 1200Gr",
+  "AREPA DE CHOCLO CON QUESO PEQUEÑA 700Gr",
+  "AREPA BOYACENSE X 5 450Gr",
+  "AREPA SANTANDEREANA 450Gr",
+  "ALMOJABANA X 5 300Gr",
+  "AREPA CON SEMILLA DE QUINUA 450Gr",
+  "AREPA DE MAIZ CON SEMILLA DE CHIA450Gr",
+  "AREPAS DE MAIZ PETO CON SEMILLA DE AJONJOLI 450GR",
+  "AREPA DE MAIZ PETO CON SEMILLAS DE LINAZA 450Gr",
+  "AREPA DE MAIZ PETO CON SEMILLAS DE GIRASOL 450Gr",
+  "AREPA DE MAIZ PETO CHORICERA 1000Gr",
+  "AREPA DE MAIZ DE PETO TIPO LONCHERIA 500Gr",
+  "AREPA DE MAIZ PETO CON MARGARINA Y SAL 500Gr",
+  "YUCAREPA 500Gr",
+  "AREPA TIPO ASADERO X 10 280Gr",
+  "AREPA RELLENAR #1",
+  "AREPA PARA RELLENA #2",
+  "AREPA RELLENAR #3 1000Gr",
+  "PORCION DE AREPA X 2 UND 55Gr",
+  "PORCION DE AREPA 3 UND",
+  "PORCION DE AREPA 4 UND 110 GR",
+  "PORCION DE AREPA 5 UND",
+  "AREPA SUPER OBLEA 500Gr",
+  "LIBRA MASA",
   "MUTE BOYACENSE",
-  "LIBRA DE MAIZ PETO",
-  "ENVUELTO DE MAIZ X 5 UND",
-  "CANASTAS"
+  "ENVUELTO DE MAÍZ 500Gr",
+  "CANASTILLA"
 ];
 
 // Mapeo de días en español
@@ -89,7 +85,14 @@ const Vencidas = ({ userId }) => {
       setError(null);
       
       const fechaFormateada = formatDateAPI(selectedDate);
-      const url = `${API_URL}/api/rendimiento-cargue/?dia=${encodeURIComponent(selectedDay)}&fecha=${fechaFormateada}`;
+      // Normalizar día: convertir a mayúsculas y quitar tildes
+      const diaNormalizado = selectedDay
+        .toUpperCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      const url = `${API_URL}/api/rendimiento-cargue/?dia=${encodeURIComponent(diaNormalizado)}&fecha=${fechaFormateada}`;
+      
+      console.log('📡 Consultando rendimiento:', url);
       
       fetch(url)
         .then(response => {
@@ -193,7 +196,7 @@ const Vencidas = ({ userId }) => {
         <View style={styles.headerRow}>
           <Text style={[styles.headerText, styles.productHeader]}>PRODUCTO</Text>
           <Text style={[styles.headerText, styles.vencidasHeader]}>VENCIDAS</Text>
-          <Text style={[styles.headerText, styles.devolucionHeader]}>DEVOLUCION</Text>
+          <Text style={[styles.headerText, styles.devolucionHeader]}>DEVOLUC.</Text>
           <Text style={[styles.headerText, styles.totalHeader]}>TOTAL</Text>
         </View>
 
@@ -280,37 +283,35 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     borderBottomWidth: 1,
     borderBottomColor: '#ddd',
     paddingBottom: 5,
     marginBottom: 3,
     backgroundColor: '#f5f5f5',
+    paddingHorizontal: 20,
   },
   headerText: {
     fontSize: 11,
     fontWeight: 'bold',
-    borderRadius: 8,
     textAlign: 'center',
     color: '#696969',
   },
   productHeader: {
     width: '40%',
-    marginLeft: 24,
+    textAlign: 'center',
   },
   vencidasHeader: {
-    width: '15%',
-    marginRight: 1,
-    marginLeft: 22,
+    width: '19%',
+    textAlign: 'center',
   },
   devolucionHeader: {
-    width: '25%',
-    marginRight: 1,
-    marginLeft: 5,
+    width: '19%',
+    textAlign: 'center',
   },
   totalHeader: {
-    width: '18%',
-    marginRight: 15,
-    marginLeft: -15,
+    width: '19%',
+    textAlign: 'center',
   },
   quantityHeader: {
     width: '20%',
