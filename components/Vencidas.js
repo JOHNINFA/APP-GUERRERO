@@ -92,7 +92,7 @@ const Vencidas = ({ userId }) => {
         .replace(/[\u0300-\u036f]/g, '');
       const url = `${API_URL}/api/rendimiento-cargue/?dia=${encodeURIComponent(diaNormalizado)}&fecha=${fechaFormateada}`;
       
-      console.log('📡 Consultando rendimiento:', url);
+
       
       fetch(url)
         .then(response => {

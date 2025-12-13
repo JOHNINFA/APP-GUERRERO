@@ -1,4 +1,6 @@
-const API_BASE = 'http://192.168.1.19:8000/api';
+import { API_URL } from '../config'; 
+
+const API_BASE = `${API_URL}/api`;
 
 export const obtenerRutasPorUsuario = async (userId) => {
     try {
@@ -8,10 +10,10 @@ export const obtenerRutasPorUsuario = async (userId) => {
             idVendedor = `ID${idVendedor}`;
         }
 
-        console.log('rutasApiService - Buscando rutas para vendedor:', idVendedor);
+
         const response = await fetch(`${API_BASE}/rutas/?vendedor_id=${idVendedor}`);
         const data = await response.json();
-        console.log('rutasApiService - Rutas encontradas:', data);
+
         return data;
     } catch (error) {
         console.error('Error al obtener rutas:', error);
@@ -22,7 +24,7 @@ export const obtenerRutasPorUsuario = async (userId) => {
 export const obtenerClientesPorRutaYDia = async (rutaId, dia) => {
     try {
         const url = `${API_BASE}/clientes-ruta/?ruta=${rutaId}&dia=${dia}`;
-        console.log('rutasApiService - Obteniendo clientes desde:', url);
+
         const response = await fetch(url);
         
         // Verificar si la respuesta es OK
@@ -32,7 +34,7 @@ export const obtenerClientesPorRutaYDia = async (rutaId, dia) => {
         }
         
         const data = await response.json();
-        console.log('rutasApiService - Clientes encontrados:', data.length);
+
         return data;
     } catch (error) {
         console.error('Error al obtener clientes:', error);

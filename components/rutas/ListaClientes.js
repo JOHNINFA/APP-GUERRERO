@@ -86,7 +86,7 @@ const ListaClientes = ({ route, navigation }) => {
 
       // Limpiar pendientes
       await AsyncStorage.removeItem(pendientesKey);
-      console.log('✅ Sincronización completada');
+
     } catch (error) {
       console.error('Error al sincronizar pendientes:', error);
     }

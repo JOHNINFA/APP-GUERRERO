@@ -46,7 +46,7 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, us
         try {
             // 1. Cargar clientes del día actual
             const urlDia = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}&dia=${dia}`;
-            console.log('📥 Cargando clientes del día:', urlDia);
+
             
             const responseDia = await fetch(urlDia);
             if (responseDia.ok) {
@@ -61,7 +61,7 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, us
                     esDeRuta: true
                 }));
                 setClientesDelDia(clientesFormateados);
-                console.log('✅ Clientes del día cargados:', clientesFormateados.length);
+
             }
 
             // 2. Cargar todos los clientes de la ruta (sin filtro de día)
@@ -79,7 +79,7 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, us
                     esDeRuta: true
                 }));
                 setTodosLosClientes(todosFormateados);
-                console.log('✅ Todos los clientes cargados:', todosFormateados.length);
+
             }
         } catch (error) {
             console.error('❌ Error cargando clientes:', error);

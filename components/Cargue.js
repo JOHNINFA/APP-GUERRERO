@@ -3,11 +3,8 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Vibrati
 import Checkbox from 'expo-checkbox';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
-
-// ⚠️ AJUSTAR ESTA URL SEGÚN EL ENTORNO
-const API_URL_OBTENER = 'http://192.168.1.19:8000/api/obtener-cargue/';
-const API_URL_ACTUALIZAR = 'http://192.168.1.19:8000/api/actualizar-check-vendedor/';
-const API_URL_VERIFICAR_ESTADO = 'http://192.168.1.19:8000/api/verificar-estado-dia/';
+import { ENDPOINTS } from '../config';
+// URLs centralizadas en config.js - ENDPOINTS ya importado arriba
 
 const Cargue = ({ userId }) => {
   const [selectedDay, setSelectedDay] = useState('Lunes');
@@ -71,18 +68,18 @@ const Cargue = ({ userId }) => {
   const verificarEstadoDia = async (dia, fecha) => {
     try {
       const diaServidor = diasParaServidor[dia] || dia.toUpperCase().replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U');
-      const url = `${API_URL_VERIFICAR_ESTADO}?vendedor_id=${userId}&dia=${diaServidor}&fecha=${fecha}`;
+      const url = `${ENDPOINTS.VERIFICAR_ESTADO_DIA}?vendedor_id=${userId}&dia=${diaServidor}&fecha=${fecha}`;
       const response = await fetch(url);
       const data = await response.json();
 
       if (data.success) {
         setDiaEstado(data);
-        console.log('📊 Estado del día:', data.estado, '- Total productos:', data.total_productos);
+
 
         // Si el día tiene datos marcados como DESPACHO, mostrar info
         if (data.estado === 'DESPACHO' && data.tiene_datos) {
           // No bloqueamos la edición, solo informamos
-          console.log('ℹ️', data.mensaje);
+
         }
       }
     } catch (error) {
@@ -99,8 +96,8 @@ const Cargue = ({ userId }) => {
 
     try {
       const diaServidor = diasParaServidor[selectedDay] || selectedDay.toUpperCase();
-      const url = `${API_URL_OBTENER}?vendedor_id=${userId}&dia=${diaServidor}&fecha=${selectedDate}`;
-      console.log('📥 Cargando cargue:', url);
+      const url = `${ENDPOINTS.OBTENER_CARGUE}?vendedor_id=${userId}&dia=${diaServidor}&fecha=${selectedDate}`;
+
 
       const response = await fetch(url);
       const data = await response.json();
@@ -125,12 +122,12 @@ const Cargue = ({ userId }) => {
             newCheckedItems[prod] = { V: false, D: false };
           }
         });
-        
-        console.log('📊 Checks cargados:', JSON.stringify(newCheckedItems).substring(0, 500));
+
+
 
         setQuantities(newQuantities);
         setCheckedItems(newCheckedItems);
-        console.log('✅ Cargue cargado correctamente');
+
       } else {
         console.error('Error fetching cargue:', data);
         Alert.alert('Error', 'No se pudo obtener el cargue del CRM');
@@ -191,7 +188,7 @@ const Cargue = ({ userId }) => {
 
     // Actualizar en el servidor en background
     try {
-      const response = await fetch(API_URL_ACTUALIZAR, {
+      const response = await fetch(ENDPOINTS.ACTUALIZAR_CHECK_VENDEDOR, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -233,7 +230,7 @@ const Cargue = ({ userId }) => {
   };
 
   const dias = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
-  
+
   // Mapeo para enviar al servidor sin tildes
   const diasParaServidor = {
     'Lunes': 'LUNES',
@@ -256,7 +253,7 @@ const Cargue = ({ userId }) => {
       const day = String(date.getDate()).padStart(2, '0');
       const formattedDate = `${year}-${month}-${day}`;
       setSelectedDate(formattedDate);
-      console.log('📅 Nueva fecha seleccionada:', formattedDate);
+
     }
   };
 

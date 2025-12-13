@@ -148,7 +148,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     const onRefresh = async () => {
         setRefreshing(true);
         try {
-            console.log('🔄 Sincronizando...');
+
             
             // 1. Sincronizar ventas pendientes
             const resultadoVentas = await sincronizarVentasPendientes();
@@ -275,7 +275,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
     // Confirmar y guardar venta
     const confirmarVenta = async (fechaSeleccionada, metodoPago, opcionesEnvio) => {
-        console.log('🔵 confirmarVenta iniciado');
+
         if (!ventaTemporal) {
             console.log('❌ No hay ventaTemporal');
             return;
@@ -288,12 +288,12 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             metodo_pago: metodoPago || 'EFECTIVO'
         };
 
-        console.log('📝 Venta a guardar:', ventaConDatos);
+
 
         try {
-            console.log('💾 Llamando a guardarVenta...');
+
             const ventaGuardada = await guardarVenta(ventaConDatos);
-            console.log('✅ Venta guardada:', ventaGuardada);
+
 
             // Cerrar modal inmediatamente
             setMostrarResumen(false);

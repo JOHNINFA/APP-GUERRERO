@@ -3,12 +3,13 @@ import { ScrollView, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicato
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Product from './Product';
 import productos from './Productos'; // Importar productos con imágenes
-
+import { ENDPOINTS } from '../config';
 
 // ⚠️ AJUSTAR ESTA URL SEGÚN EL ENTORNO
 // Emulador Android: 'http://10.0.2.2:8000/api/guardar-sugerido/'
 // Dispositivo Físico: 'http://192.168.1.19:8000/api/guardar-sugerido/' (IP de tu PC)
-const API_URL = 'http://192.168.1.19:8000/api/guardar-sugerido/';
+/*const API_URL = 'http://192.168.1.19:8000/api/guardar-sugerido/';*/
+const API_URL = ENDPOINTS.GUARDAR_SUGERIDO;
 
 const ProductList = ({ selectedDay, userId }) => {
   const [quantities, setQuantities] = useState({});
@@ -57,16 +58,16 @@ const ProductList = ({ selectedDay, userId }) => {
     const day = String(currentDate.getDate()).padStart(2, '0');
     const formattedDate = `${year}-${month}-${day}`;
 
-    console.log('📅 Fecha seleccionada:', currentDate);
-    console.log('📅 Fecha formateada:', formattedDate);
-    console.log('📅 Día de la semana:', currentDate.getDay());
+
+
+
 
     // ✅ VALIDACIÓN: Verificar que el día seleccionado coincida con la fecha
     const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     const diaDeLaFecha = diasSemana[currentDate.getDay()];
     
-    console.log('📅 Día calculado:', diaDeLaFecha);
-    console.log('📅 Día seleccionado:', selectedDay);
+
+
     
     if (diaDeLaFecha.toUpperCase() !== selectedDay.toUpperCase()) {
       Alert.alert(
@@ -97,7 +98,7 @@ const ProductList = ({ selectedDay, userId }) => {
         productos: productosAEnviar
       };
 
-      console.log('Enviando Sugerido:', payload);
+
 
       const response = await fetch(API_URL, {
         method: 'POST',

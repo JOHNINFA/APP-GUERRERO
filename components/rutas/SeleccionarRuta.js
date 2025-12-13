@@ -22,7 +22,7 @@ const SeleccionarRuta = ({ navigation, route, userId: propUserId }) => {
       setError(null);
 
       // Usar el userId directamente (ya viene como "ID1", "ID2", etc.)
-      console.log('SeleccionarRuta - userId recibido:', userId);
+
       
       // Obtener rutas desde el backend
       const rutasObtenidas = await obtenerRutasPorUsuario(userId);

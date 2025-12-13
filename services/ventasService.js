@@ -5,9 +5,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { enviarVentaRuta } from './rutasApiService';
+import { API_URL } from '../config';
 
-// URL Base (debería venir de configuración)
-const API_BASE = 'http://192.168.1.19:8000/api';
+const API_BASE = `${API_URL}/api`;
+
 
 // ==================== COLA DE SINCRONIZACIÓN OFFLINE ====================
 const COLA_PENDIENTES_KEY = 'ventas_pendientes_sync';
@@ -64,7 +65,7 @@ const eliminarDeColaPendientes = async (ventaId) => {
  */
 export const sincronizarVentasPendientes = async () => {
     if (sincronizandoCola) {
-        console.log('⏳ Ya hay una sincronización en curso...');
+
         return { sincronizadas: 0, pendientes: 0 };
     }
 
@@ -75,7 +76,7 @@ export const sincronizarVentasPendientes = async () => {
         // Verificar conexión
         const netInfo = await NetInfo.fetch();
         if (!netInfo.isConnected) {
-            console.log('📴 Sin conexión, no se puede sincronizar');
+
             sincronizandoCola = false;
             const pendientes = await obtenerVentasPendientes();
             return { sincronizadas: 0, pendientes: pendientes.length };
@@ -213,7 +214,7 @@ export const inicializarProductos = async () => {
         const productosCacheados = await AsyncStorage.getItem('productos_cache');
         if (productosCacheados) {
             productosEnMemoria = JSON.parse(productosCacheados);
-            console.log('📦 Productos cargados de caché local:', productosEnMemoria.length);
+
         }
 
         // 2. Intentar actualizar del servidor
@@ -229,7 +230,7 @@ export const inicializarProductos = async () => {
  */
 export const sincronizarProductos = async () => {
     try {
-        console.log('🔄 Sincronizando productos con servidor...');
+
         const response = await fetch(`${API_BASE}/productos/`);
 
         if (response.ok) {
@@ -246,7 +247,7 @@ export const sincronizarProductos = async () => {
             if (productosActualizados.length > 0) {
                 productosEnMemoria = productosActualizados;
                 await AsyncStorage.setItem('productos_cache', JSON.stringify(productosEnMemoria));
-                console.log('✅ Productos sincronizados con precio_cargue:', productosEnMemoria.length);
+
             }
         } else {
             console.warn('⚠️ No se pudieron descargar productos:', response.status);
@@ -435,7 +436,7 @@ export const guardarVenta = async (venta) => {
             // Intentar enviar inmediatamente
             try {
                 await enviarVentaRuta(ventaBackend);
-                console.log('✅ Venta sincronizada con backend');
+
                 // Marcar como sincronizada
                 nuevaVenta.sincronizada = true;
                 const ventasActualizadas = ventas.map(v => v.id === nuevaVenta.id ? nuevaVenta : v);
@@ -446,7 +447,7 @@ export const guardarVenta = async (venta) => {
             }
         } else {
             // Sin conexión, agregar a cola de pendientes
-            console.log('📴 Sin conexión, venta guardada en cola de pendientes');
+
             await agregarAColaPendientes(ventaBackend, nuevaVenta.id);
         }
 

@@ -2,10 +2,9 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { formatearMoneda } from './ventasService';
 import { obtenerConfiguracionImpresion } from './rutasApiService';
+import { API_URL } from '../config';
 
-// URL Base para imágenes (debe coincidir con el servidor Django)
-const SERVER_URL = 'http://192.168.1.19:8000';
-
+const SERVER_URL = API_URL;
 export const generarTicketHTML = (venta, config = null) => {
   const {
     id,
@@ -136,16 +135,16 @@ export const imprimirTicket = async (venta) => {
     let config = null;
     try {
       config = await obtenerConfiguracionImpresion();
-      console.log('✅ Configuración de impresión obtenida del servidor');
+
     } catch (configError) {
-      console.log('📴 Sin conexión, usando configuración por defecto para ticket');
+
       // Continúa con config = null, usará valores por defecto
     }
 
     const html = generarTicketHTML(venta, config);
 
     const { uri } = await Print.printToFileAsync({ html });
-    console.log('Ticket generado en:', uri);
+
 
     await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
   } catch (error) {
@@ -162,12 +161,12 @@ export const generarTicketPDF = async (venta) => {
     try {
       config = await obtenerConfiguracionImpresion();
     } catch (configError) {
-      console.log('📴 Sin conexión, usando configuración por defecto');
+
     }
 
     const html = generarTicketHTML(venta, config);
     const { uri } = await Print.printToFileAsync({ html });
-    console.log('PDF generado en:', uri);
+
     
     return uri;
   } catch (error) {
