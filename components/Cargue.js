@@ -4,7 +4,7 @@ import Checkbox from 'expo-checkbox';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ENDPOINTS } from '../config';
-// URLs centralizadas en config.js - ENDPOINTS ya importado arriba
+import { obtenerProductos, sincronizarProductos } from '../services/ventasService';
 
 const Cargue = ({ userId }) => {
   const [selectedDay, setSelectedDay] = useState('Lunes');
@@ -24,45 +24,29 @@ const Cargue = ({ userId }) => {
   const [loading, setLoading] = useState(false);
   const scaleAnims = useRef({}).current;
 
+  // 🆕 Estado para productos dinámicos desde el servidor
+  const [productos, setProductos] = useState([]);
 
-  const productos = [
-    'AREPA TIPO OBLEA 500Gr',
-    'AREPA MEDIANA 330Gr',
-    'AREPA TIPO PINCHO 330Gr',
-    'AREPA QUESO CORRIENTE 450Gr',
-    'AREPA QUESO ESPECIAL GRANDE 600Gr',
-    'AREPA CON QUESO ESPECIAL PEQUEÑA 600Gr',
-    'AREPA QUESO MINI X10',
-    'AREPA CON QUESO CUADRADA 450Gr',
-    'AREPA DE CHOCLO CORRIENTE 300Gr',
-    'AREPA DE CHOCLO CON QUESO GRANDE 1200Gr',
-    'AREPA DE CHOCLO CON QUESO PEQUEÑA 700Gr',
-    'AREPA BOYACENSE X 5 450Gr',
-    'AREPA SANTANDEREANA 450Gr',
-    'ALMOJABANA X 5 300Gr',
-    'AREPA CON SEMILLA DE QUINUA 450Gr',
-    'AREPA DE MAIZ CON SEMILLA DE CHIA450Gr',
-    'AREPAS DE MAIZ PETO CON SEMILLA DE AJONJOLI 450GR',
-    'AREPA DE MAIZ PETO CON SEMILLAS DE LINAZA 450Gr',
-    'AREPA DE MAIZ PETO CON SEMILLAS DE GIRASOL 450Gr',
-    'AREPA DE MAIZ PETO CHORICERA 1000Gr',
-    'AREPA DE MAIZ DE PETO TIPO LONCHERIA 500Gr',
-    'AREPA DE MAIZ PETO CON MARGARINA Y SAL 500Gr',
-    'YUCAREPA 500Gr',
-    'AREPA TIPO ASADERO X 10 280Gr',
-    'AREPA RELLENAR #1',
-    'AREPA PARA RELLENA #2',
-    'AREPA RELLENAR #3 1000Gr',
-    'PORCION DE AREPA X 2 UND 55Gr',
-    'PORCION DE AREPA 3 UND',
-    'PORCION DE AREPA 4 UND 110 GR',
-    'PORCION DE AREPA 5 UND',
-    'AREPA SUPER OBLEA 500Gr',
-    'LIBRA MASA',
-    'MUTE BOYACENSE',
-    'ENVUELTO DE MAÍZ 500Gr',
-    'CANASTILLA'
-  ];
+  // 🆕 Cargar productos desde el servicio
+  const cargarProductos = async () => {
+    try {
+      console.log('📦 Cargando productos para Cargue...');
+      const productosData = obtenerProductos();
+      
+      // Filtrar solo productos disponibles para cargue en la app
+      const productosCargue = productosData
+        .filter(p => p.nombre && p.disponible_app_cargue !== false) // Filtrar por disponible_app_cargue
+        .map(p => p.nombre); // Extraer solo los nombres
+      
+      console.log(`✅ ${productosCargue.length} productos cargados para Cargue (filtrados por disponible_app_cargue)`);
+      setProductos(productosCargue);
+    } catch (error) {
+      console.error('❌ Error cargando productos:', error);
+      Alert.alert('Error', 'No se pudieron cargar los productos');
+    }
+  };
+
+
 
   // Verificar estado del día
   const verificarEstadoDia = async (dia, fecha) => {
@@ -141,10 +125,35 @@ const Cargue = ({ userId }) => {
     }
   };
 
+  // 🆕 Cargar productos al montar el componente (con sincronización automática)
+  useEffect(() => {
+    const inicializar = async () => {
+      // Primero cargar desde caché
+      await cargarProductos();
+      // Luego sincronizar en segundo plano
+      sincronizarProductosAutomatico();
+    };
+    inicializar();
+  }, []);
+
+  // 🆕 Sincronizar productos automáticamente (sin bloquear UI)
+  const sincronizarProductosAutomatico = async () => {
+    try {
+      console.log('🔄 Sincronizando productos en segundo plano...');
+      await sincronizarProductos();
+      await cargarProductos();
+      console.log('✅ Productos sincronizados automáticamente');
+    } catch (error) {
+      console.warn('⚠️ No se pudo sincronizar (modo offline):', error.message);
+    }
+  };
+
   // Cargar datos al cambiar día o fecha
   useEffect(() => {
-    fetchData();
-  }, [selectedDay, selectedDate, userId]);
+    if (productos.length > 0) {
+      fetchData();
+    }
+  }, [selectedDay, selectedDate, userId, productos]);
 
   const handleCheckChange = async (productName, type) => {
     // Solo permitir cambiar V (Vendedor), D viene del CRM
@@ -371,8 +380,14 @@ const Cargue = ({ userId }) => {
         />
       )}
 
-      <TouchableOpacity style={styles.reloadButton} onPress={fetchData}>
-        <Text style={styles.reloadButtonText}>Recargar Cargue</Text>
+      <TouchableOpacity 
+        style={styles.reloadButton} 
+        onPress={fetchData}
+        disabled={loading}
+      >
+        <Text style={styles.reloadButtonText}>
+          {loading ? 'Cargando...' : 'Recargar Cargue'}
+        </Text>
       </TouchableOpacity>
     </View>
   );
@@ -536,11 +551,11 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     marginTop: 10,
-    marginBottom: 40, // Espacio para los botones de Android
+    marginBottom: 40,
   },
   reloadButtonText: {
     color: 'white',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
   },
   // Estilos para el selector de fecha

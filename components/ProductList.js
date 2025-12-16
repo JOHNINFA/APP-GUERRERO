@@ -1,14 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ScrollView, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, View, FlatList } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Product from './Product';
-import productos from './Productos'; // Importar productos con imágenes
 import { ENDPOINTS } from '../config';
+import { obtenerProductos, sincronizarProductos } from '../services/ventasService';
+import productosConImagenes from './Productos'; // Importar mapeo de imágenes locales
 
-// ⚠️ AJUSTAR ESTA URL SEGÚN EL ENTORNO
-// Emulador Android: 'http://10.0.2.2:8000/api/guardar-sugerido/'
-// Dispositivo Físico: 'http://192.168.1.19:8000/api/guardar-sugerido/' (IP de tu PC)
-/*const API_URL = 'http://192.168.1.19:8000/api/guardar-sugerido/';*/
 const API_URL = ENDPOINTS.GUARDAR_SUGERIDO;
 
 const ProductList = ({ selectedDay, userId }) => {
@@ -16,6 +13,94 @@ const ProductList = ({ selectedDay, userId }) => {
   const [loading, setLoading] = useState(false);
   const [date, setDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
+  
+  // 🆕 Estado para productos dinámicos desde el servidor
+  const [productos, setProductos] = useState([]);
+
+  // 🆕 Cargar productos al montar el componente (con sincronización automática)
+  useEffect(() => {
+    const inicializar = async () => {
+      // Primero cargar desde caché
+      await cargarProductos();
+      // Luego sincronizar en segundo plano
+      sincronizarProductosAutomatico();
+    };
+    inicializar();
+  }, []);
+
+  // 🆕 Sincronizar productos automáticamente (sin bloquear UI)
+  const sincronizarProductosAutomatico = async () => {
+    try {
+      console.log('🔄 Sincronizando productos en segundo plano...');
+      await sincronizarProductos();
+      await cargarProductos();
+      console.log('✅ Productos sincronizados automáticamente');
+    } catch (error) {
+      console.warn('⚠️ No se pudo sincronizar (modo offline):', error.message);
+    }
+  };
+
+  // 🆕 Cargar productos desde el servicio
+  const cargarProductos = async () => {
+    try {
+      console.log('📦 Cargando productos para Sugeridos...');
+      const productosData = obtenerProductos();
+      
+      // Función para buscar imagen con coincidencia flexible
+      const buscarImagen = (nombreProducto) => {
+        const nombreNormalizado = nombreProducto.trim().toUpperCase().replace(/\s+/g, ' ');
+        
+        // 1. Buscar coincidencia exacta
+        for (const p of productosConImagenes) {
+          const nombreLocal = p.name.trim().toUpperCase().replace(/\s+/g, ' ');
+          if (nombreLocal === nombreNormalizado) {
+            return p.image;
+          }
+        }
+        
+        // 2. Buscar coincidencia parcial (el nombre del servidor está contenido en el local)
+        for (const p of productosConImagenes) {
+          const nombreLocal = p.name.trim().toUpperCase().replace(/\s+/g, ' ');
+          if (nombreLocal.includes(nombreNormalizado)) {
+            return p.image;
+          }
+        }
+        
+        // 3. Buscar coincidencia parcial inversa (el nombre local está contenido en el del servidor)
+        for (const p of productosConImagenes) {
+          const nombreLocal = p.name.trim().toUpperCase().replace(/\s+/g, ' ');
+          if (nombreNormalizado.includes(nombreLocal)) {
+            return p.image;
+          }
+        }
+        
+        return null;
+      };
+      
+      // Filtrar y convertir al formato esperado (con name e image desde assets locales)
+      const productosFormateados = productosData
+        .filter(p => p.disponible_app_sugeridos !== false) // Filtrar por disponible_app_sugeridos
+        .map(p => {
+          const imagen = buscarImagen(p.nombre);
+          
+          if (!imagen) {
+            console.log(`⚠️ Sin imagen para: "${p.nombre}"`);
+          }
+          
+          return {
+            name: p.nombre,
+            id: p.id,
+            image: imagen
+          };
+        });
+      
+      console.log(`✅ ${productosFormateados.length} productos cargados para Sugeridos (filtrados por disponible_app_sugeridos)`);
+      setProductos(productosFormateados);
+    } catch (error) {
+      console.error('❌ Error cargando productos:', error);
+      Alert.alert('Error', 'No se pudieron cargar los productos');
+    }
+  };
 
   // Crear un mapa de productos por nombre para búsqueda rápida
   const productMap = useMemo(() => {
@@ -24,7 +109,7 @@ const ProductList = ({ selectedDay, userId }) => {
       map[p.name] = p;
     });
     return map;
-  }, []);
+  }, [productos]);
 
   const handleQuantityChange = (productName, quantity) => {
     setQuantities((prevQuantities) => ({
@@ -142,23 +227,32 @@ const ProductList = ({ selectedDay, userId }) => {
     />
   );
 
+
+
   return (
     <View style={styles.container}>
-      <FlatList
-        data={productos}
-        renderItem={renderProduct}
-        keyExtractor={(item) => item.name}
-        contentContainerStyle={styles.scrollContainer}
-        initialNumToRender={10}
-        maxToRenderPerBatch={10}
-        windowSize={5}
-        removeClippedSubviews={true}
-        getItemLayout={(data, index) => ({
-          length: 150, // altura aproximada de cada item
-          offset: 150 * index,
-          index,
-        })}
-      />
+      {productos.length === 0 ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#00ad53" />
+          <Text style={styles.loadingText}>Cargando productos...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={productos}
+          renderItem={renderProduct}
+          keyExtractor={(item) => item.name}
+          contentContainerStyle={styles.scrollContainer}
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={true}
+          getItemLayout={(data, index) => ({
+            length: 150, // altura aproximada de cada item
+            offset: 150 * index,
+            index,
+          })}
+        />
+      )}
 
       {selectedDay && (
         <TouchableOpacity
@@ -193,6 +287,16 @@ const styles = StyleSheet.create({
   },
   scrollContainer: {
     padding: 10,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 10,
+    color: '#666',
+    fontSize: 14,
   },
   sendButton: {
     position: 'absolute',

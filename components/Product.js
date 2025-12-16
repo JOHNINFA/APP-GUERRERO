@@ -41,10 +41,25 @@ const Product = memo(({ product, quantity, onQuantityChange }) => {
     quantity !== '0' && styles.inputHighlighted,
   ];
 
+  // Determinar el source de la imagen
+  const getImageSource = () => {
+    if (!product.image) return null;
+    
+    // Si es una URL (string que empieza con http o data:image)
+    if (typeof product.image === 'string') {
+      return { uri: product.image };
+    }
+    
+    // Si es un require() local
+    return product.image;
+  };
+
+  const imageSource = getImageSource();
+
   return (
     <View style={styles.container}>
-      {product.image ? (
-        <Image source={product.image} style={styles.image} />
+      {imageSource ? (
+        <Image source={imageSource} style={styles.image} resizeMode="cover" />
       ) : (
         <View style={[styles.imagePlaceholder, styles.image]} />
       )}

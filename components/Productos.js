@@ -1,5 +1,5 @@
 const productos = [
-  { name: 'AREPA TIPO OBLEA 500Gr', image: require('../images/Arepa-De-Maiz-Peto-Tipo-Oblea-500g.jpeg') },
+  { name: 'AREPA TIPO OBLEA 500Gr', image: require('../images/arepa-tipo-oblea-500g.jpeg') },
   { name: 'AREPA MEDIANA 330Gr', image: require('../images/Arepa-de-Maíz-Peto-Mediana.jpeg') },
   { name: 'AREPA TIPO PINCHO 330Gr', image: require('../images/arepa-tipo-pincho.jpeg') },
   { name: 'AREPA QUESO CORRIENTE 450Gr', image: require('../images/arepa-con-queso corrente.jpeg') },

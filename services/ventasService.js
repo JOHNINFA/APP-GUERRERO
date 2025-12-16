@@ -238,10 +238,15 @@ export const sincronizarProductos = async () => {
 
             // Mapear al formato interno
             // Usar precio_cargue si existe, sino usar precio base
+            // Incluir campos de disponibilidad de app
             const productosActualizados = data.map(p => ({
                 id: p.id,
                 nombre: p.nombre,
-                precio: parseFloat(p.precio_cargue) > 0 ? parseFloat(p.precio_cargue) : parseFloat(p.precio) || 0
+                precio: parseFloat(p.precio_cargue) > 0 ? parseFloat(p.precio_cargue) : parseFloat(p.precio) || 0,
+                disponible_app_cargue: p.disponible_app_cargue !== undefined ? p.disponible_app_cargue : true,
+                disponible_app_sugeridos: p.disponible_app_sugeridos !== undefined ? p.disponible_app_sugeridos : true,
+                disponible_app_rendimiento: p.disponible_app_rendimiento !== undefined ? p.disponible_app_rendimiento : true,
+                disponible_app_ventas: p.disponible_app_ventas !== undefined ? p.disponible_app_ventas : true
             }));
 
             if (productosActualizados.length > 0) {

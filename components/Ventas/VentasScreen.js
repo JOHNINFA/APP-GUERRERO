@@ -95,9 +95,10 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     }, [route?.params]);
     
     const cargarDatosConClientePreseleccionado = async (clientePre) => {
-        // Cargar productos
+        // Cargar productos filtrados por disponible_app_ventas
         const productosData = obtenerProductos();
-        setProductos(productosData);
+        const productosFiltrados = productosData.filter(p => p.disponible_app_ventas !== false);
+        setProductos(productosFiltrados);
 
         // Cargar clientes
         const clientesData = await obtenerClientes();
@@ -126,9 +127,10 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     };
 
     const cargarDatos = async () => {
-        // Cargar productos
+        // Cargar productos filtrados por disponible_app_ventas
         const productosData = obtenerProductos();
-        setProductos(productosData);
+        const productosFiltrados = productosData.filter(p => p.disponible_app_ventas !== false);
+        setProductos(productosFiltrados);
 
         // Cargar clientes
         const clientesData = await obtenerClientes();
@@ -156,9 +158,10 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             // 2. Sincronizar productos
             await sincronizarProductos();
             
-            // 3. Recargar productos actualizados
+            // 3. Recargar productos actualizados filtrados por disponible_app_ventas
             const productosData = obtenerProductos();
-            setProductos(productosData);
+            const productosFiltrados = productosData.filter(p => p.disponible_app_ventas !== false);
+            setProductos(productosFiltrados);
             
             // 4. Actualizar contador de pendientes
             await verificarPendientes();

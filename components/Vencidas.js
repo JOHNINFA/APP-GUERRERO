@@ -1,47 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { FlatList, Text, TouchableOpacity, View, StyleSheet, ActivityIndicator } from 'react-native';
+import { FlatList, Text, TouchableOpacity, View, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Navbar from './Navbar';
 import { API_URL } from '../config';
-
-const orderOfProducts = [
-  "AREPA TIPO OBLEA 500Gr",
-  "AREPA MEDIANA 330Gr",
-  "AREPA TIPO PINCHO 330Gr",
-  "AREPA QUESO CORRIENTE 450Gr",
-  "AREPA QUESO ESPECIAL GRANDE 600Gr",
-  "AREPA CON QUESO ESPECIAL PEQUEÑA 600Gr",
-  "AREPA QUESO MINI X10",
-  "AREPA CON QUESO CUADRADA 450Gr",
-  "AREPA DE CHOCLO CORRIENTE 300Gr",
-  "AREPA DE CHOCLO CON QUESO GRANDE 1200Gr",
-  "AREPA DE CHOCLO CON QUESO PEQUEÑA 700Gr",
-  "AREPA BOYACENSE X 5 450Gr",
-  "AREPA SANTANDEREANA 450Gr",
-  "ALMOJABANA X 5 300Gr",
-  "AREPA CON SEMILLA DE QUINUA 450Gr",
-  "AREPA DE MAIZ CON SEMILLA DE CHIA450Gr",
-  "AREPAS DE MAIZ PETO CON SEMILLA DE AJONJOLI 450GR",
-  "AREPA DE MAIZ PETO CON SEMILLAS DE LINAZA 450Gr",
-  "AREPA DE MAIZ PETO CON SEMILLAS DE GIRASOL 450Gr",
-  "AREPA DE MAIZ PETO CHORICERA 1000Gr",
-  "AREPA DE MAIZ DE PETO TIPO LONCHERIA 500Gr",
-  "AREPA DE MAIZ PETO CON MARGARINA Y SAL 500Gr",
-  "YUCAREPA 500Gr",
-  "AREPA TIPO ASADERO X 10 280Gr",
-  "AREPA RELLENAR #1",
-  "AREPA PARA RELLENA #2",
-  "AREPA RELLENAR #3 1000Gr",
-  "PORCION DE AREPA X 2 UND 55Gr",
-  "PORCION DE AREPA 3 UND",
-  "PORCION DE AREPA 4 UND 110 GR",
-  "PORCION DE AREPA 5 UND",
-  "AREPA SUPER OBLEA 500Gr",
-  "LIBRA MASA",
-  "MUTE BOYACENSE",
-  "ENVUELTO DE MAÍZ 500Gr",
-  "CANASTILLA"
-];
+import { obtenerProductos, sincronizarProductos } from '../services/ventasService';
 
 // Mapeo de días en español
 const diasSemana = {
@@ -61,6 +23,53 @@ const Vencidas = ({ userId }) => {
   const [quantities, setQuantities] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  
+  // 🆕 Estado para productos dinámicos desde el servidor
+  const [orderOfProducts, setOrderOfProducts] = useState([]);
+
+  // 🆕 Cargar productos al montar el componente (con sincronización automática)
+  useEffect(() => {
+    const inicializar = async () => {
+      // Primero cargar desde caché
+      await cargarProductos();
+      // Luego sincronizar en segundo plano
+      sincronizarProductosAutomatico();
+    };
+    inicializar();
+  }, []);
+
+  // 🆕 Sincronizar productos automáticamente (sin bloquear UI)
+  const sincronizarProductosAutomatico = async () => {
+    try {
+      console.log('🔄 Sincronizando productos en segundo plano...');
+      await sincronizarProductos();
+      await cargarProductos();
+      console.log('✅ Productos sincronizados automáticamente');
+    } catch (error) {
+      console.warn('⚠️ No se pudo sincronizar (modo offline):', error.message);
+    }
+  };
+
+  // 🆕 Cargar productos desde el servicio
+  const cargarProductos = async () => {
+    try {
+      console.log('📦 Cargando productos para Rendimiento...');
+      const productosData = obtenerProductos();
+      
+      // Filtrar y extraer solo los nombres
+      const nombresProductos = productosData
+        .filter(p => p.nombre && p.disponible_app_rendimiento !== false) // Filtrar por disponible_app_rendimiento
+        .map(p => p.nombre);
+      
+      console.log(`✅ ${nombresProductos.length} productos cargados para Rendimiento (filtrados por disponible_app_rendimiento)`);
+      setOrderOfProducts(nombresProductos);
+    } catch (error) {
+      console.error('❌ Error cargando productos:', error);
+      Alert.alert('Error', 'No se pudieron cargar los productos');
+    }
+  };
+
+
 
   // Formatear fecha para mostrar
   const formatDateDisplay = (date) => {
@@ -200,7 +209,14 @@ const Vencidas = ({ userId }) => {
           <Text style={[styles.headerText, styles.totalHeader]}>TOTAL</Text>
         </View>
 
-        {!selectedDay && (
+        {orderOfProducts.length === 0 && (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="green" />
+            <Text style={styles.loadingText}>Cargando productos...</Text>
+          </View>
+        )}
+
+        {!selectedDay && orderOfProducts.length > 0 && (
           <Text style={styles.alertText}>Por favor, seleccione un día para ver el rendimiento.</Text>
         )}
 
@@ -215,7 +231,7 @@ const Vencidas = ({ userId }) => {
           <Text style={styles.errorText}>{error}</Text>
         )}
 
-        {selectedDay && !loading && !error && (
+        {selectedDay && !loading && !error && orderOfProducts.length > 0 && (
           <FlatList
             data={orderOfProducts}
             renderItem={renderItem}
