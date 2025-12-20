@@ -32,12 +32,12 @@ const Cargue = ({ userId }) => {
     try {
       console.log('📦 Cargando productos para Cargue...');
       const productosData = obtenerProductos();
-      
+
       // Filtrar solo productos disponibles para cargue en la app
       const productosCargue = productosData
         .filter(p => p.nombre && p.disponible_app_cargue !== false) // Filtrar por disponible_app_cargue
         .map(p => p.nombre); // Extraer solo los nombres
-      
+
       console.log(`✅ ${productosCargue.length} productos cargados para Cargue (filtrados por disponible_app_cargue)`);
       setProductos(productosCargue);
     } catch (error) {
@@ -75,14 +75,26 @@ const Cargue = ({ userId }) => {
   const fetchData = async () => {
     setLoading(true);
 
-    // Verificar estado del día primero
+    // 🔄 PASO 1: Sincronizar productos desde el servidor
+    console.log('🔄 Sincronizando productos antes de recargar cargue...');
+    try {
+      await sincronizarProductos();
+      await cargarProductos(); // Recargar la lista actualizada
+      console.log('✅ Productos sincronizados correctamente');
+    } catch (error) {
+      console.warn('⚠️ No se pudieron sincronizar productos:', error.message);
+      // Continuar aunque falle la sincronización
+    }
+
+    // Verificar estado del día
     await verificarEstadoDia(selectedDay, selectedDate);
 
+    // 🔄 PASO 2: Obtener cantidades del cargue
     try {
       const diaServidor = diasParaServidor[selectedDay] || selectedDay.toUpperCase();
       const url = `${ENDPOINTS.OBTENER_CARGUE}?vendedor_id=${userId}&dia=${diaServidor}&fecha=${selectedDate}`;
 
-
+      console.log(`📥 Obteniendo cargue desde: ${url}`);
       const response = await fetch(url);
       const data = await response.json();
 
@@ -101,11 +113,17 @@ const Cargue = ({ userId }) => {
             if (data[prod].d) {
               console.log(`✅ ${prod}: D=${data[prod].d}, V=${data[prod].v}`);
             }
+            // 🆕 Debug cantidades
+            if (prod === 'CANASTILLA') {
+              console.log(`🔍 CANASTILLA quantity recibido:`, data[prod].quantity, typeof data[prod].quantity);
+            }
           } else {
             newQuantities[prod] = '0';
             newCheckedItems[prod] = { V: false, D: false };
           }
         });
+
+        console.log('📊 Cantidades finales:', newQuantities);
 
 
 
@@ -153,7 +171,8 @@ const Cargue = ({ userId }) => {
     if (productos.length > 0) {
       fetchData();
     }
-  }, [selectedDay, selectedDate, userId, productos]);
+  }, [selectedDay, selectedDate, userId]); // ✅ Quitamos 'productos' para evitar bucle
+
 
   const handleCheckChange = async (productName, type) => {
     // Solo permitir cambiar V (Vendedor), D viene del CRM
@@ -380,8 +399,8 @@ const Cargue = ({ userId }) => {
         />
       )}
 
-      <TouchableOpacity 
-        style={styles.reloadButton} 
+      <TouchableOpacity
+        style={styles.reloadButton}
         onPress={fetchData}
         disabled={loading}
       >

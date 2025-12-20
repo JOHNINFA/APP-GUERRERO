@@ -103,7 +103,7 @@ export const sincronizarVentasPendientes = async () => {
 
         const pendientesRestantes = await obtenerVentasPendientes();
         console.log(`📊 Sincronización completada: ${sincronizadas} exitosas, ${pendientesRestantes.length} pendientes`);
-        
+
         return { sincronizadas, pendientes: pendientesRestantes.length };
     } catch (error) {
         console.error('Error en sincronización:', error);
@@ -243,6 +243,7 @@ export const sincronizarProductos = async () => {
                 id: p.id,
                 nombre: p.nombre,
                 precio: parseFloat(p.precio_cargue) > 0 ? parseFloat(p.precio_cargue) : parseFloat(p.precio) || 0,
+                orden: p.orden || 999, // 🆕 Mantener orden del servidor
                 disponible_app_cargue: p.disponible_app_cargue !== undefined ? p.disponible_app_cargue : true,
                 disponible_app_sugeridos: p.disponible_app_sugeridos !== undefined ? p.disponible_app_sugeridos : true,
                 disponible_app_rendimiento: p.disponible_app_rendimiento !== undefined ? p.disponible_app_rendimiento : true,
@@ -336,7 +337,7 @@ export const buscarClientes = async (query) => {
 
 /**
  * Guarda un nuevo cliente
- * @param {Object} cliente - Datos del cliente
+ * @param {Object} cliente - Datos del cliente (con diasVisita y rutaId)
  * @returns {Promise<Object>} Cliente guardado
  */
 export const guardarCliente = async (cliente) => {
@@ -347,12 +348,62 @@ export const guardarCliente = async (cliente) => {
         const nuevoId = `CLI-${String(clientes.length + 1).padStart(3, '0')}`;
         const nuevoCliente = {
             id: nuevoId,
-            ...cliente,
+            nombre: cliente.nombre,
+            negocio: cliente.negocio,
+            celular: cliente.celular,
+            direccion: cliente.direccion,
+            diasVisita: cliente.diasVisita || [],
+            rutaId: cliente.rutaId || null,
             activo: true
         };
 
+        // Guardar localmente
         clientes.push(nuevoCliente);
         await AsyncStorage.setItem('clientes', JSON.stringify(clientes));
+
+        // 🆕 Enviar al backend si hay conexión
+        try {
+            // Si se seleccionó una ruta, agregar al modelo ClienteRuta
+            console.log('🔍 Verificando si se puede enviar al backend...');
+            console.log('   - rutaId:', cliente.rutaId);
+            console.log('   - diasVisita:', cliente.diasVisita);
+
+            if (cliente.rutaId) {
+                const clienteRutaData = {
+                    ruta: cliente.rutaId,
+                    nombre_negocio: cliente.negocio || cliente.nombre,
+                    nombre_contacto: cliente.nombre,
+                    telefono: cliente.celular || '',
+                    direccion: cliente.direccion || '',
+                    dia_visita: (cliente.diasVisita || []).join(','), // LUNES,MIERCOLES,VIERNES
+                    activo: true,
+                    orden: 999 // Al final de la ruta
+                };
+
+                console.log('📤 Enviando al backend:', JSON.stringify(clienteRutaData));
+
+                const response = await fetch(`${API_BASE}/clientes-ruta/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(clienteRutaData)
+                });
+
+                console.log('📥 Respuesta status:', response.status);
+
+                if (response.ok) {
+                    const clienteGuardado = await response.json();
+                    console.log('✅ Cliente guardado en backend:', clienteGuardado.id);
+                    nuevoCliente.backendId = clienteGuardado.id;
+                } else {
+                    const errorText = await response.text();
+                    console.warn('⚠️ Error guardando cliente en backend:', response.status, errorText);
+                }
+            } else {
+                console.log('⚠️ No se seleccionó ruta, cliente solo guardado localmente');
+            }
+        } catch (error) {
+            console.warn('⚠️ Error enviando cliente al backend (offline?):', error.message);
+        }
 
         return nuevoCliente;
     } catch (error) {
@@ -436,7 +487,7 @@ export const guardarVenta = async (venta) => {
 
         // Verificar conexión antes de enviar
         const conectado = await hayConexion();
-        
+
         if (conectado) {
             // Intentar enviar inmediatamente
             try {

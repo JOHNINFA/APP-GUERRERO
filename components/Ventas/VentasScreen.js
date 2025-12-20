@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Alert, SafeAreaView, StatusBar, Platform, RefreshControl, Modal, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker'; // 🆕 Import DatePicker
 import ClienteSelector from './ClienteSelector';
 import ClienteModal from './ClienteModal';
 import DevolucionesVencidas from './DevolucionesVencidas';
@@ -17,6 +18,7 @@ import {
     obtenerVentasPendientes
 } from '../../services/ventasService';
 import { imprimirTicket } from '../../services/printerService';
+import { ENDPOINTS } from '../../config'; // 🆕 Importar config centralizado
 
 // Días de la semana
 const DIAS_SEMANA = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO', 'DOMINGO'];
@@ -35,8 +37,11 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     const userId = route?.params?.userId || userIdProp;
 
     // Estado para selección de día
-    const [mostrarSelectorDia, setMostrarSelectorDia] = useState(true);
+    const [mostrarSelectorDia, setMostrarSelectorDia] = useState(false); // 🆕 Inicia en FALSE para verificar turno primero
     const [diaSeleccionado, setDiaSeleccionado] = useState(null);
+    const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
+    const [mostrarDatePicker, setMostrarDatePicker] = useState(false);
+    const [verificandoTurno, setVerificandoTurno] = useState(true); // 🆕 Estado de carga inicial
 
     // Estados
     const [clienteSeleccionado, setClienteSeleccionado] = useState(null);
@@ -57,43 +62,175 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     // Estados para vencidas
     const [vencidas, setVencidas] = useState([]);
     const [fotoVencidas, setFotoVencidas] = useState(null);
-    
+
     // Estado para pull to refresh
     const [refreshing, setRefreshing] = useState(false);
     const [ventasPendientes, setVentasPendientes] = useState(0);
+
+    // 🆕 Estado para cerrar turno
+    const [mostrarModalCerrarTurno, setMostrarModalCerrarTurno] = useState(false);
+    const [totalVentasHoy, setTotalVentasHoy] = useState(0);
+    const [totalDineroHoy, setTotalDineroHoy] = useState(0);
+
+    // 🆕 Estado para turno abierto (indicador visual)
+    const [turnoAbierto, setTurnoAbierto] = useState(false);
+    const [horaTurno, setHoraTurno] = useState(null);
+
+    // 🆕 Estado para stock del cargue
+    const [stockCargue, setStockCargue] = useState({});
 
     // Obtener día actual
     const getDiaActual = () => {
         return DIAS_MAP[new Date().getDay()];
     };
 
-    // Seleccionar día
+    // Seleccionar día - 🆕 Ahora abre el DatePicker
     const handleSeleccionarDia = (dia) => {
         setDiaSeleccionado(dia);
         setMostrarSelectorDia(false);
-        
-        // Si hay cliente preseleccionado desde rutas, usarlo
-        if (clientePreseleccionado) {
-            cargarDatosConClientePreseleccionado(clientePreseleccionado);
-        } else {
-            cargarDatos();
+        setMostrarDatePicker(true); // 🆕 Abrir calendario
+    };
+
+    // 🆕 Confirmar fecha seleccionada
+    const handleConfirmarFecha = async (event, date) => {
+        setMostrarDatePicker(Platform.OS === 'ios'); // En iOS mantener visible
+
+        if (date) {
+            setFechaSeleccionada(date);
+
+            // Cargar inventario del cargue con la fecha seleccionada
+            cargarStockCargue(diaSeleccionado, date);
+
+            // 🆕 Llamar al backend para abrir turno (persistir estado)
+            try {
+                const fechaFormatted = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+                const response = await fetch(ENDPOINTS.TURNO_ABRIR, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vendedor_id: userId,
+                        vendedor_nombre: vendedorNombre || `Vendedor ${userId}`,
+                        dia: diaSeleccionado,
+                        fecha: fechaFormatted,
+                        dispositivo: Platform.OS
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error === 'TURNO_YA_CERRADO') {
+                    Alert.alert(
+                        '⚠️ Turno Ya Cerrado',
+                        'El turno para este día ya fue cerrado.\n\nNo puedes abrir un nuevo turno para esta fecha.',
+                        [{ text: 'OK' }]
+                    );
+                    setMostrarSelectorDia(true); // Volver a mostrar selector
+                    return;
+                }
+
+                console.log('✅ Turno abierto en backend:', data);
+            } catch (error) {
+                console.log('⚠️ Error abriendo turno en backend:', error);
+                // Continuar aunque falle (offline mode)
+            }
+
+            // Marcar turno como abierto localmente
+            setTurnoAbierto(true);
+            setHoraTurno(new Date());
+
+            // Mensaje de "ABRIR TURNO"
+            const fechaFormateada = date.toLocaleDateString('es-ES', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+
+            const horaActual = new Date().toLocaleTimeString('es-ES', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            Alert.alert(
+                '✅ Turno Abierto',
+                `Día: ${diaSeleccionado}\nFecha: ${fechaFormateada}\nHora: ${horaActual}\n\nTurno iniciado correctamente.\nPuedes comenzar a vender.`,
+                [{ text: 'OK' }]
+            );
+
+            // Si hay cliente preseleccionado desde rutas, usarlo
+            if (clientePreseleccionado) {
+                cargarDatosConClientePreseleccionado(clientePreseleccionado);
+            } else {
+                cargarDatos();
+            }
+            verificarPendientes();
         }
-        verificarPendientes();
     };
 
     // Estado para cliente preseleccionado desde rutas
     const [clientePreseleccionado, setClientePreseleccionado] = useState(null);
 
+    // 🆕 Verificar turno activo al iniciar la app
+    const verificarTurnoActivo = async () => {
+        try {
+            const response = await fetch(`${ENDPOINTS.TURNO_VERIFICAR}?vendedor_id=${userId}`);
+            const data = await response.json();
+
+            if (data.turno_activo) {
+                console.log('✅ Turno activo encontrado:', data);
+                // Hay turno abierto - saltar modal de selección
+                setDiaSeleccionado(data.dia);
+
+                // Parsear fecha del turno
+                const fechaTurno = new Date(data.fecha + 'T12:00:00');
+                setFechaSeleccionada(fechaTurno);
+
+                // Parsear hora de apertura
+                if (data.hora_apertura) {
+                    setHoraTurno(new Date(data.hora_apertura));
+                }
+
+                // Marcar turno como abierto
+                setTurnoAbierto(true);
+                setMostrarSelectorDia(false);
+
+                // Cargar datos
+                await cargarStockCargue(data.dia, fechaTurno);
+                cargarDatos();
+                verificarPendientes();
+
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.log('⚠️ Error verificando turno:', error);
+            return false;
+        }
+    };
+
     // Cargar datos iniciales solo cuando se selecciona un día
     useEffect(() => {
-        // Si viene de rutas con cliente preseleccionado, guardar el cliente pero mostrar selector de día
-        if (route?.params?.fromRuta && route?.params?.clientePreseleccionado) {
-            setClientePreseleccionado(route.params.clientePreseleccionado);
-            // Mostrar selector de día normalmente
-            setMostrarSelectorDia(true);
-        }
-    }, [route?.params]);
-    
+        // 🆕 Verificar primero si hay turno activo
+        const inicializar = async () => {
+            // Si viene de rutas con cliente preseleccionado
+            if (route?.params?.fromRuta && route?.params?.clientePreseleccionado) {
+                setClientePreseleccionado(route.params.clientePreseleccionado);
+            }
+
+            // Verificar turno activo
+            setVerificandoTurno(true);
+            const hayTurno = await verificarTurnoActivo();
+            setVerificandoTurno(false);
+
+            if (!hayTurno) {
+                // No hay turno, mostrar selector de día
+                setMostrarSelectorDia(true);
+            }
+        };
+
+        inicializar();
+    }, []);
+
     const cargarDatosConClientePreseleccionado = async (clientePre) => {
         // Cargar productos filtrados por disponible_app_ventas
         const productosData = obtenerProductos();
@@ -105,11 +242,11 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         setClientes(clientesData);
 
         // Buscar si el cliente existe en la lista o crear uno temporal
-        const clienteExistente = clientesData.find(c => 
-            c.nombre_negocio === clientePre.nombre_negocio || 
+        const clienteExistente = clientesData.find(c =>
+            c.nombre_negocio === clientePre.nombre_negocio ||
             c.id === clientePre.id
         );
-        
+
         if (clienteExistente) {
             setClienteSeleccionado(clienteExistente);
         } else {
@@ -122,7 +259,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 telefono: clientePre.telefono
             });
         }
-        
+
         verificarPendientes();
     };
 
@@ -139,42 +276,86 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         // Seleccionar cliente general por defecto
         setClienteSeleccionado(clientesData[0]);
     };
-    
+
+    // 🆕 Cargar stock del cargue según el día y fecha
+    const cargarStockCargue = async (dia, fecha) => {
+        try {
+            // Formatear fecha a YYYY-MM-DD
+            let fechaFormateada;
+            if (fecha instanceof Date) {
+                const year = fecha.getFullYear();
+                const month = String(fecha.getMonth() + 1).padStart(2, '0');
+                const day = String(fecha.getDate()).padStart(2, '0');
+                fechaFormateada = `${year}-${month}-${day}`;
+            } else {
+                fechaFormateada = fecha;
+            }
+
+            // Llamar al endpoint de obtener cargue
+            const response = await fetch(`${ENDPOINTS.OBTENER_CARGUE}?vendedor_id=${userId}&dia=${dia}&fecha=${fechaFormateada}`);
+            const data = await response.json();
+
+            if (data && Object.keys(data).length > 0) {
+                // Crear objeto con stock por producto
+                const stockPorProducto = {};
+
+                Object.keys(data).forEach(nombreProducto => {
+                    const item = data[nombreProducto];
+                    // Calcular stock disponible (total ya viene calculado desde backend)
+                    const stockDisponible = parseInt(item.quantity) || 0;
+                    stockPorProducto[nombreProducto.toUpperCase()] = stockDisponible;
+                });
+
+                setStockCargue(stockPorProducto);
+                console.log('📦 Stock cargado:', stockPorProducto);
+            } else {
+                console.log('⚠️ No hay cargue para esta fecha');
+                setStockCargue({});
+            }
+        } catch (error) {
+            console.error('Error cargando stock:', error);
+            setStockCargue({});
+        }
+    };
+
     // Verificar ventas pendientes de sincronizar
     const verificarPendientes = async () => {
         const pendientes = await obtenerVentasPendientes();
         setVentasPendientes(pendientes.length);
     };
-    
+
     // Función para sincronizar al arrastrar hacia abajo
     const onRefresh = async () => {
         setRefreshing(true);
         try {
 
-            
+
             // 1. Sincronizar ventas pendientes
             const resultadoVentas = await sincronizarVentasPendientes();
-            
+
             // 2. Sincronizar productos
             await sincronizarProductos();
-            
+
             // 3. Recargar productos actualizados filtrados por disponible_app_ventas
             const productosData = obtenerProductos();
             const productosFiltrados = productosData.filter(p => p.disponible_app_ventas !== false);
             setProductos(productosFiltrados);
-            
-            // 4. Actualizar contador de pendientes
+
+            // 4. 🆕 Recargar stock del cargue
+            await cargarStockCargue(diaSeleccionado, fechaSeleccionada);
+
+            // 5. Actualizar contador de pendientes
             await verificarPendientes();
-            
+
             // Mostrar resultado
-            let mensaje = 'Productos y precios actualizados';
+            let mensaje = 'Productos, precios y stock actualizados';
             if (resultadoVentas.sincronizadas > 0) {
                 mensaje += `\n✅ ${resultadoVentas.sincronizadas} ventas sincronizadas`;
             }
             if (resultadoVentas.pendientes > 0) {
                 mensaje += `\n⏳ ${resultadoVentas.pendientes} ventas pendientes`;
             }
-            
+
             Alert.alert('Sincronización', mensaje);
         } catch (error) {
             console.error('Error sincronizando:', error);
@@ -197,6 +378,23 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     // Actualizar cantidad de un producto
     const actualizarCantidad = (productoId, nuevaCantidad) => {
         if (nuevaCantidad < 0) return;
+
+        // 🆕 Validación de Stock
+        const producto = productos.find(p => p.id === productoId);
+        if (producto) {
+            // Obtener stock disponible (usar nombre exacto del producto)
+            const nombreNormalizado = producto.nombre.trim().toUpperCase();
+            const stockDisponible = stockCargue[nombreNormalizado] !== undefined ? stockCargue[nombreNormalizado] : 0;
+
+            // Si intenta aumentar y supera el stock
+            if (nuevaCantidad > (carrito[productoId] || 0) && nuevaCantidad > stockDisponible) {
+                Alert.alert(
+                    'Stock Insuficiente',
+                    `Solo tienes ${stockDisponible} unidades de ${producto.nombre} disponibles en tu cargue.`
+                );
+                return; // ⛔ Evitar actualización
+            }
+        }
 
         const nuevoCarrito = { ...carrito };
         if (nuevaCantidad === 0) {
@@ -227,11 +425,11 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
     // Completar venta
     const completarVenta = async () => {
-        // Validar que haya productos en el carrito
+        // Validar que haya productos en el carrito O vencidas
         const productosEnCarrito = Object.keys(carrito).filter(id => carrito[id] > 0);
 
-        if (productosEnCarrito.length === 0) {
-            Alert.alert('Error', 'Debe agregar al menos un producto a la venta');
+        if (productosEnCarrito.length === 0 && vencidas.length === 0) {
+            Alert.alert('Error', 'Debe agregar al menos un producto o reportar vencidas');
             return;
         }
 
@@ -284,19 +482,58 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             return;
         }
 
+        // 🆕 Evitar duplicación - Si ya está guardando, salir
+        if (window.__guardandoVenta) {
+            console.log('⚠️ Ya se está guardando una venta, ignorando...');
+            return;
+        }
+
         // Agregar la fecha y método de pago a la venta
+        // 🔧 Formatear fecha en zona horaria local para evitar cambios de día
+        let fechaFormateada;
+        if (fechaSeleccionada) {
+            const year = fechaSeleccionada.getFullYear();
+            const month = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
+            const day = String(fechaSeleccionada.getDate()).padStart(2, '0');
+            const hours = String(fechaSeleccionada.getHours()).padStart(2, '0');
+            const minutes = String(fechaSeleccionada.getMinutes()).padStart(2, '0');
+            const seconds = String(fechaSeleccionada.getSeconds()).padStart(2, '0');
+            fechaFormateada = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+        } else {
+            fechaFormateada = new Date().toISOString();
+        }
+
         const ventaConDatos = {
             ...ventaTemporal,
-            fecha: fechaSeleccionada ? fechaSeleccionada.toISOString() : new Date().toISOString(),
+            fecha: fechaFormateada,
             metodo_pago: metodoPago || 'EFECTIVO'
         };
 
 
 
         try {
+            // 🆕 Marcar que está guardando
+            window.__guardandoVenta = true;
+            console.log('💾 Guardando venta...');
 
             const ventaGuardada = await guardarVenta(ventaConDatos);
 
+            console.log('✅ Venta guardada:', ventaGuardada.id);
+
+            // 🆕 ACTUALIZAR STOCK EN TIEMPO REAL
+            // Restar las cantidades vendidas del stock local
+            const nuevoStock = { ...stockCargue };
+            Object.keys(carrito).forEach(productoId => {
+                const producto = productos.find(p => p.id === parseInt(productoId));
+                if (producto) {
+                    const nombreProducto = producto.nombre.toUpperCase();
+                    const cantidadVendida = carrito[productoId];
+                    const stockActual = nuevoStock[nombreProducto] || 0;
+                    nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVendida);
+                    console.log(`📉 Stock actualizado: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                }
+            });
+            setStockCargue(nuevoStock);
 
             // Cerrar modal inmediatamente
             setMostrarResumen(false);
@@ -342,14 +579,25 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 });
             }
 
-            Alert.alert(
-                'Venta Completada',
-                `Venta ${ventaGuardada.id} guardada exitosamente\nTotal: ${formatearMoneda(ventaConDatos.total)}\nMétodo: ${metodoPago}`,
-                alertOptions
-            );
+            // 🆕 Usar setTimeout para asegurar que el modal se cierre antes de lanzar el Alert
+            setTimeout(() => {
+                Alert.alert(
+                    'Venta Completada',
+                    `Venta ${ventaGuardada.id} guardada exitosamente\nTotal: ${formatearMoneda(ventaConDatos.total)}\nMétodo: ${metodoPago}`,
+                    alertOptions
+                );
+            }, 500);
+
+            // 🆕 Actualizar contador de ventas del día
+            setTotalVentasHoy(prev => prev + 1);
+            setTotalDineroHoy(prev => prev + ventaConDatos.total);
         } catch (error) {
             console.error('❌ Error en confirmarVenta:', error);
             Alert.alert('Error', 'No se pudo guardar la venta');
+        } finally {
+            // 🆕 Liberar el flag cuando termine (éxito o error)
+            window.__guardandoVenta = false;
+            console.log('🔓 Venta procesada, flag liberado');
         }
     };
 
@@ -359,16 +607,16 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             // Generar el PDF del ticket
             const { generarTicketPDF } = require('../../services/printerService');
             const pdfUri = await generarTicketPDF(venta);
-            
+
             // Formatear número (agregar código de país si no lo tiene)
             let numeroFormateado = numero.replace(/\D/g, '');
             if (!numeroFormateado.startsWith('57')) {
                 numeroFormateado = '57' + numeroFormateado;
             }
-            
+
             // Abrir WhatsApp con el número específico
             const whatsappUrl = `whatsapp://send?phone=${numeroFormateado}`;
-            
+
             // Primero compartir el PDF
             const Sharing = require('expo-sharing');
             if (await Sharing.isAvailableAsync()) {
@@ -377,7 +625,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     dialogTitle: 'Enviar ticket'
                 });
             }
-            
+
             limpiarVenta();
         } catch (error) {
             console.error('Error al enviar por WhatsApp:', error);
@@ -391,20 +639,20 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             // Generar el PDF del ticket
             const { generarTicketPDF } = require('../../services/printerService');
             const pdfUri = await generarTicketPDF(venta);
-            
+
             // Crear el asunto y cuerpo del correo
             const asunto = `Factura de Venta #${venta.id} - Arepas El Guerrero`;
             const cuerpo = `Adjunto encontrará la factura de su compra.\n\nTotal: $${formatearMoneda(venta.total)}\nFecha: ${new Date(venta.fecha).toLocaleDateString()}\n\n¡Gracias por su compra!`;
-            
+
             // Abrir cliente de correo con el PDF adjunto
             const mailUrl = `mailto:${correo}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
-            
+
             // Primero intentar abrir el correo
             const canOpen = await Linking.canOpenURL(mailUrl);
             if (canOpen) {
                 await Linking.openURL(mailUrl);
             }
-            
+
             // Luego compartir el PDF para que pueda adjuntarlo
             const Sharing = require('expo-sharing');
             if (await Sharing.isAvailableAsync()) {
@@ -413,7 +661,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     dialogTitle: 'Adjuntar ticket al correo'
                 });
             }
-            
+
             limpiarVenta();
         } catch (error) {
             console.error('Error al enviar por correo:', error);
@@ -454,16 +702,131 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         setFotoVencidas(foto);
     };
 
+    // 🆕 Manejar cerrar turno
+    const handleCerrarTurno = async () => {
+        try {
+            // 🔧 CORREGIDO: Usar fechaSeleccionada en lugar de fecha actual
+            const fechaFormateada = fechaSeleccionada.toISOString().split('T')[0];
+
+            console.log(`🔒 CERRAR TURNO - Fecha: ${fechaFormateada}, Vendedor: ${userId}`);
+            console.log(`   Vencidas a reportar:`, vencidas);
+
+            // Preparar productos vencidos en formato correcto
+            const productosVencidosFormateados = vencidas.map(item => ({
+                producto: item.nombre,
+                cantidad: item.cantidad
+            }));
+
+            console.log(`   Productos formateados:`, productosVencidosFormateados);
+
+            // Mostrar confirmación
+            Alert.alert(
+                '🔒 Cerrar Turno',
+                `¿Estás seguro de cerrar el turno del día?\n\nVentas: ${totalVentasHoy}\nTotal: ${formatearMoneda(totalDineroHoy)}\n\nEsta acción calculará las devoluciones automáticamente.`,
+                [
+                    {
+                        text: 'Cancelar',
+                        style: 'cancel'
+                    },
+                    {
+                        text: 'Cerrar Turno',
+                        style: 'destructive',
+                        onPress: async () => {
+                            try {
+                                console.log(`📤 Enviando a ${ENDPOINTS.CERRAR_TURNO}`);
+
+                                // 🆕 Llamar al endpoint usando config centralizado
+                                const response = await fetch(ENDPOINTS.CERRAR_TURNO, {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                    },
+                                    body: JSON.stringify({
+                                        id_vendedor: userId,
+                                        fecha: fechaFormateada, // 🔧 CORREGIDO
+                                        productos_vencidos: productosVencidosFormateados
+                                    })
+                                });
+
+                                const data = await response.json();
+                                console.log(`📥 Respuesta:`, data);
+
+                                if (data.success) {
+                                    // Mostrar resumen
+                                    const resumenTexto = data.resumen.map(item =>
+                                        `${item.producto}:\n` +
+                                        `  Cargado: ${item.cargado}\n` +
+                                        `  Vendido: ${item.vendido}\n` +
+                                        `  Vencidas: ${item.vencidas}\n` +
+                                        `  Devuelto: ${item.devuelto}`
+                                    ).join('\n\n');
+
+                                    Alert.alert(
+                                        '✅ Turno Cerrado',
+                                        `Resumen del día:\n\n${resumenTexto}\n\n` +
+                                        `📊 TOTALES:\n` +
+                                        `Cargado: ${data.totales.cargado}\n` +
+                                        `Vendido: ${data.totales.vendido}\n` +
+                                        `Vencidas: ${data.totales.vencidas}\n` +
+                                        `Devuelto: ${data.totales.devuelto}\n\n` +
+                                        `✅ Datos enviados al CRM`
+                                    );
+
+                                    // Limpiar ventas del día
+                                    setTotalVentasHoy(0);
+                                    setTotalDineroHoy(0);
+                                    setVencidas([]);
+                                    setMostrarModalCerrarTurno(false);
+
+                                    // 🆕 Marcar turno como cerrado
+                                    setTurnoAbierto(false);
+                                    setHoraTurno(null);
+
+                                    // 🆕 Limpiar stock local (turno cerrado)
+                                    setStockCargue({});
+                                } else if (data.error === 'TURNO_YA_CERRADO') {
+                                    // 🆕 Turno ya fue cerrado anteriormente
+                                    Alert.alert(
+                                        '⚠️ Turno Ya Cerrado',
+                                        'El turno para este día ya fue cerrado anteriormente.\n\nNo se pueden enviar devoluciones duplicadas.'
+                                    );
+                                    setMostrarModalCerrarTurno(false);
+                                    setTurnoAbierto(false);
+                                    setHoraTurno(null);
+                                    setStockCargue({}); // Limpiar stock
+                                } else {
+                                    Alert.alert('Error', data.error || 'No se pudo cerrar el turno');
+                                }
+                            } catch (error) {
+                                console.error('Error cerrando turno:', error);
+                                Alert.alert('Error', 'No se pudo conectar con el servidor');
+                            }
+                        }
+                    }
+                ]
+            );
+        } catch (error) {
+            console.error('Error:', error);
+            Alert.alert('Error', 'Ocurrió un error inesperado');
+        }
+    };
+
     // Renderizar producto
     const renderProducto = ({ item }) => {
         const cantidad = getCantidad(item.id);
         const subtotalProducto = item.precio * cantidad;
 
+        // 🆕 Obtener stock del cargue
+        const stock = stockCargue[item.nombre.toUpperCase()] || 0;
+
         return (
             <View style={styles.productoItem}>
                 <View style={styles.productoInfo}>
                     <Text style={styles.productoNombre}>{item.nombre}</Text>
-                    <Text style={styles.productoPrecio}>Precio: {formatearMoneda(item.precio)}</Text>
+                    <Text style={styles.productoPrecio}>
+                        Precio: {formatearMoneda(item.precio)}
+                        {stock > 0 && <Text style={styles.stockTexto}>({stock})</Text>}
+                    </Text>
                     {cantidad > 0 && (
                         <Text style={styles.productoSubtotal}>
                             Total: {formatearMoneda(subtotalProducto)}
@@ -504,9 +867,19 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
     return (
         <View style={styles.container}>
+            {/* 🆕 Pantalla de carga mientras verifica turno */}
+            {verificandoTurno && (
+                <View style={styles.cargandoOverlay}>
+                    <View style={styles.cargandoContainer}>
+                        <Ionicons name="time-outline" size={48} color="#003d88" />
+                        <Text style={styles.cargandoTexto}>Verificando turno...</Text>
+                    </View>
+                </View>
+            )}
+
             {/* Indicador de ventas pendientes */}
             {ventasPendientes > 0 && (
-                <TouchableOpacity 
+                <TouchableOpacity
                     style={styles.pendientesBar}
                     onPress={onRefresh}
                 >
@@ -517,7 +890,72 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     <Ionicons name="refresh" size={16} color="white" />
                 </TouchableOpacity>
             )}
-            
+
+            {/* 🆕 Indicador de Turno - ENCIMA del cliente */}
+            {turnoAbierto && (
+                <View style={styles.turnoIndicador}>
+                    <View style={styles.turnoIndicadorContent}>
+                        <View style={styles.puntoVerde} />
+                        <Text style={styles.turnoTexto}>
+                            Turno Abierto
+                        </Text>
+                        {horaTurno && (
+                            <Text style={styles.turnoHora}>
+                                desde {horaTurno.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                            </Text>
+                        )}
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <Text style={styles.turnoDia}>
+                            {diaSeleccionado} • {fechaSeleccionada?.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
+                        </Text>
+                        {/* 🆕 Botón para cambiar de día */}
+                        <TouchableOpacity
+                            onPress={() => {
+                                Alert.alert(
+                                    '🔄 Cambiar Día',
+                                    '¿Quieres seleccionar otro día?\n\nEsto NO cerrará el turno actual, solo te permite cambiar.',
+                                    [
+                                        { text: 'Cancelar', style: 'cancel' },
+                                        {
+                                            text: 'Cambiar',
+                                            onPress: () => {
+                                                // Limpiar estado local y mostrar selector
+                                                setTurnoAbierto(false);
+                                                setHoraTurno(null);
+                                                setDiaSeleccionado(null);
+                                                setMostrarSelectorDia(true);
+                                            }
+                                        }
+                                    ]
+                                );
+                            }}
+                            style={styles.btnCambiarDia}
+                        >
+                            <Ionicons name="calendar-outline" size={16} color="#003d88" />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
+
+            {/* Indicador de turno cerrado */}
+            {!turnoAbierto && !mostrarSelectorDia && !verificandoTurno && (
+                <View style={[styles.turnoIndicador, styles.turnoCerrado]}>
+                    <View style={styles.turnoIndicadorContent}>
+                        <View style={styles.puntoGris} />
+                        <Text style={[styles.turnoTexto, { color: '#666' }]}>
+                            Sin turno activo
+                        </Text>
+                    </View>
+                    <TouchableOpacity
+                        onPress={() => setMostrarSelectorDia(true)}
+                        style={styles.btnAbrirTurno}
+                    >
+                        <Text style={styles.btnAbrirTurnoTexto}>Abrir Turno</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+
             {/* Header - Cliente */}
             <View style={styles.headerCliente}>
                 <TouchableOpacity
@@ -545,8 +983,9 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 </TouchableOpacity>
             </View>
 
-            {/* Botón Vencidas */}
+            {/* Botones Acciones: Vencidas + Cerrar Turno */}
             <View style={styles.botonesAccionesContainer}>
+                {/* Botón Vencidas */}
                 <TouchableOpacity
                     style={[styles.btnAccion, styles.btnVencidas]}
                     onPress={() => setMostrarVencidas(true)}
@@ -560,6 +999,15 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                             </Text>
                         </View>
                     )}
+                </TouchableOpacity>
+
+                {/* 🆕 Botón Cerrar Turno (pequeño) */}
+                <TouchableOpacity
+                    style={[styles.btnAccion, styles.btnCerrarPequeño]}
+                    onPress={() => setMostrarModalCerrarTurno(true)}
+                >
+                    <Ionicons name="lock-closed" size={18} color="white" />
+                    <Text style={styles.btnAccionTexto}>Cerrar</Text>
                 </TouchableOpacity>
             </View>
 
@@ -611,10 +1059,10 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 <TouchableOpacity
                     style={[
                         styles.btnCompletar,
-                        Object.keys(carrito).filter(id => carrito[id] > 0).length === 0 && styles.btnDeshabilitado
+                        (Object.keys(carrito).filter(id => carrito[id] > 0).length === 0 && vencidas.length === 0) && styles.btnDeshabilitado
                     ]}
                     onPress={completarVenta}
-                    disabled={Object.keys(carrito).filter(id => carrito[id] > 0).length === 0}
+                    disabled={Object.keys(carrito).filter(id => carrito[id] > 0).length === 0 && vencidas.length === 0}
                 >
                     <Ionicons name="checkmark-circle" size={24} color="white" style={styles.iconoBoton} />
                     <Text style={styles.btnCompletarTexto}>
@@ -636,7 +1084,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                             <Text style={styles.modalDiaTitulo}>Selecciona el Día</Text>
                             <Text style={styles.modalDiaSubtitulo}>¿Qué día vas a trabajar?</Text>
                         </View>
-                        
+
                         <View style={styles.modalDiaBotones}>
                             {DIAS_SEMANA.map((dia) => {
                                 const esHoy = dia === getDiaActual();
@@ -666,6 +1114,18 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 </View>
             </Modal>
 
+            {/* 🆕 DatePicker para Seleccionar Fecha */}
+            {mostrarDatePicker && (
+                <DateTimePicker
+                    value={fechaSeleccionada}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={handleConfirmarFecha}
+                    maximumDate={new Date(2030, 11, 31)}
+                    minimumDate={new Date(2020, 0, 1)}
+                />
+            )}
+
             {/* Modales */}
             <ClienteSelector
                 visible={mostrarSelectorCliente}
@@ -683,6 +1143,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 visible={mostrarModalCliente}
                 onClose={() => setMostrarModalCliente(false)}
                 onClienteGuardado={handleClienteGuardado}
+                vendedorId={userId}
             />
 
 
@@ -694,6 +1155,8 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 tipo="vencidas"
                 datosGuardados={vencidas}
                 fotosGuardadas={fotoVencidas}
+                userId={userId}
+                fechaSeleccionada={fechaSeleccionada}
             />
 
             <ResumenVentaModal
@@ -702,6 +1165,60 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 onConfirmar={confirmarVenta}
                 venta={ventaTemporal}
             />
+
+            {/* Modal Cerrar Turno */}
+            <Modal
+                visible={mostrarModalCerrarTurno}
+                animationType="fade"
+                transparent={true}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalCerrarTurno}>
+                        <View style={styles.modalCerrarHeader}>
+                            <Ionicons name="lock-closed" size={40} color="#dc3545" />
+                            <Text style={styles.modalCerrarTitulo}>🔒 Cerrar Turno del Día</Text>
+                        </View>
+
+                        <View style={styles.modalCerrarBody}>
+                            <Text style={styles.modalCerrarText}>¿Estás seguro de cerrar el turno?</Text>
+                            <Text style={styles.modalCerrarSubtext}>Esta acción calculará automáticamente las devoluciones.</Text>
+
+                            {totalVentasHoy > 0 && (
+                                <View style={styles.modalCerrarResumen}>
+                                    <View style={styles.modalCerrarFila}>
+                                        <Text style={styles.modalCerrarLabel}>Ventas realizadas:</Text>
+                                        <Text style={styles.modalCerrarValor}>{totalVentasHoy}</Text>
+                                    </View>
+                                    <View style={styles.modalCerrarFila}>
+                                        <Text style={styles.modalCerrarLabel}>Total vendido:</Text>
+                                        <Text style={styles.modalCerrarValor}>{formatearMoneda(totalDineroHoy)}</Text>
+                                    </View>
+                                </View>
+                            )}
+                        </View>
+
+                        <View style={styles.modalCerrarBotones}>
+                            <TouchableOpacity
+                                style={[styles.modalCerrarBtn, styles.modalCancelarBtn]}
+                                onPress={() => setMostrarModalCerrarTurno(false)}
+                            >
+                                <Text style={styles.modalCancelarTexto}>Cancelar</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.modalCerrarBtn, styles.modalConfirmarBtn]}
+                                onPress={() => {
+                                    setMostrarModalCerrarTurno(false);
+                                    handleCerrarTurno();
+                                }}
+                            >
+                                <Ionicons name="lock-closed" size={18} color="white" />
+                                <Text style={styles.modalConfirmarTexto}>Cerrar Turno</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 };
@@ -785,6 +1302,11 @@ const styles = StyleSheet.create({
     productoPrecio: {
         fontSize: 12,
         color: '#666',
+    },
+    stockTexto: {
+        fontSize: 12,
+        color: '#666',
+        fontWeight: 'normal',
     },
     productoSubtotal: {
         fontSize: 13,
@@ -908,6 +1430,56 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: 'bold',
     },
+    // 🆕 Estilos botón Cerrar Turno pequeño
+    btnCerrarPequeño: {
+        backgroundColor: '#dc3545',
+    },
+    // 🆕 Estilos sección cerrar turno (expandida)
+    seccionCerrarTurno: {
+        marginTop: 15,
+        backgroundColor: '#fff3cd',
+        borderRadius: 10,
+        padding: 15,
+        borderWidth: 2,
+        borderColor: '#dc3545',
+    },
+    resumenDia: {
+        marginBottom: 12,
+    },
+    resumenTitulo: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#dc3545',
+        marginBottom: 8,
+    },
+    resumenFila: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginVertical: 4,
+    },
+    resumenLabel: {
+        fontSize: 14,
+        color: '#666',
+    },
+    resumenValor: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#333',
+    },
+    btnCerrarTurnoGrande: {
+        backgroundColor: '#dc3545',
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 15,
+        borderRadius: 10,
+        gap: 8,
+    },
+    btnCerrarTurnoTexto: {
+        color: 'white',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
     // Estilos Modal Selección de Día
     modalDiaOverlay: {
         flex: 1,
@@ -976,6 +1548,189 @@ const styles = StyleSheet.create({
         paddingVertical: 2,
         borderRadius: 10,
         marginLeft: 10,
+    },
+    // Estilos Modal Cerrar Turno
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    modalCerrarTurno: {
+        backgroundColor: 'white',
+        borderRadius: 16,
+        padding: 20,
+        width: '90%',
+        maxWidth: 400,
+    },
+    modalCerrarHeader: {
+        alignItems: 'center',
+        marginBottom: 20,
+    },
+    modalCerrarTitulo: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#dc3545',
+        marginTop: 10,
+        textAlign: 'center',
+    },
+    modalCerrarBody: {
+        marginBottom: 20,
+    },
+    modalCerrarText: {
+        fontSize: 16,
+        color: '#333',
+        textAlign: 'center',
+        marginBottom: 8,
+    },
+    modalCerrarSubtext: {
+        fontSize: 13,
+        color: '#666',
+        textAlign: 'center',
+        marginBottom: 15,
+    },
+    modalCerrarResumen: {
+        backgroundColor: '#f8f9fa',
+        padding: 15,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#dee2e6',
+    },
+    modalCerrarFila: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginVertical: 5,
+    },
+    modalCerrarLabel: {
+        fontSize: 14,
+        color: '#666',
+    },
+    modalCerrarValor: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#333',
+    },
+    modalCerrarBotones: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    modalCerrarBtn: {
+        flex: 1,
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 15,
+        borderRadius: 8,
+        gap: 6,
+    },
+    modalCancelarBtn: {
+        backgroundColor: '#6c757d',
+    },
+    modalCancelarTexto: {
+        color: 'white',
+        fontSize: 15,
+        fontWeight: 'bold',
+    },
+    modalConfirmarBtn: {
+        backgroundColor: '#dc3545',
+    },
+    modalConfirmarTexto: {
+        color: 'white',
+        fontSize: 15,
+        fontWeight: 'bold',
+    },
+    // 🆕 Estilos para indicador de turno
+    turnoIndicador: {
+        backgroundColor: '#ecfdf5',
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        borderBottomWidth: 1,
+        borderBottomColor: '#d1fae5',
+    },
+    turnoCerrado: {
+        backgroundColor: '#f3f4f6',
+        borderBottomColor: '#e5e7eb',
+    },
+    turnoIndicadorContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    puntoVerde: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#22c55e',
+    },
+    puntoGris: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#9ca3af',
+    },
+    turnoTexto: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#166534',
+    },
+    turnoHora: {
+        fontSize: 12,
+        color: '#16a34a',
+    },
+    turnoDia: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#059669',
+    },
+    // 🆕 Estilos para pantalla de carga
+    cargandoOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000,
+    },
+    cargandoContainer: {
+        backgroundColor: 'white',
+        padding: 30,
+        borderRadius: 16,
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    cargandoTexto: {
+        marginTop: 12,
+        fontSize: 16,
+        color: '#003d88',
+        fontWeight: '500',
+    },
+    // 🆕 Estilos para botones de turno
+    btnCambiarDia: {
+        padding: 6,
+        backgroundColor: '#e0f2fe',
+        borderRadius: 6,
+    },
+    btnAbrirTurno: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        backgroundColor: '#003d88',
+        borderRadius: 6,
+    },
+    btnAbrirTurnoTexto: {
+        color: 'white',
+        fontSize: 12,
+        fontWeight: '600',
     },
 });
 

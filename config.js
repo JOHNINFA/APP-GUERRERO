@@ -15,4 +15,10 @@ export const ENDPOINTS = {
   ACTUALIZAR_CHECK_VENDEDOR: `${API_URL}/api/actualizar-check-vendedor/`,
   VERIFICAR_ESTADO_DIA: `${API_URL}/api/verificar-estado-dia/`,
   RENDIMIENTO_CARGUE: `${API_URL}/api/rendimiento-cargue/`,
+  CERRAR_TURNO: `${API_URL}/api/cargue/cerrar-turno/`,
+
+  // 🆕 Gestión de turnos
+  TURNO_VERIFICAR: `${API_URL}/api/turno/verificar/`,
+  TURNO_ABRIR: `${API_URL}/api/turno/abrir/`,
+  TURNO_CERRAR: `${API_URL}/api/turno/cerrar/`,
 };

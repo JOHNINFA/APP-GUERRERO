@@ -14,8 +14,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { obtenerProductos, formatearMoneda } from '../../services/ventasService';
+import { API_URL } from '../../config'; // 🆕 Import estático en lugar de dinámico
 
-const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devoluciones', datosGuardados = [], fotosGuardadas = {} }) => {
+const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devoluciones', datosGuardados = [], fotosGuardadas = {}, userId, fechaSeleccionada }) => {
     const [cantidades, setCantidades] = useState({});
     const [fotos, setFotos] = useState({}); // { productoId: [uri1, uri2, ...] }
     const productos = obtenerProductos();
@@ -57,7 +58,7 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
             const result = await ImagePicker.launchCameraAsync({
                 mediaTypes: ImagePicker.MediaTypeOptions.Images,
                 allowsEditing: false,
-                quality: 0.3,
+                quality: 0.1,  // 🔥 Reducido de 0.3 a 0.1 para evitar timeouts
                 base64: false,
                 exif: false,
             });
@@ -85,7 +86,7 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
         setFotos(nuevasFotos);
     };
 
-    const handleGuardar = () => {
+    const handleGuardar = async () => {
         // Filtrar solo productos con cantidad > 0
         const productosConCantidad = Object.keys(cantidades)
             .filter(id => cantidades[id] > 0)
@@ -109,8 +110,18 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
                     return;
                 }
             }
+
+            // 🆕 NUEVO FLUJO: Solo guardar localmente, se enviará al confirmar venta
+            console.log(`📝 Vencidas registradas localmente (${productosConCantidad.length} productos)`);
+            console.log(`📸 Fotos adjuntas:`, Object.keys(fotos).length);
+            Alert.alert(
+                '✅ Registrado',
+                `${productosConCantidad.length} producto(s) con vencidas.\nSe enviarán al confirmar la venta.`,
+                [{ text: 'OK' }]
+            );
         }
 
+        // Guardar localmente en el componente padre
         onGuardar(productosConCantidad, fotos);
         setCantidades({});
         setFotos({});
