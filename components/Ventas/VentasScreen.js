@@ -15,7 +15,8 @@ import {
     formatearMoneda,
     sincronizarProductos,
     sincronizarVentasPendientes,
-    obtenerVentasPendientes
+    obtenerVentasPendientes,
+    obtenerVentas  // 🆕 Agregar para contar ventas del día
 } from '../../services/ventasService';
 import { imprimirTicket } from '../../services/printerService';
 import { ENDPOINTS } from '../../config'; // 🆕 Importar config centralizado
@@ -164,11 +165,48 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 cargarDatos();
             }
             verificarPendientes();
+
+            // 🆕 Cargar ventas del día al abrir turno
+            await cargarVentasDelDia(date);
         }
     };
 
     // Estado para cliente preseleccionado desde rutas
     const [clientePreseleccionado, setClientePreseleccionado] = useState(null);
+
+    // 🆕 Función para cargar las ventas del día (para mostrar el conteo correcto)
+    const cargarVentasDelDia = async (fecha) => {
+        try {
+            const todasLasVentas = await obtenerVentas();
+
+            // Formatear fecha del día para comparar (YYYY-MM-DD)
+            const fechaDia = fecha.toISOString().split('T')[0];
+
+            // Filtrar ventas del día
+            const ventasDelDia = todasLasVentas.filter(venta => {
+                const fechaVenta = venta.fecha.split('T')[0];
+                return fechaVenta === fechaDia;
+            });
+
+            // 🆕 DEBUG: Mostrar cada venta encontrada
+            console.log(`📊 Buscando ventas del día ${fechaDia}...`);
+            console.log(`📊 Total ventas guardadas: ${todasLasVentas.length}`);
+            ventasDelDia.forEach((v, i) => {
+                console.log(`   ${i + 1}. Cliente: ${v.cliente_nombre || 'N/A'}, Total: ${formatearMoneda(v.total)}, Fecha: ${v.fecha}`);
+            });
+
+            // Calcular totales
+            const cantidadVentas = ventasDelDia.length;
+            const totalDinero = ventasDelDia.reduce((sum, v) => sum + (v.total || 0), 0);
+
+            console.log(`📊 Ventas del día ${fechaDia}: ${cantidadVentas} ventas, ${formatearMoneda(totalDinero)}`);
+
+            setTotalVentasHoy(cantidadVentas);
+            setTotalDineroHoy(totalDinero);
+        } catch (error) {
+            console.error('Error cargando ventas del día:', error);
+        }
+    };
 
     // 🆕 Verificar turno activo al iniciar la app
     const verificarTurnoActivo = async () => {
@@ -198,6 +236,9 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 await cargarStockCargue(data.dia, fechaTurno);
                 cargarDatos();
                 verificarPendientes();
+
+                // 🆕 Cargar ventas reales del día
+                await cargarVentasDelDia(fechaTurno);
 
                 return true;
             }
@@ -291,29 +332,48 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 fechaFormateada = fecha;
             }
 
-            // Llamar al endpoint de obtener cargue
-            const response = await fetch(`${ENDPOINTS.OBTENER_CARGUE}?vendedor_id=${userId}&dia=${dia}&fecha=${fechaFormateada}`);
-            const data = await response.json();
+            // 🆕 Agregar timeout de 10 segundos
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-            if (data && Object.keys(data).length > 0) {
-                // Crear objeto con stock por producto
-                const stockPorProducto = {};
+            try {
+                // Llamar al endpoint de obtener cargue
+                const response = await fetch(
+                    `${ENDPOINTS.OBTENER_CARGUE}?vendedor_id=${userId}&dia=${dia}&fecha=${fechaFormateada}`,
+                    { signal: controller.signal }
+                );
+                clearTimeout(timeoutId);
 
-                Object.keys(data).forEach(nombreProducto => {
-                    const item = data[nombreProducto];
-                    // Calcular stock disponible (total ya viene calculado desde backend)
-                    const stockDisponible = parseInt(item.quantity) || 0;
-                    stockPorProducto[nombreProducto.toUpperCase()] = stockDisponible;
-                });
+                const data = await response.json();
 
-                setStockCargue(stockPorProducto);
-                console.log('📦 Stock cargado:', stockPorProducto);
-            } else {
-                console.log('⚠️ No hay cargue para esta fecha');
+                if (data && Object.keys(data).length > 0) {
+                    // Crear objeto con stock por producto
+                    const stockPorProducto = {};
+
+                    Object.keys(data).forEach(nombreProducto => {
+                        const item = data[nombreProducto];
+                        // Calcular stock disponible (total ya viene calculado desde backend)
+                        const stockDisponible = parseInt(item.quantity) || 0;
+                        stockPorProducto[nombreProducto.toUpperCase()] = stockDisponible;
+                    });
+
+                    setStockCargue(stockPorProducto);
+                    console.log('📦 Stock cargado:', Object.keys(stockPorProducto).length, 'productos');
+                } else {
+                    console.log('⚠️ No hay cargue para esta fecha');
+                    setStockCargue({});
+                }
+            } catch (fetchError) {
+                clearTimeout(timeoutId);
+                if (fetchError.name === 'AbortError') {
+                    console.error('⏱️ Timeout cargando stock');
+                } else {
+                    console.error('❌ Error cargando stock:', fetchError.message);
+                }
                 setStockCargue({});
             }
         } catch (error) {
-            console.error('Error cargando stock:', error);
+            console.error('❌ Error general cargando stock:', error);
             setStockCargue({});
         }
     };
@@ -471,7 +531,39 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         };
 
         setVentaTemporal(venta);
-        setMostrarResumen(true);
+
+        // 🆕 Validar si hay stock suficiente para cambiar vencidas
+        const advertenciasVencidas = [];
+        if (vencidas && vencidas.length > 0) {
+            vencidas.forEach(vencida => {
+                const nombreProducto = vencida.nombre.toUpperCase();
+                const stockActual = stockCargue[nombreProducto] || 0;
+                const cantidadVendida = productosVenta.find(p => p.nombre.toUpperCase() === nombreProducto)?.cantidad || 0;
+                const stockDisponible = stockActual - cantidadVendida;
+
+                if (vencida.cantidad > stockDisponible) {
+                    if (stockDisponible <= 0) {
+                        advertenciasVencidas.push(`⚠️ ${vencida.nombre}: No tienes stock para cambiar ${vencida.cantidad} vencidas`);
+                    } else {
+                        advertenciasVencidas.push(`⚠️ ${vencida.nombre}: Solo tienes ${stockDisponible} para cambiar ${vencida.cantidad} vencidas`);
+                    }
+                }
+            });
+        }
+
+        // Si hay advertencias, mostrar alerta pero permitir continuar
+        if (advertenciasVencidas.length > 0) {
+            Alert.alert(
+                '⚠️ Advertencia de Stock',
+                advertenciasVencidas.join('\n') + '\n\n¿Deseas continuar de todas formas?',
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    { text: 'Continuar', onPress: () => setMostrarResumen(true) }
+                ]
+            );
+        } else {
+            setMostrarResumen(true);
+        }
     };
 
     // Confirmar y guardar venta
@@ -523,6 +615,8 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             // 🆕 ACTUALIZAR STOCK EN TIEMPO REAL
             // Restar las cantidades vendidas del stock local
             const nuevoStock = { ...stockCargue };
+
+            // 1. Restar productos vendidos
             Object.keys(carrito).forEach(productoId => {
                 const producto = productos.find(p => p.id === parseInt(productoId));
                 if (producto) {
@@ -530,9 +624,21 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     const cantidadVendida = carrito[productoId];
                     const stockActual = nuevoStock[nombreProducto] || 0;
                     nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVendida);
-                    console.log(`📉 Stock actualizado: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                    console.log(`📉 Vendido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
                 }
             });
+
+            // 🆕 2. Restar productos vencidos (también salen del stock)
+            if (vencidas && vencidas.length > 0) {
+                vencidas.forEach(item => {
+                    const nombreProducto = item.nombre.toUpperCase();
+                    const cantidadVencida = item.cantidad || 0;
+                    const stockActual = nuevoStock[nombreProducto] || 0;
+                    nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVencida);
+                    console.log(`🗑️ Vencido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                });
+            }
+
             setStockCargue(nuevoStock);
 
             // Cerrar modal inmediatamente
@@ -778,7 +884,23 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                                     setVencidas([]);
                                     setMostrarModalCerrarTurno(false);
 
-                                    // 🆕 Marcar turno como cerrado
+                                    // 🆕 Marcar turno como cerrado EN LA BD
+                                    try {
+                                        const responseCerrar = await fetch(ENDPOINTS.TURNO_CERRAR, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                                vendedor_id: userId,
+                                                fecha: fechaFormateada
+                                            })
+                                        });
+                                        const dataCerrar = await responseCerrar.json();
+                                        console.log('✅ Turno cerrado en BD:', dataCerrar);
+                                    } catch (errorCerrar) {
+                                        console.error('⚠️ Error cerrando turno en BD:', errorCerrar);
+                                    }
+
+                                    // Marcar turno como cerrado localmente
                                     setTurnoAbierto(false);
                                     setHoraTurno(null);
 
@@ -1432,7 +1554,7 @@ const styles = StyleSheet.create({
     },
     // 🆕 Estilos botón Cerrar Turno pequeño
     btnCerrarPequeño: {
-        backgroundColor: '#dc3545',
+        backgroundColor: '#003d88', // Azul de la app
     },
     // 🆕 Estilos sección cerrar turno (expandida)
     seccionCerrarTurno: {

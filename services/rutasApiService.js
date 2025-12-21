@@ -1,4 +1,4 @@
-import { API_URL } from '../config'; 
+import { API_URL } from '../config';
 
 const API_BASE = `${API_URL}/api`;
 
@@ -26,13 +26,13 @@ export const obtenerClientesPorRutaYDia = async (rutaId, dia) => {
         const url = `${API_BASE}/clientes-ruta/?ruta=${rutaId}&dia=${dia}`;
 
         const response = await fetch(url);
-        
+
         // Verificar si la respuesta es OK
         if (!response.ok) {
             console.error('Error HTTP:', response.status, response.statusText);
             return [];
         }
-        
+
         const data = await response.json();
 
         return data;
@@ -47,8 +47,8 @@ export const enviarVentaRuta = async (ventaData) => {
         const formData = new FormData();
 
         // Campos obligatorios
-        // CORRECCIÓN: Usar vendedor o vendedor_id (el log muestra que viene como vendedor_id)
-        formData.append('vendedor', ventaData.vendedor || ventaData.vendedor_id);
+        // CORRECCIÓN: Usar vendedor_id o vendedor
+        formData.append('vendedor', ventaData.vendedor_id || ventaData.vendedor);
 
         if (ventaData.ruta) formData.append('ruta', ventaData.ruta);
         formData.append('cliente_nombre', ventaData.cliente_nombre);
@@ -56,7 +56,7 @@ export const enviarVentaRuta = async (ventaData) => {
         if (ventaData.cliente) formData.append('cliente', ventaData.cliente);
         formData.append('total', ventaData.total);
         formData.append('metodo_pago', ventaData.metodo_pago);
-        
+
         // Fecha de la venta (si viene, usarla; si no, el backend usa la fecha actual)
         if (ventaData.fecha) {
             formData.append('fecha', ventaData.fecha);
@@ -83,26 +83,42 @@ export const enviarVentaRuta = async (ventaData) => {
             }
         }
 
-        console.log('Enviando venta con FormData:', {
-            ...ventaData,
-            foto_vencidos: ventaData.foto_vencidos ? 'EVIDENCIAS_PRESENTES' : 'SIN_EVIDENCIAS'
+        console.log('📤 Enviando venta con FormData:', {
+            vendedor: ventaData.vendedor_id || ventaData.vendedor,
+            cliente: ventaData.cliente_nombre,
+            total: ventaData.total,
+            fotos: ventaData.foto_vencidos ? 'PRESENTES' : 'NO'
         });
 
-        const response = await fetch(`${API_BASE}/ventas-ruta/`, {
-            method: 'POST',
-            headers: {
-                // 'Content-Type': 'multipart/form-data', // NO AGREGAR ESTO MANUALMENTE, fetch lo hace con el boundary correcto
-            },
-            body: formData,
-        });
+        // 🆕 Agregar timeout de 15 segundos
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Error respuesta servidor:', errorText);
-            throw new Error(`Error del servidor: ${response.status}`);
+        try {
+            const response = await fetch(`${API_BASE}/ventas-ruta/`, {
+                method: 'POST',
+                body: formData,
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('❌ Error respuesta servidor:', errorText);
+                throw new Error(`Error del servidor: ${response.status}`);
+            }
+
+            const result = await response.json();
+            console.log('✅ Venta enviada al servidor:', result.id);
+            return result;
+        } catch (fetchError) {
+            clearTimeout(timeoutId);
+            if (fetchError.name === 'AbortError') {
+                throw new Error('Timeout: El servidor tardó demasiado');
+            }
+            throw fetchError;
         }
-
-        return await response.json();
     } catch (error) {
         console.error('Error enviando venta:', error);
         throw error;

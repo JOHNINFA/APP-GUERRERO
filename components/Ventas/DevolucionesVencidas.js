@@ -33,6 +33,14 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
 
             // Cargar fotos guardadas
             setFotos(fotosGuardadas || {});
+
+            // 🆕 Solicitar permisos de cámara anticipadamente
+            (async () => {
+                const { status } = await ImagePicker.requestCameraPermissionsAsync();
+                if (status !== 'granted') {
+                    console.log('⚠️ Permiso de cámara no otorgado');
+                }
+            })();
         }
     }, [visible, datosGuardados, fotosGuardadas]);
 
@@ -48,32 +56,35 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
 
     const tomarFoto = async (productoId) => {
         try {
-            const { status } = await ImagePicker.requestCameraPermissionsAsync();
-
-            if (status !== 'granted') {
-                Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
-                return;
-            }
-
+            // 🆕 Abrir cámara directamente (permisos ya se pidieron al abrir el modal)
             const result = await ImagePicker.launchCameraAsync({
                 mediaTypes: ImagePicker.MediaTypeOptions.Images,
                 allowsEditing: false,
-                quality: 0.1,  // 🔥 Reducido de 0.3 a 0.1 para evitar timeouts
+                quality: 0.1,
                 base64: false,
                 exif: false,
             });
 
-            if (!result.canceled) {
+            if (!result.canceled && result.assets && result.assets.length > 0) {
                 const nuevasFotos = { ...fotos };
                 if (!nuevasFotos[productoId]) {
                     nuevasFotos[productoId] = [];
                 }
                 nuevasFotos[productoId].push(result.assets[0].uri);
                 setFotos(nuevasFotos);
+                console.log('📸 Foto tomada para producto:', productoId);
             }
         } catch (error) {
-            console.error('Error al tomar foto:', error);
-            Alert.alert('Error', 'No se pudo tomar la foto');
+            console.error('❌ Error al tomar foto:', error);
+            // Si falla por permisos, pedirlos de nuevo
+            if (error.message?.includes('permission')) {
+                const { status } = await ImagePicker.requestCameraPermissionsAsync();
+                if (status !== 'granted') {
+                    Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+                }
+            } else {
+                Alert.alert('Error', 'No se pudo tomar la foto');
+            }
         }
     };
 
@@ -119,6 +130,11 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
                 `${productosConCantidad.length} producto(s) con vencidas.\nSe enviarán al confirmar la venta.`,
                 [{ text: 'OK' }]
             );
+        }
+
+        // Si no hay productos (limpiando), mostrar mensaje diferente
+        if (productosConCantidad.length === 0 && datosGuardados.length > 0) {
+            Alert.alert('Listo', 'Vencidas eliminadas');
         }
 
         // Guardar localmente en el componente padre
@@ -257,16 +273,12 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                        style={[
-                            styles.btnGuardar,
-                            totalProductos === 0 && styles.btnDeshabilitado
-                        ]}
+                        style={styles.btnGuardar}
                         onPress={handleGuardar}
-                        disabled={totalProductos === 0}
                     >
                         <Ionicons name="checkmark-circle" size={20} color="white" />
                         <Text style={styles.btnGuardarTexto}>
-                            Guardar ({totalProductos})
+                            {totalProductos === 0 ? 'Limpiar' : `Guardar (${totalProductos})`}
                         </Text>
                     </TouchableOpacity>
                 </View>

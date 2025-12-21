@@ -464,6 +464,7 @@ export const guardarVenta = async (venta) => {
 
         ventas.push(nuevaVenta);
         await AsyncStorage.setItem('ventas', JSON.stringify(ventas));
+        console.log('✅ Venta guardada localmente:', nuevaVenta.id);
 
         // Formatear productos vencidos para el backend
         const productosVencidosFormateados = (venta.vencidas || []).map(item => ({
@@ -474,39 +475,47 @@ export const guardarVenta = async (venta) => {
         }));
 
         const ventaBackend = {
-            vendedor_id: venta.vendedor_id || venta.vendedor, // Usar vendedor_id si existe
+            vendedor_id: venta.vendedor_id || venta.vendedor,
             cliente_nombre: venta.cliente_nombre,
             nombre_negocio: venta.cliente_negocio || '',
             total: venta.total,
             detalles: venta.productos,
-            metodo_pago: venta.metodo_pago || 'EFECTIVO', // Usar el método de pago seleccionado
+            metodo_pago: venta.metodo_pago || 'EFECTIVO',
             productos_vencidos: productosVencidosFormateados,
             foto_vencidos: venta.fotoVencidas || {},
-            fecha: fechaVenta // Enviar la fecha al backend
+            fecha: fechaVenta
         };
 
-        // Verificar conexión antes de enviar
-        const conectado = await hayConexion();
-
-        if (conectado) {
-            // Intentar enviar inmediatamente
+        // 🆕 SINCRONIZAR EN SEGUNDO PLANO (no bloquea la UI)
+        // Esto permite que el modal de imprimir aparezca inmediatamente
+        (async () => {
             try {
-                await enviarVentaRuta(ventaBackend);
+                const conectado = await hayConexion();
 
-                // Marcar como sincronizada
-                nuevaVenta.sincronizada = true;
-                const ventasActualizadas = ventas.map(v => v.id === nuevaVenta.id ? nuevaVenta : v);
-                await AsyncStorage.setItem('ventas', JSON.stringify(ventasActualizadas));
-            } catch (err) {
-                console.warn('⚠️ Error enviando, agregando a cola:', err.message);
-                await agregarAColaPendientes(ventaBackend, nuevaVenta.id);
+                if (conectado) {
+                    try {
+                        await enviarVentaRuta(ventaBackend);
+                        console.log('✅ Venta sincronizada con servidor');
+
+                        // Marcar como sincronizada
+                        nuevaVenta.sincronizada = true;
+                        const ventasActuales = await obtenerVentas();
+                        const ventasActualizadas = ventasActuales.map(v => v.id === nuevaVenta.id ? { ...v, sincronizada: true } : v);
+                        await AsyncStorage.setItem('ventas', JSON.stringify(ventasActualizadas));
+                    } catch (err) {
+                        console.warn('⚠️ Error enviando, agregando a cola:', err.message);
+                        await agregarAColaPendientes(ventaBackend, nuevaVenta.id);
+                    }
+                } else {
+                    console.log('📥 Sin conexión, agregando a cola de pendientes');
+                    await agregarAColaPendientes(ventaBackend, nuevaVenta.id);
+                }
+            } catch (bgError) {
+                console.error('❌ Error en sincronización background:', bgError);
             }
-        } else {
-            // Sin conexión, agregar a cola de pendientes
+        })();
 
-            await agregarAColaPendientes(ventaBackend, nuevaVenta.id);
-        }
-
+        // Retornar inmediatamente sin esperar sincronización
         return nuevaVenta;
     } catch (error) {
         console.error('Error al guardar venta:', error);
@@ -528,6 +537,20 @@ export const obtenerVentas = async () => {
     } catch (error) {
         console.error('Error al obtener ventas:', error);
         return [];
+    }
+};
+
+/**
+ * 🆕 Limpia todas las ventas locales (útil para limpiar datos de prueba)
+ */
+export const limpiarVentasLocales = async () => {
+    try {
+        await AsyncStorage.removeItem('ventas');
+        console.log('🗑️ Ventas locales eliminadas');
+        return { success: true, message: 'Ventas eliminadas' };
+    } catch (error) {
+        console.error('Error limpiando ventas:', error);
+        return { success: false, message: error.message };
     }
 };
 
@@ -569,6 +592,7 @@ export default {
     guardarVenta,
     obtenerVentas,
     obtenerVentasPorVendedor,
+    limpiarVentasLocales,  // 🆕 Agregar
 
     // Cola offline
     obtenerVentasPendientes,

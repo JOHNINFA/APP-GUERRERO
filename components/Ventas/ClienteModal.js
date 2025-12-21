@@ -77,7 +77,12 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
             diasActuales.push(dia);
         }
 
-        handleChange('diasVisita', diasActuales);
+        // 🆕 Ordenar los días según el orden de la semana
+        const diasOrdenados = diasActuales.sort((a, b) => {
+            return DIAS_SEMANA.indexOf(a) - DIAS_SEMANA.indexOf(b);
+        });
+
+        handleChange('diasVisita', diasOrdenados);
     };
 
     // Seleccionar ruta

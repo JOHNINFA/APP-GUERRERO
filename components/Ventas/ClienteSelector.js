@@ -44,42 +44,54 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, us
     const cargarClientes = async (dia) => {
         setLoading(true);
         try {
-            // 1. Cargar clientes del día actual
-            const urlDia = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}&dia=${dia}`;
+            // 🆕 Crear controller para timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-            
-            const responseDia = await fetch(urlDia);
-            if (responseDia.ok) {
-                const dataDia = await responseDia.json();
-                const clientesFormateados = dataDia.map(c => ({
-                    id: c.id.toString(),
-                    nombre: c.nombre_contacto || c.nombre_negocio,
-                    negocio: c.nombre_negocio,
-                    celular: c.telefono || '',
-                    direccion: c.direccion || '',
-                    dia_visita: c.dia_visita,
-                    esDeRuta: true
-                }));
-                setClientesDelDia(clientesFormateados);
+            try {
+                // 1. Cargar clientes del día actual
+                const urlDia = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}&dia=${dia}`;
 
-            }
+                const responseDia = await fetch(urlDia, { signal: controller.signal });
+                if (responseDia.ok) {
+                    const dataDia = await responseDia.json();
+                    const clientesFormateados = dataDia.map(c => ({
+                        id: c.id.toString(),
+                        nombre: c.nombre_contacto || c.nombre_negocio,
+                        negocio: c.nombre_negocio,
+                        celular: c.telefono || '',
+                        direccion: c.direccion || '',
+                        dia_visita: c.dia_visita,
+                        esDeRuta: true
+                    }));
+                    setClientesDelDia(clientesFormateados);
+                }
 
-            // 2. Cargar todos los clientes de la ruta (sin filtro de día)
-            const urlTodos = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
-            const responseTodos = await fetch(urlTodos);
-            if (responseTodos.ok) {
-                const dataTodos = await responseTodos.json();
-                const todosFormateados = dataTodos.map(c => ({
-                    id: c.id.toString(),
-                    nombre: c.nombre_contacto || c.nombre_negocio,
-                    negocio: c.nombre_negocio,
-                    celular: c.telefono || '',
-                    direccion: c.direccion || '',
-                    dia_visita: c.dia_visita,
-                    esDeRuta: true
-                }));
-                setTodosLosClientes(todosFormateados);
+                // 2. Cargar todos los clientes de la ruta (sin filtro de día)
+                const urlTodos = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
+                const responseTodos = await fetch(urlTodos, { signal: controller.signal });
+                if (responseTodos.ok) {
+                    const dataTodos = await responseTodos.json();
+                    const todosFormateados = dataTodos.map(c => ({
+                        id: c.id.toString(),
+                        nombre: c.nombre_contacto || c.nombre_negocio,
+                        negocio: c.nombre_negocio,
+                        celular: c.telefono || '',
+                        direccion: c.direccion || '',
+                        dia_visita: c.dia_visita,
+                        esDeRuta: true
+                    }));
+                    setTodosLosClientes(todosFormateados);
+                }
 
+                clearTimeout(timeoutId);
+            } catch (fetchError) {
+                clearTimeout(timeoutId);
+                if (fetchError.name === 'AbortError') {
+                    console.error('⏱️ Timeout cargando clientes');
+                } else {
+                    throw fetchError;
+                }
             }
         } catch (error) {
             console.error('❌ Error cargando clientes:', error);
@@ -91,7 +103,7 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, us
     // Filtrar clientes según búsqueda
     const getClientesFiltrados = () => {
         const listaBase = mostrarTodos ? todosLosClientes : clientesDelDia;
-        
+
         if (busqueda.trim() === '') {
             return listaBase;
         }
@@ -179,7 +191,7 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, us
                             </Text>
                         </View>
                     </TouchableOpacity>
-                    
+
                     <TouchableOpacity
                         style={[styles.tab, mostrarTodos && styles.tabActivo]}
                         onPress={() => setMostrarTodos(true)}
@@ -242,12 +254,12 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, us
                             <View style={styles.emptyContainer}>
                                 <Ionicons name="people-outline" size={48} color="#ccc" />
                                 <Text style={styles.emptyTexto}>
-                                    {mostrarTodos 
-                                        ? 'No hay clientes en tu ruta' 
+                                    {mostrarTodos
+                                        ? 'No hay clientes en tu ruta'
                                         : `No hay clientes para ${diaActual}`}
                                 </Text>
                                 {!mostrarTodos && (
-                                    <TouchableOpacity 
+                                    <TouchableOpacity
                                         style={styles.btnVerTodos}
                                         onPress={() => setMostrarTodos(true)}
                                     >

@@ -2,10 +2,8 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { formatearMoneda } from './ventasService';
 import { obtenerConfiguracionImpresion } from './rutasApiService';
-import { API_URL } from '../config';
 
-const SERVER_URL = API_URL;
-export const generarTicketHTML = (venta, config = null) => {
+export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
   const {
     id,
     fecha,
@@ -29,7 +27,8 @@ export const generarTicketHTML = (venta, config = null) => {
   const piePagina = config?.pie_pagina_ticket || 'Software: App Guerrero';
   const mensajeGracias = config?.mensaje_agradecimiento || '¡Gracias por su compra!';
   const mostrarLogo = config?.mostrar_logo !== false;
-  const logoUrl = config?.logo ? `${SERVER_URL}${config.logo}` : null;
+  // 🆕 Usar logo base64 si está disponible
+  const logoSrc = logoBase64 || (config?.logo ? `${SERVER_URL}${config.logo}` : null);
 
   const fechaFormateada = new Date(fecha).toLocaleString('es-CO');
 
@@ -65,7 +64,7 @@ export const generarTicketHTML = (venta, config = null) => {
       </head>
       <body style="font-family: monospace; padding: 20px; width: 300px; margin: 0 auto;">
         <div style="text-align: center; margin-bottom: 10px;">
-          ${mostrarLogo && logoUrl ? `<img src="${logoUrl}" style="max-width: 100px; max-height: 80px; margin-bottom: 5px;" />` : ''}
+          ${mostrarLogo && logoSrc ? `<img src="${logoSrc}" style="max-width: 100px; max-height: 80px; margin-bottom: 5px;" />` : ''}
           <div style="font-weight: bold; font-size: 16px; margin-bottom: 5px;">
             ${nombreNegocio}
           </div>
@@ -133,18 +132,24 @@ export const imprimirTicket = async (venta) => {
   try {
     // Intentar obtener configuración del servidor, usar null si falla (offline)
     let config = null;
+    let logoBase64 = null;
+
     try {
       config = await obtenerConfiguracionImpresion();
 
+      // 🆕 Usar logo_base64 directamente del backend (ya viene en base64)
+      if (config?.logo_base64 && config?.mostrar_logo !== false) {
+        logoBase64 = config.logo_base64;
+        console.log('✅ Logo cargado desde backend (base64)');
+      }
     } catch (configError) {
-
+      console.log('⚠️ Error obteniendo configuración, usando valores por defecto');
       // Continúa con config = null, usará valores por defecto
     }
 
-    const html = generarTicketHTML(venta, config);
+    const html = generarTicketHTML(venta, config, logoBase64);
 
     const { uri } = await Print.printToFileAsync({ html });
-
 
     await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
   } catch (error) {
@@ -158,16 +163,22 @@ export const generarTicketPDF = async (venta) => {
   try {
     // Intentar obtener configuración del servidor
     let config = null;
+    let logoBase64 = null;
+
     try {
       config = await obtenerConfiguracionImpresion();
-    } catch (configError) {
 
+      // 🆕 Usar logo_base64 directamente del backend
+      if (config?.logo_base64 && config?.mostrar_logo !== false) {
+        logoBase64 = config.logo_base64;
+      }
+    } catch (configError) {
+      // Continúa con valores por defecto
     }
 
-    const html = generarTicketHTML(venta, config);
+    const html = generarTicketHTML(venta, config, logoBase64);
     const { uri } = await Print.printToFileAsync({ html });
 
-    
     return uri;
   } catch (error) {
     console.error('Error al generar PDF:', error);
@@ -180,10 +191,10 @@ export const compartirTicketWhatsApp = async (venta) => {
   try {
     // Generar el PDF
     const pdfUri = await generarTicketPDF(venta);
-    
+
     // Verificar si se puede compartir
     const isAvailable = await Sharing.isAvailableAsync();
-    
+
     if (isAvailable) {
       await Sharing.shareAsync(pdfUri, {
         mimeType: 'application/pdf',
