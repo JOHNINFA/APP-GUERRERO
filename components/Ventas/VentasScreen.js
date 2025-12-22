@@ -124,9 +124,11 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     Alert.alert(
                         '⚠️ Turno Ya Cerrado',
                         'El turno para este día ya fue cerrado.\n\nNo puedes abrir un nuevo turno para esta fecha.',
-                        [{ text: 'OK' }]
+                        [{
+                            text: 'OK',
+                            onPress: () => setMostrarSelectorDia(true) // Mostrar selector DESPUÉS de cerrar alert
+                        }]
                     );
-                    setMostrarSelectorDia(true); // Volver a mostrar selector
                     return;
                 }
 
@@ -332,9 +334,9 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 fechaFormateada = fecha;
             }
 
-            // 🆕 Agregar timeout de 10 segundos
+            // 🆕 Agregar timeout de 30 segundos
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
 
             try {
                 // Llamar al endpoint de obtener cargue
@@ -1232,6 +1234,15 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                                 );
                             })}
                         </View>
+
+                        {/* 🆕 Botón Volver para cerrar el modal */}
+                        <TouchableOpacity
+                            style={styles.modalDiaBotonVolver}
+                            onPress={() => setMostrarSelectorDia(false)}
+                        >
+                            <Ionicons name="arrow-back" size={20} color="#666" />
+                            <Text style={styles.modalDiaVolverTexto}>Volver</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
             </Modal>
@@ -1670,6 +1681,21 @@ const styles = StyleSheet.create({
         paddingVertical: 2,
         borderRadius: 10,
         marginLeft: 10,
+    },
+    // 🆕 Estilos botón Volver
+    modalDiaBotonVolver: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 16,
+        padding: 12,
+        borderRadius: 8,
+        backgroundColor: '#f0f0f0',
+    },
+    modalDiaVolverTexto: {
+        fontSize: 14,
+        color: '#666',
+        marginLeft: 8,
     },
     // Estilos Modal Cerrar Turno
     modalOverlay: {

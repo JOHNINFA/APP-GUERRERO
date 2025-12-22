@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { obtenerProductos, formatearMoneda } from '../../services/ventasService';
 import { API_URL } from '../../config'; // 🆕 Import estático en lugar de dinámico
 
@@ -54,25 +55,45 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
         setCantidades(nuevasCantidades);
     };
 
+    // 🆕 Función para comprimir imagen
+    const comprimirImagen = async (uri) => {
+        try {
+            const resultado = await ImageManipulator.manipulateAsync(
+                uri,
+                [{ resize: { width: 800 } }], // Redimensionar a 800px de ancho
+                { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG } // 60% calidad
+            );
+            console.log('📦 Imagen comprimida:', resultado.uri);
+            return resultado.uri;
+        } catch (error) {
+            console.warn('⚠️ Error comprimiendo imagen, usando original:', error);
+            return uri; // Si falla, usar la original
+        }
+    };
+
     const tomarFoto = async (productoId) => {
         try {
             // 🆕 Abrir cámara directamente (permisos ya se pidieron al abrir el modal)
             const result = await ImagePicker.launchCameraAsync({
                 mediaTypes: ImagePicker.MediaTypeOptions.Images,
                 allowsEditing: false,
-                quality: 0.1,
+                quality: 0.5, // Calidad media inicial
                 base64: false,
                 exif: false,
             });
 
             if (!result.canceled && result.assets && result.assets.length > 0) {
+                // 🆕 Comprimir la imagen antes de guardar
+                const uriOriginal = result.assets[0].uri;
+                const uriComprimida = await comprimirImagen(uriOriginal);
+
                 const nuevasFotos = { ...fotos };
                 if (!nuevasFotos[productoId]) {
                     nuevasFotos[productoId] = [];
                 }
-                nuevasFotos[productoId].push(result.assets[0].uri);
+                nuevasFotos[productoId].push(uriComprimida);
                 setFotos(nuevasFotos);
-                console.log('📸 Foto tomada para producto:', productoId);
+                console.log('📸 Foto tomada y comprimida para producto:', productoId);
             }
         } catch (error) {
             console.error('❌ Error al tomar foto:', error);

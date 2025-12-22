@@ -11,6 +11,7 @@ import {
     SectionList
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL } from '../../config';
 
 // Mapeo de días
@@ -24,6 +25,10 @@ const DIAS_SEMANA = {
     6: 'SABADO'
 };
 
+// Keys para cache
+const CACHE_KEY_CLIENTES = 'clientes_cache_';
+const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 horas
+
 const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, userId, diaSeleccionado }) => {
     const [clientesDelDia, setClientesDelDia] = useState([]);
     const [todosLosClientes, setTodosLosClientes] = useState([]);
@@ -31,48 +36,115 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, us
     const [loading, setLoading] = useState(false);
     const [mostrarTodos, setMostrarTodos] = useState(false);
     const [diaActual, setDiaActual] = useState('');
+    const [actualizandoEnFondo, setActualizandoEnFondo] = useState(false);
 
     useEffect(() => {
         if (visible) {
             // Usar el día seleccionado o el día actual
             const dia = diaSeleccionado || DIAS_SEMANA[new Date().getDay()];
             setDiaActual(dia);
-            cargarClientes(dia);
+            cargarClientesConCache(dia);
         }
     }, [visible, diaSeleccionado]);
 
-    const cargarClientes = async (dia) => {
+    // 🆕 Cargar clientes primero del cache, luego actualizar desde servidor
+    const cargarClientesConCache = async (dia) => {
         setLoading(true);
+
         try {
-            // 🆕 Crear controller para timeout
+            // 1. Intentar cargar del cache primero (INSTANTÁNEO)
+            const cacheKey = `${CACHE_KEY_CLIENTES}${userId}`;
+            const cachedData = await AsyncStorage.getItem(cacheKey);
+
+            if (cachedData) {
+                const { clientes, timestamp } = JSON.parse(cachedData);
+                const esValido = (Date.now() - timestamp) < CACHE_EXPIRY;
+
+                if (clientes && clientes.length > 0) {
+                    console.log('📦 Clientes cargados del cache:', clientes.length);
+
+                    // Filtrar clientes del día
+                    const clientesHoy = clientes.filter(c =>
+                        c.dia_visita?.toUpperCase().includes(dia)
+                    );
+
+                    setClientesDelDia(clientesHoy);
+                    setTodosLosClientes(clientes);
+                    setLoading(false);
+
+                    // Si el cache es válido, actualizar en segundo plano
+                    if (esValido) {
+                        actualizarClientesEnFondo(dia, cacheKey);
+                        return;
+                    }
+                }
+            }
+
+            // 2. Si no hay cache o expiró, cargar del servidor
+            await cargarClientesDelServidor(dia);
+
+        } catch (error) {
+            console.error('Error con cache:', error);
+            await cargarClientesDelServidor(dia);
+        }
+    };
+
+    // 🆕 Actualizar clientes en segundo plano sin bloquear UI
+    const actualizarClientesEnFondo = async (dia, cacheKey) => {
+        setActualizandoEnFondo(true);
+        try {
+            const urlTodos = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
+            const response = await fetch(urlTodos);
+
+            if (response.ok) {
+                const data = await response.json();
+                const clientesFormateados = data.map(c => ({
+                    id: c.id.toString(),
+                    nombre: c.nombre_contacto || c.nombre_negocio,
+                    negocio: c.nombre_negocio,
+                    celular: c.telefono || '',
+                    direccion: c.direccion || '',
+                    dia_visita: c.dia_visita,
+                    esDeRuta: true
+                }));
+
+                // Guardar en cache
+                await AsyncStorage.setItem(cacheKey, JSON.stringify({
+                    clientes: clientesFormateados,
+                    timestamp: Date.now()
+                }));
+
+                // Actualizar estado
+                setTodosLosClientes(clientesFormateados);
+                const clientesHoy = clientesFormateados.filter(c =>
+                    c.dia_visita?.toUpperCase().includes(dia)
+                );
+                setClientesDelDia(clientesHoy);
+
+                console.log('✅ Clientes actualizados en segundo plano');
+            }
+        } catch (error) {
+            console.log('⚠️ Error actualizando en fondo:', error.message);
+        } finally {
+            setActualizandoEnFondo(false);
+        }
+    };
+
+    // 🆕 Cargar clientes del servidor (con timeout largo)
+    const cargarClientesDelServidor = async (dia) => {
+        try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 segundos
 
             try {
-                // 1. Cargar clientes del día actual
-                const urlDia = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}&dia=${dia}`;
-
-                const responseDia = await fetch(urlDia, { signal: controller.signal });
-                if (responseDia.ok) {
-                    const dataDia = await responseDia.json();
-                    const clientesFormateados = dataDia.map(c => ({
-                        id: c.id.toString(),
-                        nombre: c.nombre_contacto || c.nombre_negocio,
-                        negocio: c.nombre_negocio,
-                        celular: c.telefono || '',
-                        direccion: c.direccion || '',
-                        dia_visita: c.dia_visita,
-                        esDeRuta: true
-                    }));
-                    setClientesDelDia(clientesFormateados);
-                }
-
-                // 2. Cargar todos los clientes de la ruta (sin filtro de día)
+                // Cargar todos los clientes de una vez
                 const urlTodos = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
-                const responseTodos = await fetch(urlTodos, { signal: controller.signal });
-                if (responseTodos.ok) {
-                    const dataTodos = await responseTodos.json();
-                    const todosFormateados = dataTodos.map(c => ({
+                const response = await fetch(urlTodos, { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const clientesFormateados = data.map(c => ({
                         id: c.id.toString(),
                         nombre: c.nombre_contacto || c.nombre_negocio,
                         negocio: c.nombre_negocio,
@@ -81,14 +153,27 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, us
                         dia_visita: c.dia_visita,
                         esDeRuta: true
                     }));
-                    setTodosLosClientes(todosFormateados);
-                }
 
-                clearTimeout(timeoutId);
+                    // Guardar en cache
+                    const cacheKey = `${CACHE_KEY_CLIENTES}${userId}`;
+                    await AsyncStorage.setItem(cacheKey, JSON.stringify({
+                        clientes: clientesFormateados,
+                        timestamp: Date.now()
+                    }));
+
+                    // Filtrar clientes del día
+                    const clientesHoy = clientesFormateados.filter(c =>
+                        c.dia_visita?.toUpperCase().includes(dia)
+                    );
+
+                    setClientesDelDia(clientesHoy);
+                    setTodosLosClientes(clientesFormateados);
+                    console.log('📥 Clientes cargados del servidor:', clientesFormateados.length);
+                }
             } catch (fetchError) {
                 clearTimeout(timeoutId);
                 if (fetchError.name === 'AbortError') {
-                    console.error('⏱️ Timeout cargando clientes');
+                    console.error('⏱️ Timeout cargando clientes del servidor');
                 } else {
                     throw fetchError;
                 }

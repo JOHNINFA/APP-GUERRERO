@@ -61,6 +61,46 @@ const eliminarDeColaPendientes = async (ventaId) => {
 };
 
 /**
+ * 🆕 Verifica si una venta ya existe en el servidor para evitar duplicados
+ */
+const verificarVentaExiste = async (ventaId, ventaData) => {
+    try {
+        // Obtener la fecha de la venta (puede venir como string ISO o como fecha corta)
+        let fechaVenta = ventaData.fecha;
+        if (fechaVenta && fechaVenta.includes('T')) {
+            fechaVenta = fechaVenta.split('T')[0]; // Extraer solo YYYY-MM-DD
+        }
+
+        // Buscar ventas del mismo cliente
+        const clienteNombre = encodeURIComponent(ventaData.cliente_nombre || '');
+        const response = await fetch(`${API_BASE}/ventas-ruta/?search=${clienteNombre}`);
+
+        if (response.ok) {
+            const ventas = await response.json();
+
+            // Buscar coincidencia exacta por: cliente + total + fecha
+            const existe = ventas.some(v => {
+                const mismoCliente = v.cliente_nombre?.toUpperCase() === ventaData.cliente_nombre?.toUpperCase();
+                const mismoTotal = Math.abs(parseFloat(v.total) - parseFloat(ventaData.total)) < 1;
+                const mismaFecha = fechaVenta && v.fecha?.includes(fechaVenta);
+
+                if (mismoCliente && mismoTotal && mismaFecha) {
+                    console.log(`🔍 Encontrada venta existente: ID ${v.id} - ${v.cliente_nombre} - $${v.total}`);
+                    return true;
+                }
+                return false;
+            });
+
+            return existe;
+        }
+        return false;
+    } catch (error) {
+        console.warn('⚠️ No se pudo verificar si la venta existe:', error.message);
+        return false; // En caso de error, asumir que no existe para intentar enviar
+    }
+};
+
+/**
  * Intenta sincronizar todas las ventas pendientes
  */
 export const sincronizarVentasPendientes = async () => {
@@ -71,6 +111,7 @@ export const sincronizarVentasPendientes = async () => {
 
     sincronizandoCola = true;
     let sincronizadas = 0;
+    let yaExistentes = 0;
 
     try {
         // Verificar conexión
@@ -87,6 +128,15 @@ export const sincronizarVentasPendientes = async () => {
 
         for (const venta of pendientes) {
             try {
+                // 🆕 Verificar si la venta ya existe en el servidor
+                const existe = await verificarVentaExiste(venta.id, venta.data);
+                if (existe) {
+                    console.log(`🔍 Venta ${venta.id} ya existe en servidor, eliminando de cola`);
+                    await eliminarDeColaPendientes(venta.id);
+                    yaExistentes++;
+                    continue;
+                }
+
                 await enviarVentaRuta(venta.data);
                 await eliminarDeColaPendientes(venta.id);
                 sincronizadas++;
@@ -102,9 +152,9 @@ export const sincronizarVentasPendientes = async () => {
         }
 
         const pendientesRestantes = await obtenerVentasPendientes();
-        console.log(`📊 Sincronización completada: ${sincronizadas} exitosas, ${pendientesRestantes.length} pendientes`);
+        console.log(`📊 Sincronización completada: ${sincronizadas} nuevas, ${yaExistentes} ya existían, ${pendientesRestantes.length} pendientes`);
 
-        return { sincronizadas, pendientes: pendientesRestantes.length };
+        return { sincronizadas, pendientes: pendientesRestantes.length, yaExistentes };
     } catch (error) {
         console.error('Error en sincronización:', error);
         return { sincronizadas: 0, pendientes: 0, error: error.message };

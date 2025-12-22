@@ -90,9 +90,9 @@ export const enviarVentaRuta = async (ventaData) => {
             fotos: ventaData.foto_vencidos ? 'PRESENTES' : 'NO'
         });
 
-        // 🆕 Agregar timeout de 15 segundos
+        // 🆕 Agregar timeout de 45 segundos (para fotos pesadas)
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
 
         try {
             const response = await fetch(`${API_BASE}/ventas-ruta/`, {

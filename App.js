@@ -3,6 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 
 import { ImageBackground, StyleSheet, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import LoginScreen from './LoginScreen';
 import MainScreen from './MainScreen';
 import OptionsScreen from './components/OptionsScreen';
@@ -15,9 +16,45 @@ import SeleccionarDia from './components/rutas/SeleccionarDia';
 import ListaClientes from './components/rutas/ListaClientes';
 import 'react-native-gesture-handler';
 import { inicializarProductos } from './services/ventasService';
+import { API_URL } from './config';
 
 
 const Stack = createStackNavigator();
+
+// 🆕 Función para precargar clientes de todos los vendedores
+const precargarClientes = async () => {
+  try {
+    // Intentar obtener el último userId del AsyncStorage
+    const lastUserId = await AsyncStorage.getItem('last_user_id');
+    if (!lastUserId) return;
+
+    console.log('🚀 Precargando clientes para', lastUserId);
+
+    const response = await fetch(`${API_URL}/api/clientes-ruta/?vendedor_id=${lastUserId}`);
+    if (response.ok) {
+      const data = await response.json();
+      const clientesFormateados = data.map(c => ({
+        id: c.id.toString(),
+        nombre: c.nombre_contacto || c.nombre_negocio,
+        negocio: c.nombre_negocio,
+        celular: c.telefono || '',
+        direccion: c.direccion || '',
+        dia_visita: c.dia_visita,
+        esDeRuta: true
+      }));
+
+      // Guardar en cache
+      await AsyncStorage.setItem(`clientes_cache_${lastUserId}`, JSON.stringify({
+        clientes: clientesFormateados,
+        timestamp: Date.now()
+      }));
+
+      console.log('✅ Clientes precargados:', clientesFormateados.length);
+    }
+  } catch (error) {
+    console.log('⚠️ Error precargando clientes:', error.message);
+  }
+};
 
 const App = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -25,14 +62,27 @@ const App = () => {
   const [vendedorNombre, setVendedorNombre] = useState(null);
 
   useEffect(() => {
-    // Sincronizar productos al iniciar la app
-    inicializarProductos();
+    // 🚀 Sincronizar productos y clientes al iniciar la app (en paralelo)
+    const precargarDatos = async () => {
+      await Promise.all([
+        inicializarProductos(),
+        precargarClientes()
+      ]);
+    };
+    precargarDatos();
   }, []);
 
   const handleLogin = (loggedIn, username, nombre) => {
     setIsLoggedIn(loggedIn);
     setUserId(username);
     setVendedorNombre(nombre);
+
+    // 🆕 Guardar userId para precarga futura
+    if (username) {
+      AsyncStorage.setItem('last_user_id', username);
+      // Precargar clientes inmediatamente después del login
+      precargarClientes();
+    }
   };
 
   return (
