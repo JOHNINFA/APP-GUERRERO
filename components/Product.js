@@ -44,12 +44,12 @@ const Product = memo(({ product, quantity, onQuantityChange }) => {
   // Determinar el source de la imagen
   const getImageSource = () => {
     if (!product.image) return null;
-    
+
     // Si es una URL (string que empieza con http o data:image)
     if (typeof product.image === 'string') {
       return { uri: product.image };
     }
-    
+
     // Si es un require() local
     return product.image;
   };
@@ -76,7 +76,6 @@ const Product = memo(({ product, quantity, onQuantityChange }) => {
             keyboardType="numeric"
             value={quantity === '0' ? '' : quantity}
             onChangeText={handleQuantityChange}
-            textAlign="center"
             onFocus={handleInputFocus}
             onBlur={handleInputBlur}
           />
@@ -150,6 +149,12 @@ const styles = StyleSheet.create({
   },
   inputHighlighted: {
     backgroundColor: '#f0f0f0', // Sombreado gris suave
+    textAlign: 'center',
+  },
+  inputFocused: {
+    borderColor: '#00ad53',
+    borderWidth: 1,
+    textAlign: 'center',
   },
 
 

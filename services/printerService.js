@@ -44,12 +44,13 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
   if (vencidas && vencidas.length > 0) {
     vencidasHTML = `
       <div style="margin-top: 10px; border-top: 1px dashed black; padding-top: 5px;">
-        <div style="font-weight: bold; font-size: 12px;">PRODUCTOS VENCIDOS</div>
+        <div style="font-weight: bold; font-size: 12px;">CAMBIOS REALIZADOS</div>
         <table style="width: 100%;">
           ${vencidas.map(v => `
             <tr>
               <td style="font-size: 11px;">${v.nombre}</td>
-              <td style="text-align: right; font-size: 11px;">${v.cantidad}</td>
+              <td style="text-align: center; font-size: 11px;">${v.cantidad}</td>
+              <td style="text-align: right; font-size: 11px; font-style: italic;">(Cambio)</td>
             </tr>
           `).join('')}
         </table>

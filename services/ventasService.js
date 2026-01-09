@@ -392,6 +392,11 @@ export const buscarClientes = async (query) => {
  */
 export const guardarCliente = async (cliente) => {
     try {
+        // 🆕 Validar que se haya seleccionado una ruta
+        if (!cliente.rutaId) {
+            throw new Error('Debes seleccionar una ruta para guardar el cliente');
+        }
+
         const clientes = await obtenerClientes();
 
         // Generar ID único
@@ -403,59 +408,59 @@ export const guardarCliente = async (cliente) => {
             celular: cliente.celular,
             direccion: cliente.direccion,
             diasVisita: cliente.diasVisita || [],
-            rutaId: cliente.rutaId || null,
+            rutaId: cliente.rutaId,
             activo: true
         };
 
-        // Guardar localmente
-        clientes.push(nuevoCliente);
-        await AsyncStorage.setItem('clientes', JSON.stringify(clientes));
-
-        // 🆕 Enviar al backend si hay conexión
+        // 🆕 Enviar al backend (ahora siempre porque validamos rutaId arriba)
+        // Primero consultamos cuántos clientes tiene la ruta para asignar orden consecutivo
+        let ordenCliente = 999; // Valor por defecto
         try {
-            // Si se seleccionó una ruta, agregar al modelo ClienteRuta
-            console.log('🔍 Verificando si se puede enviar al backend...');
-            console.log('   - rutaId:', cliente.rutaId);
-            console.log('   - diasVisita:', cliente.diasVisita);
-
-            if (cliente.rutaId) {
-                const clienteRutaData = {
-                    ruta: cliente.rutaId,
-                    nombre_negocio: cliente.negocio || cliente.nombre,
-                    nombre_contacto: cliente.nombre,
-                    telefono: cliente.celular || '',
-                    direccion: cliente.direccion || '',
-                    dia_visita: (cliente.diasVisita || []).join(','), // LUNES,MIERCOLES,VIERNES
-                    activo: true,
-                    orden: 999 // Al final de la ruta
-                };
-
-                console.log('📤 Enviando al backend:', JSON.stringify(clienteRutaData));
-
-                const response = await fetch(`${API_BASE}/clientes-ruta/`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(clienteRutaData)
-                });
-
-                console.log('📥 Respuesta status:', response.status);
-
-                if (response.ok) {
-                    const clienteGuardado = await response.json();
-                    console.log('✅ Cliente guardado en backend:', clienteGuardado.id);
-                    nuevoCliente.backendId = clienteGuardado.id;
-                } else {
-                    const errorText = await response.text();
-                    console.warn('⚠️ Error guardando cliente en backend:', response.status, errorText);
-                }
-            } else {
-                console.log('⚠️ No se seleccionó ruta, cliente solo guardado localmente');
+            const responseRuta = await fetch(`${API_BASE}/clientes-ruta/?ruta=${cliente.rutaId}`);
+            if (responseRuta.ok) {
+                const clientesRuta = await responseRuta.json();
+                ordenCliente = clientesRuta.length + 1; // Siguiente número consecutivo
+                console.log(`📊 Ruta tiene ${clientesRuta.length} clientes, nuevo orden: ${ordenCliente}`);
             }
         } catch (error) {
-            console.warn('⚠️ Error enviando cliente al backend (offline?):', error.message);
+            console.warn('⚠️ No se pudo obtener orden, usando 999:', error.message);
         }
 
-        return nuevoCliente;
+        const clienteRutaData = {
+            ruta: cliente.rutaId,
+            nombre_negocio: cliente.negocio || cliente.nombre,
+            nombre_contacto: cliente.nombre,
+            telefono: cliente.celular || '',
+            direccion: cliente.direccion || '',
+            tipo_negocio: cliente.tipoNegocio || '',  // 🆕 Tipo de negocio
+            dia_visita: (cliente.diasVisita || []).join(','), // LUNES,MIERCOLES,VIERNES
+            activo: true,
+            orden: ordenCliente // 🆕 Orden consecutivo calculado
+        };
+
+        console.log('📤 Enviando cliente al backend:', JSON.stringify(clienteRutaData));
+
+        const response = await fetch(`${API_BASE}/clientes-ruta/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(clienteRutaData)
+        });
+
+        if (response.ok) {
+            const clienteGuardado = await response.json();
+            console.log('✅ Cliente guardado en backend:', clienteGuardado.id);
+            nuevoCliente.backendId = clienteGuardado.id;
+
+            // Guardar localmente solo si se guardó en el backend
+            clientes.push(nuevoCliente);
+            await AsyncStorage.setItem('clientes', JSON.stringify(clientes));
+
+            return nuevoCliente;
+        } else {
+            const errorText = await response.text();
+            console.error('❌ Error guardando cliente en backend:', response.status, errorText);
+            throw new Error(`No se pudo guardar el cliente en el servidor: ${errorText}`);
+        }
     } catch (error) {
         console.error('Error al guardar cliente:', error);
         throw error;
@@ -525,6 +530,7 @@ export const guardarVenta = async (venta) => {
         }));
 
         const ventaBackend = {
+            id_local: nuevaVenta.id, // 🆕 ID único para detectar duplicados
             vendedor_id: venta.vendedor_id || venta.vendedor,
             cliente_nombre: venta.cliente_nombre,
             nombre_negocio: venta.cliente_negocio || '',

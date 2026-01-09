@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Alert, SafeAreaView, StatusBar, Platform, RefreshControl, Modal, Linking } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Alert, SafeAreaView, StatusBar, Platform, RefreshControl, Modal, Linking, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker'; // 🆕 Import DatePicker
 import ClienteSelector from './ClienteSelector';
@@ -48,8 +48,145 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     const [clienteSeleccionado, setClienteSeleccionado] = useState(null);
     const [busquedaProducto, setBusquedaProducto] = useState('');
     const [productos, setProductos] = useState([]);
+    const [categorias, setCategorias] = useState([]);
     const [carrito, setCarrito] = useState({});
-    const [descuento, setDescuento] = useState(0);
+    const [descuento, setDescuento] = useState(0); // Restaurado
+
+    // 🆕 Estados para Pedidos Asignados
+    const [pedidosPendientes, setPedidosPendientes] = useState([]);
+    const [modalPedidosVisible, setModalPedidosVisible] = useState(false);
+
+    // 🆕 Estados para Novedades (No Entregado)
+    const [modalNovedadVisible, setModalNovedadVisible] = useState(false);
+    const [motivoNovedad, setMotivoNovedad] = useState('');
+    const [ventasDelDia, setVentasDelDia] = useState([]); // 🆕 Almacenar ventas del día
+    const [pedidoEnNovedad, setPedidoEnNovedad] = useState(null);
+
+    // 🆕 Cargar Pedidos
+    const verificarPedidosPendientes = async (fechaStr) => {
+        try {
+            // Usar fecha proporcionada o la seleccionada
+            let fecha = fechaStr;
+            if (!fecha && fechaSeleccionada) {
+                fecha = fechaSeleccionada.toISOString().split('T')[0];
+            }
+            // Si no hay fecha ni userId, salir
+            if (!fecha || !userId) return;
+
+            console.log(`📦 Buscando pedidos para ${userId} en ${fecha}`);
+            const response = await fetch(`${ENDPOINTS.PEDIDOS_PENDIENTES}?vendedor_id=${userId}&fecha=${fecha}`);
+
+            if (response.ok) {
+                const data = await response.json();
+                if (Array.isArray(data)) {
+                    setPedidosPendientes(data);
+                    console.log(`✅ ${data.length} pedidos encontrados`);
+                }
+            }
+        } catch (e) {
+            console.log('Error buscando pedidos:', e);
+        }
+    };
+
+    const cargarPedidoEnCarrito = (pedido) => {
+        Alert.alert(
+            '🔄 Cargar Pedido',
+            'Esto reemplazará los productos actuales del carrito. ¿Continuar?',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Cargar',
+                    onPress: () => {
+                        const nuevoCarrito = {};
+                        let encontrados = 0;
+
+                        pedido.detalles.forEach(d => {
+                            // Buscar producto en catálogo local por ID o nombre
+                            const prodReal = productos.find(p => p.id === d.producto || p.nombre === d.producto_nombre);
+
+                            if (prodReal) {
+                                encontrados++;
+                                // Construir objeto carrito con ID como clave
+                                nuevoCarrito[prodReal.id] = {
+                                    ...prodReal, // ID, nombre, imagen, etc
+                                    cantidad: d.cantidad,
+                                    precio: parseFloat(d.precio_unitario), // Usar precio del pedido
+                                    subtotal: parseFloat(d.precio_unitario) * d.cantidad
+                                };
+                            }
+                        });
+
+                        setCarrito(nuevoCarrito);
+                        setModalPedidosVisible(false);
+
+                        // Intentar pre-seleccionar cliente (si existe lógica simple)
+                        // Por ahora solo avisar
+                        setTimeout(() => {
+                            Alert.alert(
+                                '✅ Pedido Cargado',
+                                `Se cargaron ${encontrados} productos del pedido.\n\nPor favor selecciona el cliente y confirma la venta.`
+                            );
+                        }, 500);
+                    }
+                }
+            ]
+        );
+    };
+
+    // 🆕 Reportar Novedad (No entregado)
+    const confirmarNovedad = async () => {
+        if (!motivoNovedad.trim()) {
+            Alert.alert('Atención', 'Por favor escribe el motivo de la no entrega.');
+            return;
+        }
+
+        try {
+            const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_NO_ENTREGADO(pedidoEnNovedad.id), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ motivo: motivoNovedad })
+            });
+
+            if (response.ok) {
+                Alert.alert('Registrado', 'La novedad ha sido reportada y el pedido se ha retirado de la lista.');
+                setModalNovedadVisible(false);
+                setMotivoNovedad('');
+                // Recargar lista
+                const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+                verificarPedidosPendientes(fechaStr);
+            } else {
+                Alert.alert('Error', 'No se pudo registrar la novedad.');
+            }
+        } catch (error) {
+            console.error(error);
+            Alert.alert('Error', 'Error de conexión.');
+        }
+    };
+
+    const marcarPedidoEntregado = async (pedido) => {
+        Alert.alert(
+            'Confirmar Entrega',
+            '¿Marcar este pedido como entregado sin generar venta nueva?',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Confirmar',
+                    onPress: async () => {
+                        try {
+                            const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_ENTREGADO(pedido.id), { method: 'POST' });
+                            const data = await response.json();
+                            if (data.success) {
+                                Alert.alert('✅ Éxito', 'Pedido marcado como entregado');
+                                verificarPedidosPendientes(); // Recargar
+                            }
+                        } catch (e) {
+                            Alert.alert('Error', 'No se pudo actualizar el pedido');
+                        }
+                    }
+                }
+            ]
+        );
+    };
     const [nota, setNota] = useState('');
     const [clientes, setClientes] = useState([]);
 
@@ -105,6 +242,9 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             // 🆕 Llamar al backend para abrir turno (persistir estado)
             try {
                 const fechaFormatted = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+                // 🆕 Cargar pedidos
+                verificarPedidosPendientes(fechaFormatted);
 
                 const response = await fetch(ENDPOINTS.TURNO_ABRIR, {
                     method: 'POST',
@@ -185,7 +325,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             const fechaDia = fecha.toISOString().split('T')[0];
 
             // Filtrar ventas del día
-            const ventasDelDia = todasLasVentas.filter(venta => {
+            const ventasHoy = todasLasVentas.filter(venta => {
                 const fechaVenta = venta.fecha.split('T')[0];
                 return fechaVenta === fechaDia;
             });
@@ -193,18 +333,19 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             // 🆕 DEBUG: Mostrar cada venta encontrada
             console.log(`📊 Buscando ventas del día ${fechaDia}...`);
             console.log(`📊 Total ventas guardadas: ${todasLasVentas.length}`);
-            ventasDelDia.forEach((v, i) => {
+            ventasHoy.forEach((v, i) => {
                 console.log(`   ${i + 1}. Cliente: ${v.cliente_nombre || 'N/A'}, Total: ${formatearMoneda(v.total)}, Fecha: ${v.fecha}`);
             });
 
             // Calcular totales
-            const cantidadVentas = ventasDelDia.length;
-            const totalDinero = ventasDelDia.reduce((sum, v) => sum + (v.total || 0), 0);
+            const cantidadVentas = ventasHoy.length;
+            const totalDinero = ventasHoy.reduce((sum, v) => sum + (v.total || 0), 0);
 
             console.log(`📊 Ventas del día ${fechaDia}: ${cantidadVentas} ventas, ${formatearMoneda(totalDinero)}`);
 
             setTotalVentasHoy(cantidadVentas);
             setTotalDineroHoy(totalDinero);
+            setVentasDelDia(ventasHoy); // 🆕 Guardar ventas para indicador visual
         } catch (error) {
             console.error('Error cargando ventas del día:', error);
         }
@@ -221,9 +362,12 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 // Hay turno abierto - saltar modal de selección
                 setDiaSeleccionado(data.dia);
 
-                // Parsear fecha del turno
-                const fechaTurno = new Date(data.fecha + 'T12:00:00');
+                // Restaurar fecha seleccionada del turno
+                const fechaTurno = new Date(data.fecha + 'T12:00:00'); // Forzar hora mediodía para evitar UTC shift
                 setFechaSeleccionada(fechaTurno);
+
+                // 🆕 Cargar pedidos
+                verificarPedidosPendientes(data.fecha);
 
                 // Parsear hora de apertura
                 if (data.hora_apertura) {
@@ -643,7 +787,20 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
             setStockCargue(nuevoStock);
 
-            // Cerrar modal inmediatamente
+            // 🆕 Actualizar contador y agregar venta al estado inmediatamente
+            setTotalVentasHoy(prev => prev + 1);
+            setTotalDineroHoy(prev => prev + ventaConDatos.total);
+
+            // ✅ Agregar venta recién guardada al estado inmediatamente (sin esperar recarga)
+            setVentasDelDia(prev => [...prev, {
+                ...ventaGuardada,
+                cliente_nombre: ventaConDatos.cliente_nombre,
+                cliente_negocio: ventaConDatos.cliente_negocio,
+                fecha: ventaConDatos.fecha,
+                total: ventaConDatos.total
+            }]);
+
+            // Cerrar modal después de actualizar datos
             setMostrarResumen(false);
 
             // Actualizar contador de pendientes en segundo plano (no bloquea)
@@ -695,10 +852,6 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     alertOptions
                 );
             }, 500);
-
-            // 🆕 Actualizar contador de ventas del día
-            setTotalVentasHoy(prev => prev + 1);
-            setTotalDineroHoy(prev => prev + ventaConDatos.total);
         } catch (error) {
             console.error('❌ Error en confirmarVenta:', error);
             Alert.alert('Error', 'No se pudo guardar la venta');
@@ -793,8 +946,35 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
     // Manejar selección de cliente
     const handleSeleccionarCliente = (cliente) => {
+        // 🆕 Verificar si ya le vendió hoy
+        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+        const yaVendidoHoy = ventasDelDia.some(venta => {
+            const vNegocio = norm(venta.cliente_negocio);
+            const vNombre = norm(venta.cliente_nombre);
+            const cNegocio = norm(cliente.negocio);
+            const cNombre = norm(cliente.nombre);
+            return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
+        });
+
+        if (yaVendidoHoy) {
+            Alert.alert(
+                '⚠️ Cliente con Venta',
+                `Ya se realizó una venta a ${cliente.negocio || cliente.nombre} el día de hoy.\n\n¿Deseas continuar de todas formas?`,
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    {
+                        text: 'Sí, Continuar',
+                        onPress: () => setClienteSeleccionado(cliente)
+                    }
+                ]
+            );
+            return;
+        }
+
         setClienteSeleccionado(cliente);
     };
+
+
 
     // Manejar cliente guardado
     const handleClienteGuardado = async (nuevoCliente) => {
@@ -1080,6 +1260,20 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 </View>
             )}
 
+            {/* 🆕 Botón Pedidos Asignados - DESACTIVADO (ahora se muestran en selector de clientes) */}
+            {/* {pedidosPendientes.length > 0 && turnoAbierto && (
+                <TouchableOpacity
+                    style={styles.btnPedidosFlotante}
+                    onPress={() => setModalPedidosVisible(true)}
+                >
+                    <Ionicons name="cube-outline" size={24} color="#fff" />
+                    <Text style={styles.btnPedidosTexto}>
+                        📦 Ver {pedidosPendientes.length} Pedidos Asignados
+                    </Text>
+                    <Ionicons name="chevron-forward" size={20} color="#fff" />
+                </TouchableOpacity>
+            )} */}
+
             {/* Header - Cliente */}
             <View style={styles.headerCliente}>
                 <TouchableOpacity
@@ -1104,6 +1298,23 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                         </Text>
                     </View>
                     <Ionicons name="chevron-forward" size={20} color="#003d88" />
+
+                    {/* 🆕 Check verde si ya se le vendió hoy */}
+                    {clienteSeleccionado && (() => {
+                        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                        const yaVendido = ventasDelDia.some(venta => {
+                            const vNegocio = norm(venta.cliente_negocio);
+                            const vNombre = norm(venta.cliente_nombre);
+                            const cNegocio = norm(clienteSeleccionado.negocio);
+                            const cNombre = norm(clienteSeleccionado.nombre);
+                            return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
+                        });
+                        return yaVendido ? (
+                            <View style={styles.headerCheckVendido}>
+                                <Ionicons name="checkmark-circle" size={24} color="#10b981" />
+                            </View>
+                        ) : null;
+                    })()}
                 </TouchableOpacity>
             </View>
 
@@ -1264,6 +1475,14 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 visible={mostrarSelectorCliente}
                 onClose={() => setMostrarSelectorCliente(false)}
                 onSelectCliente={handleSeleccionarCliente}
+                ventasDelDia={ventasDelDia} // 🆕 Pasar ventas del día
+                pedidosPendientes={pedidosPendientes} // 🆕 Pasar pedidos pendientes
+                onCargarPedido={cargarPedidoEnCarrito} // 🆕 Cargar pedido en carrito
+                onMarcarEntregado={marcarPedidoEntregado} // 🆕 Marcar como entregado
+                onMarcarNoEntregado={(pedido) => { // 🆕 Marcar como no entregado
+                    setPedidoEnNovedad(pedido);
+                    setModalNovedadVisible(true);
+                }}
                 onNuevoCliente={() => {
                     setMostrarSelectorCliente(false);
                     setMostrarModalCliente(true);
@@ -1275,8 +1494,9 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             <ClienteModal
                 visible={mostrarModalCliente}
                 onClose={() => setMostrarModalCliente(false)}
+                onSelect={handleSeleccionarCliente}
                 onClienteGuardado={handleClienteGuardado}
-                vendedorId={userId}
+                clientes={clientes}
             />
 
 
@@ -1352,11 +1572,221 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     </View>
                 </View>
             </Modal>
+            {/* 🆕 MODAL PEDIDOS ASIGNADOS */}
+            <Modal
+                visible={modalPedidosVisible}
+                animationType="slide"
+                transparent={true}
+                onRequestClose={() => setModalPedidosVisible(false)}
+            >
+                <View style={[styles.modalOverlay, { justifyContent: 'flex-end' }]}>
+                    <View style={[styles.modalContent, { maxHeight: '85%', width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                            <Text style={styles.modalTitle}>📦 Pedidos Asignados ({pedidosPendientes.length})</Text>
+                            <TouchableOpacity onPress={() => setModalPedidosVisible(false)}>
+                                <Ionicons name="close-circle" size={30} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
+                            {pedidosPendientes.length === 0 ? (
+                                <Text style={{ textAlign: 'center', color: '#666', marginTop: 20 }}>No tienes pedidos pendientes</Text>
+                            ) : (
+                                pedidosPendientes.map((p) => (
+                                    <View key={p.id} style={styles.pedidoCard}>
+                                        <TouchableOpacity
+                                            style={styles.btnNovedadX}
+                                            onPress={() => {
+                                                setPedidoEnNovedad(p);
+                                                setModalNovedadVisible(true);
+                                            }}
+                                        >
+                                            <Ionicons name="close-circle" size={28} color="#dc3545" />
+                                        </TouchableOpacity>
+
+                                        <View style={styles.pedidoHeader}>
+                                            <Text style={styles.pedidoCliente}>{p.destinatario || 'Cliente'}</Text>
+                                            <Text style={styles.pedidoTotal}>${parseFloat(p.total).toLocaleString()}</Text>
+                                        </View>
+                                        <Text style={styles.pedidoInfo}>📍 {p.direccion_entrega || 'Sin dirección'}</Text>
+                                        <Text style={styles.pedidoInfo}>📄 Pedido #{p.numero_pedido} • {p.fecha.split('T')[0]}</Text>
+                                        <Text style={[styles.pedidoInfo, { fontStyle: 'italic' }]}>{p.nota}</Text>
+
+                                        <View style={styles.pedidoDetallesBox}>
+                                            {p.detalles.map((d, idx) => (
+                                                <Text key={idx} style={styles.pedidoDetalleText}>
+                                                    • {d.producto_nombre || 'Producto'} x{d.cantidad}
+                                                </Text>
+                                            ))}
+                                        </View>
+
+                                        <View style={styles.pedidoAccionesRow}>
+                                            <TouchableOpacity
+                                                style={[styles.botonAccion, { backgroundColor: '#28a745', flex: 1, marginRight: 5 }]}
+                                                onPress={() => cargarPedidoEnCarrito(p)}
+                                            >
+                                                <Ionicons name="cart" size={18} color="white" />
+                                                <Text style={styles.textoBotonAccion}>Vender (Carrito)</Text>
+                                            </TouchableOpacity>
+
+                                            <TouchableOpacity
+                                                style={[styles.botonAccion, { backgroundColor: '#e9ecef', flex: 1, marginLeft: 5 }]}
+                                                onPress={() => marcarPedidoEntregado(p)}
+                                            >
+                                                <Ionicons name="checkmark-done" size={18} color="#003d88" />
+                                                <Text style={[styles.textoBotonAccion, { color: '#003d88' }]}>Solo Entregar</Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                    </View>
+                                ))
+                            )}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* 🆕 MODAL REPORTE NOVEDAD */}
+            <Modal
+                visible={modalNovedadVisible}
+                animationType="fade"
+                transparent={true}
+                onRequestClose={() => setModalNovedadVisible(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, { width: '85%' }]}>
+                        <Text style={[styles.modalTitle, { color: '#dc3545' }]}>⚠️ Reportar No Entrega</Text>
+                        <Text style={{ marginBottom: 10, color: '#666' }}>
+                            ¿Por qué no se entregó el pedido de {pedidoEnNovedad?.destinatario}?
+                        </Text>
+
+                        <TextInput
+                            style={{
+                                borderWidth: 1,
+                                borderColor: '#ccc',
+                                borderRadius: 8,
+                                padding: 10,
+                                height: 80,
+                                textAlignVertical: 'top',
+                                marginBottom: 15,
+                                backgroundColor: '#f9f9f9'
+                            }}
+                            placeholder="Escribe el motivo (ej: Cerrado, Sin dinero...)"
+                            value={motivoNovedad}
+                            onChangeText={setMotivoNovedad}
+                            multiline
+                            autoFocus
+                        />
+
+                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
+                            <TouchableOpacity
+                                style={[styles.botonAccion, { backgroundColor: '#e9ecef', paddingHorizontal: 20 }]}
+                                onPress={() => setModalNovedadVisible(false)}
+                            >
+                                <Text style={{ color: '#666', fontWeight: 'bold' }}>Cancelar</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.botonAccion, { backgroundColor: '#dc3545', paddingHorizontal: 20 }]}
+                                onPress={confirmarNovedad}
+                            >
+                                <Text style={{ color: 'white', fontWeight: 'bold' }}>Reportar</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 };
 
 const styles = StyleSheet.create({
+    btnNovedadX: {
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        zIndex: 10,
+        padding: 5,
+    },
+    // 🆕 Estilos Pedidos
+    btnPedidosFlotante: {
+        backgroundColor: '#00ad53', // Verde App
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 10, // Más compacto
+        paddingHorizontal: 15,
+        marginHorizontal: 15,
+        marginBottom: 10, // Menos espacio
+        marginTop: 5,
+        borderRadius: 10,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 3,
+        elevation: 3,
+    },
+    btnPedidosTexto: {
+        color: 'white',
+        fontWeight: 'bold',
+        fontSize: 15, // Texto un poco más pequeño
+        marginLeft: 10,
+        flex: 1,
+    },
+    pedidoCard: {
+        backgroundColor: '#f8f9fa',
+        padding: 15,
+        borderRadius: 10,
+        marginBottom: 15,
+        borderWidth: 1,
+        borderColor: '#dee2e6',
+    },
+    pedidoHeader: {
+        marginBottom: 8,
+        paddingRight: 40, // Espacio para la X
+    },
+    pedidoCliente: {
+        fontSize: 17,
+        fontWeight: 'bold',
+        color: '#212529',
+        marginBottom: 4,
+    },
+    pedidoTotal: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#28a745',
+    },
+    pedidoInfo: {
+        color: '#6c757d',
+        marginBottom: 2,
+        fontSize: 14,
+    },
+    pedidoDetallesBox: {
+        marginTop: 10,
+        padding: 10,
+        backgroundColor: '#fff',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#e9ecef',
+    },
+    pedidoDetalleText: {
+        color: '#495057',
+        fontSize: 14,
+        marginBottom: 2,
+    },
+    pedidoAccionesRow: {
+        flexDirection: 'row',
+        marginTop: 15,
+    },
+    botonAccion: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 12,
+        borderRadius: 8,
+    },
+    textoBotonAccion: {
+        fontWeight: 'bold',
+        marginLeft: 5,
+        fontSize: 14,
+    },
     container: {
         flex: 1,
         backgroundColor: '#f5f5f5',
@@ -1376,6 +1806,20 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         borderWidth: 1,
         borderColor: '#003d88',
+        position: 'relative',
+    },
+    headerCheckVendido: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: 'white',
+        borderRadius: 12,
+        padding: 2,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 3,
+        elevation: 4,
     },
     clienteInfo: {
         marginLeft: 10,

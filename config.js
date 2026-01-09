@@ -21,4 +21,9 @@ export const ENDPOINTS = {
   TURNO_VERIFICAR: `${API_URL}/api/turno/verificar/`,
   TURNO_ABRIR: `${API_URL}/api/turno/abrir/`,
   TURNO_CERRAR: `${API_URL}/api/turno/cerrar/`,
+
+  // 🆕 Gestión de Pedidos
+  PEDIDOS_PENDIENTES: `${API_URL}/api/pedidos/pendientes_vendedor/`,
+  PEDIDO_MARCAR_ENTREGADO: (id) => `${API_URL}/api/pedidos/${id}/marcar_entregado/`,
+  PEDIDO_MARCAR_NO_ENTREGADO: (id) => `${API_URL}/api/pedidos/${id}/marcar_no_entregado/`,
 };

@@ -29,7 +29,19 @@ const DIAS_SEMANA = {
 const CACHE_KEY_CLIENTES = 'clientes_cache_';
 const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 horas
 
-const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, userId, diaSeleccionado }) => {
+const ClienteSelector = ({
+    visible,
+    onClose,
+    onSelectCliente,
+    onNuevoCliente,
+    userId,
+    diaSeleccionado,
+    ventasDelDia = [],
+    pedidosPendientes = [], // 🆕 Lista de pedidos pendientes
+    onCargarPedido, // 🆕 Función para cargar pedido en carrito
+    onMarcarEntregado, // 🆕 Función para marcar pedido como entregado
+    onMarcarNoEntregado // 🆕 Función para marcar pedido como no entregado
+}) => {
     const [clientesDelDia, setClientesDelDia] = useState([]);
     const [todosLosClientes, setTodosLosClientes] = useState([]);
     const [busqueda, setBusqueda] = useState('');
@@ -214,32 +226,102 @@ const ClienteSelector = ({ visible, onClose, onSelectCliente, onNuevoCliente, us
         onClose();
     };
 
-    const renderCliente = ({ item }) => (
-        <TouchableOpacity
-            style={styles.clienteItem}
-            onPress={() => handleSelectCliente(item)}
-        >
-            <View style={styles.clienteIcono}>
-                <Ionicons name="storefront" size={24} color="#003d88" />
-            </View>
-            <View style={styles.clienteInfo}>
-                <Text style={styles.clienteNombre}>{item.negocio}</Text>
-                {item.nombre && item.nombre !== item.negocio && (
-                    <Text style={styles.clienteContacto}>👤 {item.nombre}</Text>
-                )}
-                {item.celular && (
-                    <Text style={styles.clienteDetalle}>📞 {item.celular}</Text>
-                )}
-                {item.direccion && (
-                    <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
-                )}
-                {item.dia_visita && (
-                    <Text style={styles.clienteDia}>📅 {item.dia_visita}</Text>
-                )}
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#666" />
-        </TouchableOpacity>
-    );
+    const renderCliente = ({ item }) => {
+        // 🆕 Verificar si ya le vendieron hoy
+        const norm = (t) => t ? t.toString().toLowerCase().trim() : '';
+        let yaVendido = false;
+
+        if (ventasDelDia && Array.isArray(ventasDelDia) && ventasDelDia.length > 0) {
+            yaVendido = ventasDelDia.some(venta => {
+                const vNegocio = norm(venta.cliente_negocio);
+                const vNombre = norm(venta.cliente_nombre);
+                const cNegocio = norm(item.negocio);
+                const cNombre = norm(item.nombre);
+
+                return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
+            });
+        }
+
+        // 🆕 Verificar si tiene pedidos pendientes
+        const pedidosCliente = pedidosPendientes.filter(p => {
+            const pDestinatario = norm(p.destinatario);
+            const cNegocio = norm(item.negocio);
+            const cNombre = norm(item.nombre);
+            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+        });
+
+        const tienePedidos = pedidosCliente.length > 0;
+        const pedido = tienePedidos ? pedidosCliente[0] : null; // Por ahora tomar el primero
+
+        // Si tiene pedidos, mostrar card especial
+        if (tienePedidos && pedido) {
+            return (
+                <TouchableOpacity
+                    style={[
+                        styles.clienteItem,
+                        styles.clienteItemConPedido, // Fondo rojo transparente
+                    ]}
+                    onPress={() => handleSelectCliente(item)}
+                    activeOpacity={0.9}
+                >
+                    {/* Icono del cliente */}
+                    <View style={styles.clienteIcono}>
+                        <Ionicons name="cube" size={24} color="#dc3545" />
+                    </View>
+
+                    {/* Información del cliente */}
+                    <View style={styles.clienteInfo}>
+                        <Text style={styles.clienteNombre}>{item.negocio}</Text>
+                        {item.nombre && item.nombre !== item.negocio && (
+                            <Text style={styles.clienteContacto}>👤 {item.nombre}</Text>
+                        )}
+                        <Text style={styles.clienteDetalle}>
+                            📦 Pedido #{pedido.numero_pedido} • ${parseFloat(pedido.total).toLocaleString()}
+                        </Text>
+                        {item.direccion && (
+                            <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
+                        )}
+                    </View>
+
+                    {/* Flecha indicadora */}
+                    <Ionicons name="chevron-forward" size={20} color="#dc3545" />
+                </TouchableOpacity>
+            );
+        }
+
+        // Cliente normal (sin pedidos)
+        return (
+            <TouchableOpacity
+                style={[
+                    styles.clienteItem,
+                    yaVendido && styles.clienteItemVendido,
+                    yaVendido && { borderColor: '#00ad53' }
+                ]}
+                onPress={() => handleSelectCliente(item)}
+            >
+                <View style={styles.clienteIcono}>
+                    {yaVendido ? (
+                        <Ionicons name="checkmark-circle" size={24} color="#00ad53" />
+                    ) : (
+                        <Ionicons name="storefront" size={24} color="#003d88" />
+                    )}
+                </View>
+                <View style={styles.clienteInfo}>
+                    <Text style={styles.clienteNombre}>{item.negocio}</Text>
+                    {item.nombre && item.nombre !== item.negocio && (
+                        <Text style={styles.clienteContacto}>👤 {item.nombre}</Text>
+                    )}
+                    {item.celular && (
+                        <Text style={styles.clienteDetalle}>📞 {item.celular}</Text>
+                    )}
+                    {item.direccion && (
+                        <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
+                    )}
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={yaVendido ? "#00ad53" : "#666"} />
+            </TouchableOpacity>
+        );
+    };
 
     const clientesFiltrados = getClientesFiltrados();
 
@@ -488,6 +570,7 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#e0e0e0',
         elevation: 1,
+        minHeight: 100, // Altura mínima para mantener consistencia
     },
     clienteIcono: {
         width: 50,
@@ -544,6 +627,40 @@ const styles = StyleSheet.create({
     btnVerTodosTexto: {
         color: 'white',
         fontWeight: 'bold',
+    },
+    // 🆕 Estilos Ya Vendido
+    clienteItemVendido: {
+        borderWidth: 2,
+    },
+    // 🆕 Estilos Clientes con Pedido
+    clienteItemConPedido: {
+        backgroundColor: 'rgba(220, 53, 69, 0.02)', // Fondo rojo super transparente
+        borderColor: '#dc3545', // Borde rojo
+        borderWidth: 1,
+        elevation: 0, // Sin sombra
+    },
+    botonesAccionPedido: {
+        flexDirection: 'column',
+        gap: 8,
+        marginLeft: 8,
+    },
+    btnAccionPedido: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'white',
+        borderWidth: 2,
+    },
+    btnNoEntregado: {
+        borderColor: '#dc3545',
+    },
+    btnEntregar: {
+        borderColor: '#28a745',
+    },
+    btnEditar: {
+        borderColor: '#007bff',
     },
 });
 

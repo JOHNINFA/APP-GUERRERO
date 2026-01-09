@@ -25,6 +25,7 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
         negocio: '',
         celular: '',
         direccion: '',
+        tipoNegocio: '',  // 🆕 Tipo de negocio (Supermercado, Carnicería, etc.)
         diasVisita: [],
         rutaId: null
     });
@@ -144,6 +145,7 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
             negocio: '',
             celular: '',
             direccion: '',
+            tipoNegocio: '',
             diasVisita: [],
             rutaId: null
         });
@@ -234,6 +236,18 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
                                 multiline
                                 numberOfLines={3}
                                 textAlignVertical="top"
+                            />
+                        </View>
+
+                        {/* Tipo de Negocio */}
+                        <View style={styles.campo}>
+                            <Text style={styles.label}>Tipo de Negocio</Text>
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Ej: Supermercado, Carnicería, Panadería"
+                                value={formData.tipoNegocio}
+                                onChangeText={(valor) => handleChange('tipoNegocio', valor)}
+                                autoCapitalize="words"
                             />
                         </View>
 
