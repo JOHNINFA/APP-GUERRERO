@@ -38,6 +38,7 @@ const ClienteSelector = ({
     diaSeleccionado,
     ventasDelDia = [],
     pedidosPendientes = [], // 🆕 Lista de pedidos pendientes
+    pedidosEntregadosHoy = [], // 🆕 Lista de pedidos entregados hoy
     onCargarPedido, // 🆕 Función para cargar pedido en carrito
     onMarcarEntregado, // 🆕 Función para marcar pedido como entregado
     onMarcarNoEntregado // 🆕 Función para marcar pedido como no entregado
@@ -252,6 +253,55 @@ const ClienteSelector = ({
 
         const tienePedidos = pedidosCliente.length > 0;
         const pedido = tienePedidos ? pedidosCliente[0] : null; // Por ahora tomar el primero
+
+        // 🆕 Verificar si tiene pedidos entregados
+        const pedidoEntregado = pedidosEntregadosHoy.find(p => {
+            const pDestinatario = norm(p.destinatario);
+            const cNegocio = norm(item.negocio);
+            const cNombre = norm(item.nombre);
+            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+        });
+
+        // Si tiene pedidos entregados, mostrar card verde
+        if (pedidoEntregado) {
+            return (
+                <TouchableOpacity
+                    style={[
+                        styles.clienteItem,
+                        styles.clienteItemEntregado, // 🆕 Fondo verde transparente
+                    ]}
+                    onPress={() => handleSelectCliente(item)}
+                    activeOpacity={0.9}
+                >
+                    {/* Icono del cliente */}
+                    <View style={styles.clienteIcono}>
+                        <Ionicons name="cube" size={24} color="#22c55e" />
+                    </View>
+
+                    {/* Información del cliente */}
+                    <View style={styles.clienteInfo}>
+                        <Text style={styles.clienteNombre}>{item.negocio}</Text>
+                        {item.nombre && item.nombre !== item.negocio && (
+                            <Text style={styles.clienteContacto}>👤 {item.nombre}</Text>
+                        )}
+                        <Text style={styles.clienteDetalle}>
+                            📦 Pedido #{pedidoEntregado.numero_pedido}
+                        </Text>
+                        {item.direccion && (
+                            <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
+                        )}
+                    </View>
+
+                    {/* Flecha indicadora */}
+                    <Ionicons name="chevron-forward" size={20} color="#22c55e" />
+
+                    {/* 🆕 Badge "Entregado" en esquina superior derecha */}
+                    <View style={styles.badgeEntregadoCliente}>
+                        <Text style={styles.badgeEntregadoTexto}>Entregado</Text>
+                    </View>
+                </TouchableOpacity>
+            );
+        }
 
         // Si tiene pedidos, mostrar card especial
         if (tienePedidos && pedido) {
@@ -638,6 +688,26 @@ const styles = StyleSheet.create({
         borderColor: '#dc3545', // Borde rojo
         borderWidth: 1,
         elevation: 0, // Sin sombra
+    },
+    clienteItemEntregado: {
+        backgroundColor: 'rgba(34, 197, 94, 0.1)', // Fondo verde transparente
+        borderColor: '#22c55e', // Borde verde
+        borderWidth: 1,
+        elevation: 0, // Sin sombra
+    },
+    badgeEntregadoCliente: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#22c55e',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    badgeEntregadoTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
     },
     botonesAccionPedido: {
         flexDirection: 'column',

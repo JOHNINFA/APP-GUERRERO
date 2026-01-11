@@ -6,6 +6,7 @@ import ClienteSelector from './ClienteSelector';
 import ClienteModal from './ClienteModal';
 import DevolucionesVencidas from './DevolucionesVencidas';
 import ResumenVentaModal from './ResumenVentaModal';
+import { ConfirmarEntregaModal } from './ConfirmarEntregaModal'; // 🆕 Importar modal
 import {
     obtenerProductos,
     buscarProductos,
@@ -46,6 +47,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
     // Estados
     const [clienteSeleccionado, setClienteSeleccionado] = useState(null);
+    const [pedidoClienteSeleccionado, setPedidoClienteSeleccionado] = useState(null); // 🆕 Pedido del cliente actual
     const [busquedaProducto, setBusquedaProducto] = useState('');
     const [productos, setProductos] = useState([]);
     const [categorias, setCategorias] = useState([]);
@@ -61,6 +63,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     const [motivoNovedad, setMotivoNovedad] = useState('');
     const [ventasDelDia, setVentasDelDia] = useState([]); // 🆕 Almacenar ventas del día
     const [pedidoEnNovedad, setPedidoEnNovedad] = useState(null);
+    const [pedidosEntregadosHoy, setPedidosEntregadosHoy] = useState([]); // 🆕 IDs de pedidos entregados hoy
 
     // 🆕 Cargar Pedidos
     const verificarPedidosPendientes = async (fechaStr) => {
@@ -79,8 +82,18 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             if (response.ok) {
                 const data = await response.json();
                 if (Array.isArray(data)) {
-                    setPedidosPendientes(data);
-                    console.log(`✅ ${data.length} pedidos encontrados`);
+                    // 🆕 Separar pendientes de entregados
+                    const pendientes = data.filter(p => p.estado !== 'ENTREGADO');
+                    const entregados = data.filter(p => p.estado === 'ENTREGADO').map(p => ({
+                        id: p.id,
+                        destinatario: p.destinatario,
+                        numero_pedido: p.numero_pedido
+                    }));
+
+                    setPedidosPendientes(pendientes);
+                    setPedidosEntregadosHoy(entregados);
+
+                    console.log(`✅ ${pendientes.length} pedidos pendientes, ${entregados.length} entregados`);
                 }
             }
         } catch (e) {
@@ -163,29 +176,45 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         }
     };
 
-    const marcarPedidoEntregado = async (pedido) => {
-        Alert.alert(
-            'Confirmar Entrega',
-            '¿Marcar este pedido como entregado sin generar venta nueva?',
-            [
-                { text: 'Cancelar', style: 'cancel' },
-                {
-                    text: 'Confirmar',
-                    onPress: async () => {
-                        try {
-                            const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_ENTREGADO(pedido.id), { method: 'POST' });
-                            const data = await response.json();
-                            if (data.success) {
-                                Alert.alert('✅ Éxito', 'Pedido marcado como entregado');
-                                verificarPedidosPendientes(); // Recargar
-                            }
-                        } catch (e) {
-                            Alert.alert('Error', 'No se pudo actualizar el pedido');
-                        }
-                    }
-                }
-            ]
-        );
+    const marcarPedidoEntregado = (pedido) => {
+        setPedidoParaEntregar(pedido);
+        setMostrarResumenEntrega(true);
+    };
+
+    const confirmarEntregaPedido = async () => {
+        if (!pedidoParaEntregar) return;
+
+        try {
+            const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_ENTREGADO(pedidoParaEntregar.id), { method: 'POST' });
+            const data = await response.json();
+
+            setMostrarResumenEntrega(false);
+
+            if (data.success) {
+                // 🆕 Agregar pedido con info del destinatario
+                setPedidosEntregadosHoy(prev => [...prev, {
+                    id: pedidoParaEntregar.id,
+                    destinatario: pedidoParaEntregar.destinatario || clienteSeleccionado?.negocio || 'Cliente',
+                    numero_pedido: pedidoParaEntregar.numero_pedido
+                }]);
+
+                // 🆕 Limpiar pedido del cliente para volver a botones normales
+                setPedidoClienteSeleccionado(null);
+                setPedidoParaEntregar(null);
+
+                // Recargar pedidos pendientes
+                const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+                await verificarPedidosPendientes(fechaStr);
+
+                Alert.alert('✅ Pedido Entregado', `El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado exitosamente.`);
+            } else {
+                Alert.alert('Error', data.message || 'No se pudo actualizar el pedido');
+            }
+        } catch (e) {
+            setMostrarResumenEntrega(false);
+            console.error(e);
+            Alert.alert('Error', 'No se pudo actualizar el pedido. Revisa tu conexión.');
+        }
     };
     const [nota, setNota] = useState('');
     const [clientes, setClientes] = useState([]);
@@ -195,6 +224,8 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     const [mostrarModalCliente, setMostrarModalCliente] = useState(false);
     const [mostrarVencidas, setMostrarVencidas] = useState(false);
     const [mostrarResumen, setMostrarResumen] = useState(false);
+    const [mostrarResumenEntrega, setMostrarResumenEntrega] = useState(false); // 🆕 Para confirmar entrega de pedido
+    const [pedidoParaEntregar, setPedidoParaEntregar] = useState(null); // 🆕 Pedido a entregar
     const [ventaTemporal, setVentaTemporal] = useState(null);
 
     // Estados para vencidas
@@ -942,6 +973,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         setMostrarResumen(false);
         setNota('');
         setBusquedaProducto('');
+        setPedidoClienteSeleccionado(null); // 🆕 Limpiar pedido del cliente
     };
 
     // Manejar selección de cliente
@@ -964,7 +996,11 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     { text: 'Cancelar', style: 'cancel' },
                     {
                         text: 'Sí, Continuar',
-                        onPress: () => setClienteSeleccionado(cliente)
+                        onPress: () => {
+                            setClienteSeleccionado(cliente);
+                            // 🆕 Verificar si tiene pedido
+                            verificarPedidoCliente(cliente);
+                        }
                     }
                 ]
             );
@@ -972,6 +1008,55 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         }
 
         setClienteSeleccionado(cliente);
+        // 🆕 Verificar si tiene pedido
+        verificarPedidoCliente(cliente);
+    };
+
+    // 🆕 Verificar si el cliente tiene pedido pendiente
+    const verificarPedidoCliente = (cliente) => {
+        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+        const cNegocio = norm(cliente.negocio);
+        const cNombre = norm(cliente.nombre);
+
+        const pedido = pedidosPendientes.find(p => {
+            const pDestinatario = norm(p.destinatario);
+            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+        });
+
+        setPedidoClienteSeleccionado(pedido || null);
+        console.log('🔍 Pedido del cliente:', pedido ? `#${pedido.numero_pedido}` : 'Sin pedido');
+    };
+
+    // 🆕 Editar pedido del cliente seleccionado (cargar en carrito)
+    const editarPedidoClienteSeleccionado = () => {
+        if (!pedidoClienteSeleccionado) return;
+
+        const nuevoCarrito = {};
+        let encontrados = 0;
+
+        pedidoClienteSeleccionado.detalles.forEach(d => {
+            // Buscar producto en catálogo local por ID o nombre
+            const prodReal = productos.find(p => p.id === d.producto || p.nombre === d.producto_nombre);
+
+            if (prodReal) {
+                encontrados++;
+                // Construir objeto carrito con ID como clave
+                nuevoCarrito[prodReal.id] = d.cantidad; // Solo la cantidad
+            }
+        });
+
+        setCarrito(nuevoCarrito);
+
+        Alert.alert(
+            '✏️ Pedido Cargado',
+            `Se cargaron ${encontrados} productos del pedido.\n\nPuedes modificar las cantidades y completar la venta.`
+        );
+    };
+
+    // 🆕 Marcar pedido del cliente seleccionado como entregado
+    const marcarEntregadoClienteSeleccionado = () => {
+        if (!pedidoClienteSeleccionado) return;
+        marcarPedidoEntregado(pedidoClienteSeleccionado);
     };
 
 
@@ -1277,7 +1362,23 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             {/* Header - Cliente */}
             <View style={styles.headerCliente}>
                 <TouchableOpacity
-                    style={styles.clienteSelector}
+                    style={[
+                        styles.clienteSelector,
+                        // 🆕 Fondo y borde verde si tiene pedido entregado
+                        clienteSeleccionado && (() => {
+                            const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                            const tienePedidoEntregado = pedidosEntregadosHoy.some(p => {
+                                const pDestinatario = norm(p.destinatario);
+                                const cNegocio = norm(clienteSeleccionado.negocio);
+                                const cNombre = norm(clienteSeleccionado.nombre);
+                                return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                            });
+                            return tienePedidoEntregado ? {
+                                backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                                borderColor: '#22c55e' // Verde
+                            } : null;
+                        })()
+                    ]}
                     onPress={() => setMostrarSelectorCliente(true)}
                 >
                     <Ionicons name="person" size={20} color="#003d88" />
@@ -1291,7 +1392,28 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                             </Text>
                         )}
                         <Text style={styles.clienteDetalle}>
-                            📞 {clienteSeleccionado?.celular || 'Sin teléfono'}
+                            {(() => {
+                                // Buscar pedido pendiente
+                                if (pedidoClienteSeleccionado) {
+                                    return `📦 Pedido #${pedidoClienteSeleccionado.numero_pedido}`;
+                                }
+
+                                // Buscar pedido entregado
+                                const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                                const pedidoEntregado = pedidosEntregadosHoy.find(p => {
+                                    const pDestinatario = norm(p.destinatario);
+                                    const cNegocio = norm(clienteSeleccionado?.negocio);
+                                    const cNombre = norm(clienteSeleccionado?.nombre);
+                                    return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                                });
+
+                                if (pedidoEntregado) {
+                                    return `📦 Pedido #${pedidoEntregado.numero_pedido}`;
+                                }
+
+                                // No hay pedido, mostrar teléfono
+                                return `📞 ${clienteSeleccionado?.celular || 'Sin teléfono'}`;
+                            })()}
                         </Text>
                         <Text style={styles.clienteDetalle}>
                             📍 {clienteSeleccionado?.direccion || 'Sin dirección'}
@@ -1299,9 +1421,27 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     </View>
                     <Ionicons name="chevron-forward" size={20} color="#003d88" />
 
-                    {/* 🆕 Check verde si ya se le vendió hoy */}
+                    {/* 🆕 Badge "Entregado" en esquina superior derecha */}
                     {clienteSeleccionado && (() => {
                         const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                        const pedidoEntregado = pedidosEntregadosHoy.find(p => {
+                            const pDestinatario = norm(p.destinatario);
+                            const cNegocio = norm(clienteSeleccionado.negocio);
+                            const cNombre = norm(clienteSeleccionado.nombre);
+                            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                        });
+                        return pedidoEntregado ? (
+                            <View style={styles.badgeEntregado}>
+                                <Text style={styles.badgeEntregadoTexto}>Entregado</Text>
+                            </View>
+                        ) : null;
+                    })()}
+
+                    {/* 🆕 Check verde si ya se le vendió hoy (NO si solo está entregado) */}
+                    {clienteSeleccionado && (() => {
+                        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+
+                        // Verificar si ya se le vendió
                         const yaVendido = ventasDelDia.some(venta => {
                             const vNegocio = norm(venta.cliente_negocio);
                             const vNombre = norm(venta.cliente_nombre);
@@ -1309,41 +1449,79 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                             const cNombre = norm(clienteSeleccionado.nombre);
                             return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
                         });
+
                         return yaVendido ? (
                             <View style={styles.headerCheckVendido}>
                                 <Ionicons name="checkmark-circle" size={24} color="#10b981" />
                             </View>
                         ) : null;
                     })()}
+
+                    {/* 🆕 X roja si tiene pedido */}
+                    {pedidoClienteSeleccionado && (
+                        <TouchableOpacity
+                            style={styles.headerXPedido}
+                            onPress={() => {
+                                // Por ahora solo un placeholder, luego defines la acción
+                                Alert.alert('Cancelar Pedido', 'Funcionalidad por definir');
+                            }}
+                        >
+                            <Ionicons name="close-circle" size={28} color="#dc3545" />
+                        </TouchableOpacity>
+                    )}
                 </TouchableOpacity>
             </View>
 
-            {/* Botones Acciones: Vencidas + Cerrar Turno */}
+            {/* Botones Acciones: Cambian según si tiene pedido */}
             <View style={styles.botonesAccionesContainer}>
-                {/* Botón Vencidas */}
-                <TouchableOpacity
-                    style={[styles.btnAccion, styles.btnVencidas]}
-                    onPress={() => setMostrarVencidas(true)}
-                >
-                    <Ionicons name="alert-circle" size={18} color="white" />
-                    <Text style={styles.btnAccionTexto}>Vencidas</Text>
-                    {vencidas.length > 0 && (
-                        <View style={styles.badgeAccion}>
-                            <Text style={styles.badgeTexto}>
-                                {vencidas.reduce((sum, p) => sum + p.cantidad, 0)}
-                            </Text>
-                        </View>
-                    )}
-                </TouchableOpacity>
+                {pedidoClienteSeleccionado ? (
+                    <>
+                        {/* Botón Editar (rojo) - Cliente con Pedido */}
+                        <TouchableOpacity
+                            style={[styles.btnAccion, styles.btnEditar]}
+                            onPress={editarPedidoClienteSeleccionado}
+                        >
+                            <Ionicons name="create" size={18} color="white" />
+                            <Text style={styles.btnAccionTexto}>Editar</Text>
+                        </TouchableOpacity>
 
-                {/* 🆕 Botón Cerrar Turno (pequeño) */}
-                <TouchableOpacity
-                    style={[styles.btnAccion, styles.btnCerrarPequeño]}
-                    onPress={() => setMostrarModalCerrarTurno(true)}
-                >
-                    <Ionicons name="lock-closed" size={18} color="white" />
-                    <Text style={styles.btnAccionTexto}>Cerrar</Text>
-                </TouchableOpacity>
+                        {/* Botón Entregado (verde) - Cliente con Pedido */}
+                        <TouchableOpacity
+                            style={[styles.btnAccion, styles.btnEntregado]}
+                            onPress={marcarEntregadoClienteSeleccionado}
+                        >
+                            <Ionicons name="checkmark-circle" size={18} color="white" />
+                            <Text style={styles.btnAccionTexto}>Entregado</Text>
+                        </TouchableOpacity>
+                    </>
+                ) : (
+                    <>
+                        {/* Botón Vencidas - Cliente Normal */}
+                        <TouchableOpacity
+                            style={[styles.btnAccion, styles.btnVencidas]}
+                            onPress={() => setMostrarVencidas(true)}
+                        >
+                            <Ionicons name="alert-circle" size={18} color="white" />
+                            <Text style={styles.btnAccionTexto}>Vencidas</Text>
+                            {vencidas.length > 0 && (
+                                <View style={styles.badgeAccion}>
+                                    <Text style={styles.badgeTexto}>
+                                        {vencidas.reduce((sum, p) => sum + p.cantidad, 0)}
+                                    </Text>
+                                </View>
+                            )}
+                        </TouchableOpacity>
+
+                        {/* Botón Cerrar Turno - Cliente Normal */}
+                        <TouchableOpacity
+                            style={[styles.btnAccion, styles.btnCerrarPequeño]}
+                            onPress={() => setMostrarModalCerrarTurno(true)}
+                        >
+                            <Ionicons name="lock-closed" size={18} color="white" />
+                            <Text style={styles.btnAccionTexto}>Cerrar</Text>
+                        </TouchableOpacity>
+                    </>
+                )}
             </View>
 
             {/* Búsqueda de productos */}
@@ -1477,6 +1655,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 onSelectCliente={handleSeleccionarCliente}
                 ventasDelDia={ventasDelDia} // 🆕 Pasar ventas del día
                 pedidosPendientes={pedidosPendientes} // 🆕 Pasar pedidos pendientes
+                pedidosEntregadosHoy={pedidosEntregadosHoy} // 🆕 Pasar pedidos entregados
                 onCargarPedido={cargarPedidoEnCarrito} // 🆕 Cargar pedido en carrito
                 onMarcarEntregado={marcarPedidoEntregado} // 🆕 Marcar como entregado
                 onMarcarNoEntregado={(pedido) => { // 🆕 Marcar como no entregado
@@ -1517,6 +1696,13 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 onClose={() => setMostrarResumen(false)}
                 onConfirmar={confirmarVenta}
                 venta={ventaTemporal}
+            />
+
+            <ConfirmarEntregaModal
+                visible={mostrarResumenEntrega}
+                onClose={() => setMostrarResumenEntrega(false)}
+                onConfirmar={confirmarEntregaPedido}
+                pedido={pedidoParaEntregar}
             />
 
             {/* Modal Cerrar Turno */}
@@ -1821,6 +2007,19 @@ const styles = StyleSheet.create({
         shadowRadius: 3,
         elevation: 4,
     },
+    headerXPedido: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: 'white',
+        borderRadius: 14,
+        padding: 0,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 3,
+        elevation: 5,
+    },
     clienteInfo: {
         marginLeft: 10,
         flex: 1,
@@ -1834,6 +2033,20 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#666',
         marginTop: 2,
+    },
+    badgeEntregado: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#22c55e',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    badgeEntregadoTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
     },
     busquedaContainer: {
         flexDirection: 'row',
@@ -1989,6 +2202,12 @@ const styles = StyleSheet.create({
     },
     btnVencidas: {
         backgroundColor: '#ff6b6b',
+    },
+    btnEditar: {
+        backgroundColor: '#dc3545', // Rojo
+    },
+    btnEntregado: {
+        backgroundColor: '#28a745', // Verde
     },
     btnAccionTexto: {
         color: 'white',
