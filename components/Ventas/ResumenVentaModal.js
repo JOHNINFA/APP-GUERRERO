@@ -93,7 +93,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                 <View style={styles.modalContent}>
                     {/* Header */}
                     <View style={styles.header}>
-                        <Text style={styles.titulo}>Confirmar Venta</Text>
+                        <Text style={styles.titulo}>Confirmar Venta 💰</Text>
                         <TouchableOpacity onPress={onClose}>
                             <Ionicons name="close" size={24} color="#666" />
                         </TouchableOpacity>
@@ -103,7 +103,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                         {/* Fecha de la Venta */}
                         <View style={styles.seccionFecha}>
                             <Text style={styles.labelFecha}>📅 Fecha de la Venta:</Text>
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 style={styles.selectorFecha}
                                 onPress={() => setMostrarDatePicker(true)}
                             >
@@ -188,10 +188,10 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                                         ]}
                                         onPress={() => setMetodoPago(metodo.id)}
                                     >
-                                        <Ionicons 
-                                            name={metodo.icono} 
-                                            size={18} 
-                                            color={metodoPago === metodo.id ? 'white' : '#003d88'} 
+                                        <Ionicons
+                                            name={metodo.icono}
+                                            size={18}
+                                            color={metodoPago === metodo.id ? 'white' : '#003d88'}
                                         />
                                         <Text style={[
                                             styles.metodoPagoTexto,
@@ -209,9 +209,9 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                         {/* Opciones de Envío */}
                         <View style={styles.seccion}>
                             <Text style={styles.seccionTitulo}>📤 Opciones de Envío</Text>
-                            
+
                             {/* WhatsApp */}
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 style={styles.checkboxRow}
                                 onPress={() => setEnviarWhatsApp(!enviarWhatsApp)}
                             >
@@ -221,7 +221,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                                 <Ionicons name="logo-whatsapp" size={20} color="#25D366" />
                                 <Text style={styles.checkboxLabel}>WhatsApp</Text>
                             </TouchableOpacity>
-                            
+
                             {enviarWhatsApp && (
                                 <View style={styles.inputContainer}>
                                     <TextInput
@@ -236,7 +236,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                             )}
 
                             {/* Correo */}
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 style={[styles.checkboxRow, { marginTop: 12 }]}
                                 onPress={() => setEnviarCorreo(!enviarCorreo)}
                             >
@@ -246,7 +246,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                                 <Ionicons name="mail-outline" size={20} color="#EA4335" />
                                 <Text style={styles.checkboxLabel}>Correo electrónico</Text>
                             </TouchableOpacity>
-                            
+
                             {enviarCorreo && (
                                 <View style={styles.inputContainer}>
                                     <TextInput

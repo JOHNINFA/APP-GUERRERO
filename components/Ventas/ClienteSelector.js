@@ -119,6 +119,7 @@ const ClienteSelector = ({
                     celular: c.telefono || '',
                     direccion: c.direccion || '',
                     dia_visita: c.dia_visita,
+                    tipo_negocio: c.tipo_negocio, // 🆕 Mapear tipo de negocio para saber origen
                     esDeRuta: true
                 }));
 
@@ -165,6 +166,7 @@ const ClienteSelector = ({
                         celular: c.telefono || '',
                         direccion: c.direccion || '',
                         dia_visita: c.dia_visita,
+                        tipo_negocio: c.tipo_negocio, // 🆕 Mapear tipo de negocio para saber origen
                         esDeRuta: true
                     }));
 
@@ -397,6 +399,14 @@ const ClienteSelector = ({
         }
 
         // Cliente normal (sin pedidos)
+
+        // 🆕 Lógica para determinar si es Ruta (R) o Pedido (P)
+        // Usamos el campo tipo_negocio que trae el ORIGEN (ej: "NEGOCIO | PEDIDOS")
+        const esPedido = item.tipo_negocio && item.tipo_negocio.toUpperCase().includes('PEDIDOS');
+        const esClienteRuta = !esPedido; // Si no es pedido, es ruta
+        const letraTipo = esPedido ? 'P' : 'R';
+        const estiloBadge = esPedido ? styles.badgeTipoPedido : styles.badgeTipoRuta;
+
         return (
             <TouchableOpacity
                 style={[
@@ -410,7 +420,16 @@ const ClienteSelector = ({
                     ) : (
                         <Ionicons name="storefront" size={24} color="#003d88" />
                     )}
+
+                    {/* 🆕 Badge Tipo Cliente (R o P) */}
+                    <View style={[
+                        styles.badgeTipoCliente,
+                        estiloBadge
+                    ]}>
+                        <Text style={styles.badgeTipoTexto}>{letraTipo}</Text>
+                    </View>
                 </View>
+
                 <View style={styles.clienteInfo}>
                     <Text style={styles.clienteNombre}>{item.negocio}</Text>
                     {item.nombre && item.nombre !== item.negocio && (
@@ -426,6 +445,10 @@ const ClienteSelector = ({
                         <Text style={styles.clienteDetalleVenta}>
                             💰 Venta: ${parseFloat(ventaRealizada.total).toLocaleString('es-CO')}
                         </Text>
+                    )}
+                    {/* Mostrar día de visita si es R */}
+                    {esClienteRuta && (
+                        <Text style={styles.clienteDia}>📅 {item.dia_visita}</Text>
                     )}
                 </View>
                 <Ionicons name="chevron-forward" size={20} color={yaVendido ? "#00ad53" : "#666"} />
@@ -849,6 +872,34 @@ const styles = StyleSheet.create({
         borderRadius: 12,
     },
     badgePendienteTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    btnAccionPedidoTexto: {
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    // 🆕 Estilos Badges R / P
+    badgeTipoCliente: {
+        position: 'absolute',
+        bottom: -2,
+        right: -2,
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1.5,
+        borderColor: 'white',
+    },
+    badgeTipoRuta: {
+        backgroundColor: '#003d88', // Azul Ruta
+    },
+    badgeTipoPedido: {
+        backgroundColor: '#6f42c1', // Morado Pedido
+    },
+    badgeTipoTexto: {
         color: 'white',
         fontSize: 10,
         fontWeight: 'bold',

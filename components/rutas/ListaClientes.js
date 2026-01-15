@@ -15,6 +15,9 @@ const ListaClientes = ({ route, navigation }) => {
   const [isConnected, setIsConnected] = useState(true);
   const spinValue = useRef(new Animated.Value(0)).current;
 
+  // Referencia para evitar guardar orden innecesariamente al cargar
+  const ordenInicialCargado = useRef(false);
+
   useEffect(() => {
     cargarClientes();
 
@@ -35,30 +38,31 @@ const ListaClientes = ({ route, navigation }) => {
     try {
       const nombreRutaCompleto = rutaNombre || ruta;
       const { userId } = route.params;
-      // Incluir userId en la clave de caché para que cada usuario tenga su propio caché
       const cacheKey = `clientes_${userId}_${nombreRutaCompleto}_${dia}`;
 
-      // 1. Si no es recarga forzada, intentar cargar desde caché primero (RÁPIDO)
+      let clientesBase = [];
+
+      // 1. Intentar cargar desde caché
       if (!forzarRecarga) {
         try {
           const clientesCache = await AsyncStorage.getItem(cacheKey);
           if (clientesCache) {
-            const clientesCacheados = JSON.parse(clientesCache);
-            setClientes(clientesCacheados);
+            clientesBase = JSON.parse(clientesCache);
+            setClientes(clientesBase);
             setLoading(false);
             return;
           }
-        } catch (cacheError) {
-          // Caché no disponible, continuar con carga desde Sheets
-        }
+        } catch (cacheError) { }
       }
 
-      // 2. Cargar desde el backend (usar el ID de la ruta, no el nombre)
-      const clientesObtenidos = await obtenerClientesPorRutaYDia(ruta, dia);
-      setClientes(clientesObtenidos);
+      // 2. Si no hay caché o es forzado, cargar del backend
+      clientesBase = await obtenerClientesPorRutaYDia(ruta, dia);
 
-      // 3. Guardar en caché para la próxima vez
-      await AsyncStorage.setItem(cacheKey, JSON.stringify(clientesObtenidos));
+      // Ordenar por defecto por campo orden
+      const ordenadosPorDefecto = [...clientesBase].sort((a, b) => (a.orden || 999) - (b.orden || 999));
+
+      setClientes(ordenadosPorDefecto);
+      await AsyncStorage.setItem(cacheKey, JSON.stringify(ordenadosPorDefecto));
 
     } catch (error) {
       console.error('Error al cargar clientes:', error);
@@ -79,12 +83,10 @@ const ListaClientes = ({ route, navigation }) => {
 
       const pendientes = JSON.parse(pendientesStr);
 
-      // Sincronizar cada pendiente
       for (const pendiente of pendientes) {
         await marcarClienteVisitado(nombreRutaCompleto, pendiente.orden, true);
       }
 
-      // Limpiar pendientes
       await AsyncStorage.removeItem(pendientesKey);
 
     } catch (error) {
@@ -93,21 +95,15 @@ const ListaClientes = ({ route, navigation }) => {
   };
 
   const marcarVisitado = async (cliente) => {
-    // Si ya está visitado, no hacer nada
-    if (cliente.visitado) {
-      return;
-    }
+    if (cliente.visitado) return;
 
-    // Vibración inmediata para feedback
     Vibration.vibrate(50);
 
-    // Optimistic update - actualizar UI inmediatamente ANTES de cualquier otra cosa
     const clientesActualizados = clientes.map(c =>
-      c.orden === cliente.orden ? { ...c, visitado: true } : c
+      c.id === cliente.id ? { ...c, visitado: true } : c
     );
-    setClientes([...clientesActualizados]); // Forzar nueva referencia de array
+    setClientes([...clientesActualizados]);
 
-    // Guardar en caché local inmediatamente
     const nombreRutaCompleto = rutaNombre || ruta;
     const { userId } = route.params;
     const cacheKey = `clientes_${userId}_${nombreRutaCompleto}_${dia}`;
@@ -115,71 +111,37 @@ const ListaClientes = ({ route, navigation }) => {
 
     try {
       await AsyncStorage.setItem(cacheKey, JSON.stringify(clientesActualizados));
-    } catch (error) {
-      console.error('Error al guardar en caché:', error);
-    }
+    } catch (error) { }
 
-    // Si no hay internet, guardar como pendiente
     if (!isConnected) {
       try {
         const pendientesStr = await AsyncStorage.getItem(pendientesKey);
         const pendientes = pendientesStr ? JSON.parse(pendientesStr) : [];
         pendientes.push({ orden: cliente.orden, timestamp: new Date().toISOString() });
         await AsyncStorage.setItem(pendientesKey, JSON.stringify(pendientes));
-        // No mostrar error, se sincronizará automáticamente
-      } catch (error) {
-        console.error('Error al guardar pendiente:', error);
-      }
+      } catch (error) { }
       return;
     }
 
-    // Enviar a Google Sheets en segundo plano
     try {
-      const resultado = await marcarClienteVisitado(
-        nombreRutaCompleto,
-        cliente.orden,
-        true
-      );
-
-      if (!resultado.success) {
-        // Si falla, guardar como pendiente
-        const pendientesStr = await AsyncStorage.getItem(pendientesKey);
-        const pendientes = pendientesStr ? JSON.parse(pendientesStr) : [];
-        pendientes.push({ orden: cliente.orden, timestamp: new Date().toISOString() });
-        await AsyncStorage.setItem(pendientesKey, JSON.stringify(pendientes));
-      }
-    } catch (error) {
-      console.error('Error al marcar visitado:', error);
-      // Guardar como pendiente
-      const pendientesStr = await AsyncStorage.getItem(pendientesKey);
-      const pendientes = pendientesStr ? JSON.parse(pendientesStr) : [];
-      pendientes.push({ orden: cliente.orden, timestamp: new Date().toISOString() });
-      await AsyncStorage.setItem(pendientesKey, JSON.stringify(pendientes));
-    }
+      await marcarClienteVisitado(nombreRutaCompleto, cliente.orden, true);
+    } catch (e) { console.error(e); }
   };
 
   const navegarDireccion = (cliente) => {
-    // Prioridad: DIRECCION, luego COORDENADAS
     let url;
-
     if (cliente.direccion && cliente.direccion.trim() !== '') {
-      // Usar dirección
       url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cliente.direccion)}`;
     } else if (cliente.coordenadas && cliente.coordenadas.trim() !== '') {
-      // Usar coordenadas como fallback
       url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cliente.coordenadas)}`;
     } else {
-      Alert.alert('Error', 'No hay dirección ni coordenadas disponibles para este cliente');
+      Alert.alert('Error', 'No hay dirección ni coordenadas disponibles');
       return;
     }
-
-    Linking.openURL(url).catch(() => {
-      Alert.alert('Error', 'No se pudo abrir Google Maps');
-    });
+    Linking.openURL(url).catch(() => Alert.alert('Error', 'No se pudo abrir Maps'));
   };
 
   const limpiarTodo = () => {
-    // Verificar conexión primero
     if (!isConnected) {
       Alert.alert('Sin Internet', 'Necesitas conexión a internet para limpiar las visitas.');
       return;
@@ -200,7 +162,6 @@ const ListaClientes = ({ route, navigation }) => {
               const resultado = await limpiarTodasLasVisitas(nombreRutaCompleto);
 
               if (resultado.success) {
-                // Recargar clientes desde Sheets (forzar recarga)
                 await cargarClientes(true);
                 Alert.alert('Éxito', 'Todas las visitas han sido limpiadas');
               } else {
@@ -222,12 +183,8 @@ const ListaClientes = ({ route, navigation }) => {
     return (
       <View style={styles.container}>
         <View style={styles.loadingFullScreen}>
-          <View style={styles.loadingCard}>
-            <Ionicons name="people" size={70} color="#003d82" style={styles.loadingIcon} />
-            <ActivityIndicator size="large" color="#003d82" style={styles.loadingSpinner} />
-            <Text style={styles.loadingTitle}>Cargando Clientes</Text>
-            <Text style={styles.loadingSubtitle}>Obteniendo información de la ruta...</Text>
-          </View>
+          <ActivityIndicator size="large" color="#003d82" />
+          <Text style={styles.loadingTitle}>Cargando Ruta...</Text>
         </View>
       </View>
     );
@@ -235,28 +192,15 @@ const ListaClientes = ({ route, navigation }) => {
 
   const refrescarClientes = async () => {
     setRefreshing(true);
-
-    // Animación de rotación continua más rápida
     Animated.loop(
-      Animated.timing(spinValue, {
-        toValue: 1,
-        duration: 500,
-        useNativeDriver: true,
-      })
+      Animated.timing(spinValue, { toValue: 1, duration: 500, useNativeDriver: true })
     ).start();
-
-    await cargarClientes(true); // Forzar recarga desde Sheets
-
-    // Detener animación
+    await cargarClientes(true);
     spinValue.setValue(0);
     setRefreshing(false);
   };
 
-  // Interpolación para la rotación
-  const spin = spinValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg'],
-  });
+  const spin = spinValue.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
   const abrirModalNotas = (cliente) => {
     setClienteSeleccionado(cliente);
@@ -265,30 +209,21 @@ const ListaClientes = ({ route, navigation }) => {
 
   const cerrarModalNotas = () => {
     setModalVisible(false);
-    setTimeout(() => setClienteSeleccionado(null), 200); // Delay para animación
+    setTimeout(() => setClienteSeleccionado(null), 200);
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.headerTop}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-          >
+          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={24} color="#003d82" />
           </TouchableOpacity>
           <View style={styles.headerTexts}>
             <Text style={styles.title}>Lista de Clientes</Text>
-            <Text style={styles.subtitle}>
-              {clientes.length} cliente{clientes.length !== 1 ? 's' : ''} para hoy
-            </Text>
+            <Text style={styles.subtitle}>{clientes.length} clientes para hoy</Text>
           </View>
-          <TouchableOpacity
-            style={styles.botonRefrescar}
-            onPress={refrescarClientes}
-            disabled={refreshing}
-          >
+          <TouchableOpacity style={styles.botonRefrescar} onPress={refrescarClientes} disabled={refreshing}>
             {refreshing ? (
               <Animated.View style={[styles.miniLoader, { transform: [{ rotate: spin }] }]}>
                 <View style={styles.miniLoaderSegmentDark} />
@@ -303,67 +238,37 @@ const ListaClientes = ({ route, navigation }) => {
 
       <FlatList
         data={clientes}
-        keyExtractor={(item) => item.orden?.toString() || Math.random().toString()}
+        keyExtractor={(item) => item.id.toString()}
         contentContainerStyle={styles.scrollContent}
         initialNumToRender={15}
-        maxToRenderPerBatch={10}
-        windowSize={15}
-        removeClippedSubviews={true}
-        updateCellsBatchingPeriod={50}
         ListEmptyComponent={
           !loading && (
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>
-                No hay clientes para este día
-              </Text>
+              <Text style={styles.emptyText}>No hay clientes para este día</Text>
             </View>
           )
         }
         ListFooterComponent={
           clientes.length > 0 && (
-            <TouchableOpacity
-              style={[styles.botonLimpiar, refreshing && styles.botonLimpiarDisabled]}
-              onPress={limpiarTodo}
-              disabled={refreshing}
-            >
-              {refreshing ? (
-                <ActivityIndicator size="small" color="white" />
-              ) : (
-                <Text style={styles.botonLimpiarTexto}>Limpiar Todo</Text>
-              )}
+            <TouchableOpacity style={[styles.botonLimpiar, refreshing && styles.botonLimpiarDisabled]} onPress={limpiarTodo} disabled={refreshing}>
+              <Text style={styles.botonLimpiarTexto}>Limpiar Todo</Text>
             </TouchableOpacity>
           )
         }
-        ListFooterComponentStyle={styles.listFooter}
-        onScrollBeginDrag={() => setRefreshing(false)}
         renderItem={({ item: cliente }) => {
           const estaVisitado = cliente.visitado;
 
-          // Skeleton loader mientras se renderiza
-          if (!cliente || !cliente.orden) {
-            return (
-              <View style={[styles.clienteCard, styles.skeletonCard]}>
-                <View style={styles.skeletonLine} />
-                <View style={styles.skeletonLineShort} />
-              </View>
-            );
-          }
-
           return (
-            <View style={styles.clienteCard}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              style={styles.clienteCard}
+              onPress={() => abrirModalNotas(cliente)}
+            >
               <View style={styles.clienteHeader}>
                 <View style={styles.clienteInfo}>
                   <View style={styles.estadoContainer}>
-                    <View
-                      style={[
-                        styles.estadoCirculo,
-                        estaVisitado && styles.estadoCirculoVisitado,
-                      ]}
-                    >
-                      <Text style={[
-                        styles.ordenTexto,
-                        estaVisitado && styles.ordenTextoVisitado
-                      ]}>
+                    <View style={[styles.estadoCirculo, estaVisitado && styles.estadoCirculoVisitado]}>
+                      <Text style={[styles.ordenTexto, estaVisitado && styles.ordenTextoVisitado]}>
                         {cliente.orden}
                       </Text>
                     </View>
@@ -379,23 +284,15 @@ const ListaClientes = ({ route, navigation }) => {
               <View style={styles.clienteDetalles}>
                 <Text style={styles.detalle}>📍 {cliente.direccion || 'Sin dirección'}</Text>
                 <Text style={styles.detalle}>📞 {cliente.telefono || 'Sin teléfono'}</Text>
-                {cliente.dia_visita && (
-                  <Text style={styles.detalleDias}>{cliente.dia_visita}</Text>
-                )}
               </View>
 
               <View style={styles.botonesContainer}>
                 <TouchableOpacity
-                  style={[
-                    styles.botonMarcar,
-                    estaVisitado && styles.botonVisitado,
-                  ]}
+                  style={[styles.botonMarcar, estaVisitado && styles.botonVisitado]}
                   onPress={() => !estaVisitado && marcarVisitado(cliente)}
                   disabled={estaVisitado}
                 >
-                  <Text style={styles.botonTexto}>
-                    {estaVisitado ? '✓ Visitado' : 'Marcar'}
-                  </Text>
+                  <Text style={styles.botonTexto}>{estaVisitado ? '✓ Visitado' : 'Marcar'}</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -423,7 +320,7 @@ const ListaClientes = ({ route, navigation }) => {
                   <Text style={styles.botonTexto}>Navegar</Text>
                 </TouchableOpacity>
               </View>
-            </View>
+            </TouchableOpacity>
           );
         }}
       />
@@ -448,21 +345,21 @@ const ListaClientes = ({ route, navigation }) => {
             {clienteSeleccionado && (
               <View style={styles.modalContent}>
                 <Text style={styles.modalClienteNombre}>
-                  {clienteSeleccionado.cliente}
+                  {clienteSeleccionado.nombre_negocio || 'Cliente'}
                 </Text>
-                <View style={styles.modalNotasContainer}>
-                  <Text style={styles.modalNotasTexto}>
-                    {clienteSeleccionado.notas || 'Sin notas'}
+                <View style={[styles.botonNotas, { alignSelf: 'stretch', justifyContent: 'center', marginTop: 10 }]}>
+                  <Text style={styles.botonNotasTexto}>
+                    {clienteSeleccionado.notas || 'Sin notas registradas'}
                   </Text>
                 </View>
               </View>
             )}
 
             <TouchableOpacity
-              style={styles.modalBotonCerrar}
+              style={[styles.botonLimpiar, { marginTop: 20, backgroundColor: '#003d82' }]}
               onPress={cerrarModalNotas}
             >
-              <Text style={styles.modalBotonCerrarTexto}>Cerrar</Text>
+              <Text style={styles.botonLimpiarTexto}>Cerrar</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -474,23 +371,27 @@ const ListaClientes = ({ route, navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#F3F4F6',
   },
   header: {
     backgroundColor: 'white',
-    padding: 20,
-    marginTop: 25,
+    paddingTop: 50,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: '#E5E7EB',
   },
   headerTop: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
   },
   backButton: {
-    marginRight: 15,
-    padding: 5,
+    padding: 8,
+    marginRight: 10,
+  },
+  botonRefrescar: {
+    padding: 8,
   },
   headerTexts: {
     flex: 1,
@@ -498,106 +399,33 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#003d82',
-    marginBottom: 5,
+    color: '#1F2937',
   },
   subtitle: {
     fontSize: 14,
-    color: '#666',
-  },
-  botonRefrescar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'white',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 10,
-  },
-  miniLoader: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    position: 'relative',
-  },
-  miniLoaderSegmentDark: {
-    position: 'absolute',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 3,
-    borderColor: 'transparent',
-    borderTopColor: '#003d82',
-    borderLeftColor: '#003d82',
-  },
-  miniLoaderSegmentLight: {
-    position: 'absolute',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 3,
-    borderColor: 'transparent',
-    borderBottomColor: '#d0d0d0',
-    borderRightColor: '#d0d0d0',
+    color: '#6B7280',
+    marginTop: 2,
   },
   scrollContent: {
-    padding: 20,
-    paddingBottom: 70,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingFullScreen: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f5f5f5',
-  },
-  loadingCard: {
-    backgroundColor: 'white',
-    borderRadius: 20,
-    padding: 40,
-    alignItems: 'center',
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    width: '80%',
-  },
-  loadingIcon: {
-    marginBottom: 20,
-  },
-  loadingSpinner: {
-    marginVertical: 15,
-  },
-  loadingTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#003d82',
-    marginTop: 10,
-    marginBottom: 5,
-  },
-  loadingSubtitle: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
+    padding: 16,
+    paddingBottom: 40,
   },
   clienteCard: {
     backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 15,
-    elevation: 2,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
     shadowOpacity: 0.1,
-    shadowRadius: 2,
+    shadowRadius: 3.84,
+    elevation: 2,
   },
   clienteHeader: {
-    marginBottom: 10,
+    marginBottom: 12,
   },
   clienteInfo: {
     flex: 1,
@@ -605,24 +433,24 @@ const styles = StyleSheet.create({
   estadoContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 5,
+    marginBottom: 4,
   },
   estadoCirculo: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#6c757d',
-    marginRight: 10,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#E5E7EB',
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 8,
   },
   estadoCirculoVisitado: {
-    backgroundColor: '#28a745',
+    backgroundColor: '#10B981',
   },
   ordenTexto: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: 'bold',
-    color: 'white',
+    color: '#6B7280',
   },
   ordenTextoVisitado: {
     color: 'white',
@@ -630,204 +458,198 @@ const styles = StyleSheet.create({
   clienteNombre: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#333',
+    color: '#1F2937',
     flex: 1,
-  },
-  botonNotas: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0f8ff',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    marginTop: 8,
-    alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: '#003d82',
-  },
-  botonNotasTexto: {
-    fontSize: 14,
-    color: '#003d82',
-    fontWeight: '600',
-    marginLeft: 5,
   },
   clienteTipo: {
     fontSize: 14,
-    color: '#666',
-    marginLeft: 42,
+    color: '#6B7280',
     marginTop: 2,
   },
   clienteTipoNegocio: {
-    fontSize: 13,
-    color: '#888',
-    marginLeft: 42,
+    fontSize: 12,
+    color: '#003d82',
     marginTop: 2,
-    fontStyle: 'italic',
+    fontWeight: '600',
+    backgroundColor: '#e6f0ff',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
   clienteDetalles: {
-    marginBottom: 15,
+    marginTop: 4,
+    marginBottom: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
   },
   detalle: {
     fontSize: 14,
-    color: '#555',
-    marginBottom: 5,
-  },
-  detalleDias: {
-    fontSize: 13,
-    color: '#003d82',
-    marginTop: 5,
-    fontWeight: '500',
+    color: '#4B5563',
+    marginBottom: 4,
   },
   botonesContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: 8,
   },
   botonMarcar: {
     flex: 1,
     backgroundColor: '#003d82',
-    padding: 12,
     borderRadius: 8,
-    marginRight: 10,
+    paddingVertical: 10,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   botonVisitado: {
-    backgroundColor: '#28a745',
+    backgroundColor: '#10B981',
   },
   botonVender: {
     flex: 1,
-    backgroundColor: '#28a745',
-    padding: 12,
+    backgroundColor: '#22c55e',
     borderRadius: 8,
-    marginRight: 10,
+    paddingVertical: 10,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   botonNavegar: {
     flex: 1,
-    backgroundColor: '#003d82',
-    padding: 12,
+    backgroundColor: '#EF4444',
     borderRadius: 8,
+    paddingVertical: 10,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   botonTexto: {
     color: 'white',
-    fontWeight: 'bold',
     fontSize: 14,
-  },
-  botonLimpiar: {
-    backgroundColor: '#dc3545',
-    padding: 15,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 10,
-    minHeight: 50,
-    justifyContent: 'center',
-  },
-  botonLimpiarDisabled: {
-    opacity: 0.6,
-  },
-  botonLimpiarTexto: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 16,
+    fontWeight: '600',
   },
   emptyContainer: {
-    padding: 40,
+    padding: 32,
     alignItems: 'center',
   },
   emptyText: {
     fontSize: 16,
-    color: '#999',
+    color: '#9CA3AF',
+    textAlign: 'center',
   },
-  // Skeleton Loader
-  skeletonCard: {
-    backgroundColor: '#f0f0f0',
-    opacity: 0.6,
-  },
-  skeletonLine: {
-    height: 20,
-    backgroundColor: '#e0e0e0',
-    borderRadius: 4,
-    marginBottom: 10,
-    width: '80%',
-  },
-  skeletonLineShort: {
-    height: 15,
-    backgroundColor: '#e0e0e0',
-    borderRadius: 4,
-    width: '60%',
-  },
-  listFooter: {
-    paddingBottom: 20,
-  },
-  // Estilos del Modal
-  modalOverlay: {
+  loadingFullScreen: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+  },
+  loadingTitle: {
+    marginTop: 16,
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#003d82',
+  },
+  miniLoader: {
+    width: 24,
+    height: 24,
+    borderWidth: 3,
+    borderColor: '#003d82',
+    borderRadius: 12,
+    borderTopColor: 'transparent',
+  },
+  miniLoaderSegmentDark: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 24,
+    height: 12,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+    backgroundColor: 'transparent',
+  },
+  miniLoaderSegmentLight: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    width: 24,
+    height: 12,
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+    backgroundColor: 'transparent',
+  },
+  botonLimpiar: {
+    marginTop: 20,
+    padding: 15,
+    backgroundColor: '#EF4444',
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 30
+  },
+  botonLimpiarDisabled: {
+    opacity: 0.7
+  },
+  botonLimpiarTexto: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
   },
   modalContainer: {
     backgroundColor: 'white',
     borderRadius: 20,
-    padding: 20,
-    width: '85%',
-    maxHeight: '70%',
-    elevation: 5,
+    padding: 24,
+    width: '100%',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
     shadowOpacity: 0.25,
     shadowRadius: 4,
+    elevation: 5,
   },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     marginBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
     paddingBottom: 15,
-    borderBottomWidth: 2,
-    borderBottomColor: '#003d82',
   },
   modalTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#003d82',
-    flex: 1,
     marginLeft: 10,
+    flex: 1,
   },
   modalContent: {
-    marginBottom: 20,
+    marginBottom: 10,
   },
   modalClienteNombre: {
     fontSize: 18,
-    fontWeight: 'bold',
+    fontWeight: '600',
     color: '#333',
     marginBottom: 15,
     textAlign: 'center',
   },
-  modalNotasContainer: {
+  botonNotas: {
     backgroundColor: '#f8f9fa',
-    borderRadius: 10,
     padding: 15,
-    minHeight: 100,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: '#e9ecef',
+    marginBottom: 10,
   },
-  modalNotasTexto: {
-    fontSize: 16,
-    color: '#555',
-    lineHeight: 24,
-  },
-  modalBotonCerrar: {
-    backgroundColor: '#003d82',
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  modalBotonCerrarTexto: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  botonNotasTexto: {
+    fontSize: 15,
+    color: '#495057',
+    lineHeight: 22,
+    fontStyle: 'italic',
+  }
 });
 
 export default ListaClientes;

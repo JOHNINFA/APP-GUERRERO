@@ -85,9 +85,10 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 const data = await response.json();
                 if (Array.isArray(data)) {
                     // 🆕 Separar pendientes de entregados y novedades
-                    const pendientes = data.filter(p => p.estado !== 'ENTREGADO' && p.estado !== 'ANULADA');
+                    // Filtrar tanto ENTREGADO como ENTREGADA
+                    const pendientes = data.filter(p => p.estado !== 'ENTREGADO' && p.estado !== 'ENTREGADA' && p.estado !== 'ANULADA');
 
-                    const entregados = data.filter(p => p.estado === 'ENTREGADO').map(p => ({
+                    const entregados = data.filter(p => p.estado === 'ENTREGADO' || p.estado === 'ENTREGADA').map(p => ({
                         id: p.id,
                         destinatario: p.destinatario,
                         numero_pedido: p.numero_pedido
@@ -206,14 +207,30 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         setMostrarResumenEntrega(true);
     };
 
-    const confirmarEntregaPedido = async (tieneVencidas = false) => {
+    const confirmarEntregaPedido = async (tieneVencidas = false, metodoPago = 'EFECTIVO') => {
         if (!pedidoParaEntregar) return;
 
-        // Marcar como entregado siempre (vencidas se reportan manualmente después)
+        // 🆕 LÓGICA DE EDICIÓN: Si hay un pedido seleccionado en modo edición, usamos confirmarVenta
+        if (pedidoClienteSeleccionado && ventaTemporal) {
+            console.log('🔄 Confirmando pedido editado con método:', metodoPago);
+            setMostrarResumenEntrega(false); // Cerrar modal pequeño
 
-        // Si NO tiene vencidas, marcar como entregado directamente
+            // Llamar a confirmarVenta con el método de pago seleccionado
+            // confirmarVenta usa ventaTemporal que ya fue seteado en completarVenta
+            confirmarVenta(fechaSeleccionada, metodoPago, {});
+            return;
+        }
+
+        // Marcar como entregado siempre (vencidas se reportan manualmente después)
+        // 🆕 Ahora enviamos el metodo_pago seleccionado
+
         try {
-            const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_ENTREGADO(pedidoParaEntregar.id), { method: 'POST' });
+            // Enviar metodo_pago en el cuerpo del POST
+            const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_ENTREGADO(pedidoParaEntregar.id), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ metodo_pago: metodoPago }) // 🆕 Enviar método de pago
+            });
             const data = await response.json();
 
             setMostrarResumenEntrega(false);
@@ -223,7 +240,8 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 setPedidosEntregadosHoy(prev => [...prev, {
                     id: pedidoParaEntregar.id,
                     destinatario: pedidoParaEntregar.destinatario || clienteSeleccionado?.negocio || 'Cliente',
-                    numero_pedido: pedidoParaEntregar.numero_pedido
+                    numero_pedido: pedidoParaEntregar.numero_pedido,
+                    metodo_pago: metodoPago // 🆕 Guardar localmente también
                 }]);
 
                 // 🆕 Limpiar pedido del cliente para volver a botones normales
@@ -238,10 +256,10 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 if (tieneVencidas) {
                     Alert.alert(
                         '✅ Pedido Entregado',
-                        `El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado.\n\n⚠️ Recuerda reportar las vencidas usando el botón "Vencidas" del cliente.`
+                        `Pago: ${metodoPago}\n\nEl pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado.\n\n⚠️ Recuerda reportar las vencidas usando el botón "Vencidas" del cliente.`
                     );
                 } else {
-                    Alert.alert('✅ Pedido Entregado', `El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado exitosamente.`);
+                    Alert.alert('✅ Pedido Entregado', `Pago: ${metodoPago}\n\nEl pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado exitosamente.`);
                 }
             } else {
                 Alert.alert('Error', data.message || 'No se pudo actualizar el pedido');
@@ -666,7 +684,8 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             const stockDisponible = stockCargue[nombreNormalizado] !== undefined ? stockCargue[nombreNormalizado] : 0;
 
             // Si intenta aumentar y supera el stock
-            if (nuevaCantidad > (carrito[productoId] || 0) && nuevaCantidad > stockDisponible) {
+            // 🆕 EXCEPCIÓN: Si es un pedido seleccionado (edición), NO validar stock de la app
+            if (!pedidoClienteSeleccionado && nuevaCantidad > (carrito[productoId] || 0) && nuevaCantidad > stockDisponible) {
                 Alert.alert(
                     'Stock Insuficiente',
                     `Solo tienes ${stockDisponible} unidades de ${producto.nombre} disponibles en tu cargue.`
@@ -718,71 +737,111 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             return;
         }
 
-        // Preparar datos de la venta
-        const productosVenta = productosEnCarrito.map(idStr => {
-            const id = parseInt(idStr);
-            const producto = productos.find(p => p.id === id);
-            const cantidad = carrito[id];
+        // 🆕 Función interna para procesar la venta después de validaciones
+        const procesarVenta = () => {
+            // Preparar datos de la venta
+            const productosVenta = productosEnCarrito.map(idStr => {
+                const id = parseInt(idStr);
+                const producto = productos.find(p => p.id === id);
+                const cantidad = carrito[id];
 
-            return {
-                id: producto.id,
-                nombre: producto.nombre,
-                precio: producto.precio,
-                cantidad: cantidad,
-                subtotal: producto.precio * cantidad
+                return {
+                    id: producto.id,
+                    nombre: producto.nombre,
+                    precio: producto.precio,
+                    cantidad: cantidad,
+                    subtotal: producto.precio * cantidad
+                };
+            });
+
+            const venta = {
+                cliente_id: clienteSeleccionado.id,
+                cliente_nombre: clienteSeleccionado.nombre,
+                cliente_negocio: clienteSeleccionado.negocio, // Asegurar que se pase el negocio
+                cliente_celular: clienteSeleccionado.celular || '',
+                vendedor: vendedorNombre || userId, // Usar nombre del vendedor para el ticket
+                vendedor_id: userId, // ID para el backend
+                productos: productosVenta,
+                subtotal: subtotal,
+                descuento: descuento,
+                total: total,
+                nota: nota,
+                vencidas: vencidas,
+                fotoVencidas: fotoVencidas
             };
-        });
 
-        const venta = {
-            cliente_id: clienteSeleccionado.id,
-            cliente_nombre: clienteSeleccionado.nombre,
-            cliente_negocio: clienteSeleccionado.negocio, // Asegurar que se pase el negocio
-            cliente_celular: clienteSeleccionado.celular || '',
-            vendedor: vendedorNombre || userId, // Usar nombre del vendedor para el ticket
-            vendedor_id: userId, // ID para el backend
-            productos: productosVenta,
-            subtotal: subtotal,
-            descuento: descuento,
-            total: total,
-            nota: nota,
-            vencidas: vencidas,
-            fotoVencidas: fotoVencidas
+            setVentaTemporal(venta);
+
+            // 🆕 Validar si hay stock suficiente para cambiar vencidas
+            const advertenciasVencidas = [];
+            if (vencidas && vencidas.length > 0) {
+                vencidas.forEach(vencida => {
+                    const nombreProducto = vencida.nombre.toUpperCase();
+                    const stockActual = stockCargue[nombreProducto] || 0;
+                    const cantidadVendida = productosVenta.find(p => p.nombre.toUpperCase() === nombreProducto)?.cantidad || 0;
+                    const stockDisponible = stockActual - cantidadVendida;
+
+                    if (vencida.cantidad > stockDisponible) {
+                        if (stockDisponible <= 0) {
+                            advertenciasVencidas.push(`⚠️ ${vencida.nombre}: No tienes stock para cambiar ${vencida.cantidad} vencidas`);
+                        } else {
+                            advertenciasVencidas.push(`⚠️ ${vencida.nombre}: Solo tienes ${stockDisponible} para cambiar ${vencida.cantidad} vencidas`);
+                        }
+                    }
+                });
+            }
+
+            // Si hay advertencias, mostrar alerta pero permitir continuar
+            // Función auxiliar para abrir el modal correcto
+            const abrirModalConfirmacion = () => {
+                if (pedidoClienteSeleccionado) {
+                    // Si es Edición de Pedido -> Modal Pequeño (ConfirmarEntregaModal)
+                    setPedidoParaEntregar({
+                        ...pedidoClienteSeleccionado,
+                        total: venta.total, // Usar el NUEVO total calculado
+                        numero_pedido: pedidoClienteSeleccionado.numero_pedido
+                    });
+                    setMostrarResumenEntrega(true);
+                } else {
+                    // Si es Venta Normal -> Modal Grande (ResumenVentaModal)
+                    setMostrarResumen(true);
+                }
+            };
+
+            if (advertenciasVencidas.length > 0) {
+                Alert.alert(
+                    '⚠️ Advertencia de Stock',
+                    advertenciasVencidas.join('\n') + '\n\n¿Deseas continuar de todas formas?',
+                    [
+                        { text: 'Cancelar', style: 'cancel' },
+                        { text: 'Continuar', onPress: abrirModalConfirmacion }
+                    ]
+                );
+            } else {
+                abrirModalConfirmacion();
+            }
         };
 
-        setVentaTemporal(venta);
+        // 🆕 LÓGICA DE DETECCIÓN DE VENTA REPETIDA
+        // Verificar si este cliente ya tiene ventas hoy
+        // Usar == para comparar ID (puede ser string o number)
+        const ventaPrevia = ventasDelDia.find(v => v.cliente_id == clienteSeleccionado.id);
 
-        // 🆕 Validar si hay stock suficiente para cambiar vencidas
-        const advertenciasVencidas = [];
-        if (vencidas && vencidas.length > 0) {
-            vencidas.forEach(vencida => {
-                const nombreProducto = vencida.nombre.toUpperCase();
-                const stockActual = stockCargue[nombreProducto] || 0;
-                const cantidadVendida = productosVenta.find(p => p.nombre.toUpperCase() === nombreProducto)?.cantidad || 0;
-                const stockDisponible = stockActual - cantidadVendida;
-
-                if (vencida.cantidad > stockDisponible) {
-                    if (stockDisponible <= 0) {
-                        advertenciasVencidas.push(`⚠️ ${vencida.nombre}: No tienes stock para cambiar ${vencida.cantidad} vencidas`);
-                    } else {
-                        advertenciasVencidas.push(`⚠️ ${vencida.nombre}: Solo tienes ${stockDisponible} para cambiar ${vencida.cantidad} vencidas`);
-                    }
-                }
-            });
-        }
-
-        // Si hay advertencias, mostrar alerta pero permitir continuar
-        if (advertenciasVencidas.length > 0) {
+        // Si ya vendió y NO estamos editando un pedido específico (flujo normal)
+        if (ventaPrevia && !pedidoClienteSeleccionado) {
             Alert.alert(
-                '⚠️ Advertencia de Stock',
-                advertenciasVencidas.join('\n') + '\n\n¿Deseas continuar de todas formas?',
+                '⚠️ Cliente Ya Atendido',
+                `Ya realizaste una venta a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\n¿Deseas registrar otra venta?`,
                 [
                     { text: 'Cancelar', style: 'cancel' },
-                    { text: 'Continuar', onPress: () => setMostrarResumen(true) }
+                    { text: 'Sí, Continuar', onPress: procesarVenta }
                 ]
             );
-        } else {
-            setMostrarResumen(true);
+            return;
         }
+
+        // Si no hay problema, procesar directamente
+        procesarVenta();
     };
 
     // Confirmar y guardar venta
@@ -876,9 +935,15 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
                 // 🆕 ACTUALIZAR LISTAS LOCALES INMEDIATAMENTE
                 // Mover de Pendientes a Entregados para actualizar la UI (Badge Verde)
-                setPedidosPendientes(prev => prev.filter(p => p.id !== pedidoClienteSeleccionado.id));
+                setPedidosPendientes(prev => prev.filter(p => String(p.id) !== String(pedidoClienteSeleccionado.id)));
+
+                // Recargar explícitamente la lista de pendientes para asegurar sincronización
+                const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+                verificarPedidosPendientes(fechaStr);
+
                 setPedidosEntregadosHoy(prev => [...prev, {
                     ...pedidoClienteSeleccionado,
+                    destinatario: pedidoClienteSeleccionado.destinatario || clienteSeleccionado?.negocio || clienteSeleccionado?.nombre || 'Cliente', // 🆕 Asegurar destinatario para match visual
                     estado: 'ENTREGADA',
                     total: ventaConDatos.total,
                     detalles: detallesNuevos,
@@ -1570,7 +1635,17 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     {clienteSeleccionado && (() => {
                         const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
 
-                        // Verificar si ya se le vendió
+                        // 🆕 VALIDACIÓN EXTRA: Si ya está entregado como pedido, NO mostrar "Vendido"
+                        const esPedidoEntregado = pedidosEntregadosHoy.some(p => {
+                            const pDestinatario = norm(p.destinatario);
+                            const cNegocio = norm(clienteSeleccionado.negocio);
+                            const cNombre = norm(clienteSeleccionado.nombre);
+                            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                        });
+
+                        if (esPedidoEntregado) return null;
+
+                        // Verificar si ya se le vendió (para clientes normales)
                         const yaVendido = ventasDelDia.some(venta => {
                             const vNegocio = norm(venta.cliente_negocio);
                             const vNombre = norm(venta.cliente_nombre);

@@ -12,11 +12,13 @@ import { formatearMoneda } from '../../services/ventasService';
 
 export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido }) => {
     const [tieneVencidas, setTieneVencidas] = useState(false);
+    const [metodoPago, setMetodoPago] = useState('EFECTIVO'); // 🆕 Estado para método de pago
 
-    // Resetear valor cuando se abre el modal
+    // Resetear valores cuando se abre el modal
     React.useEffect(() => {
         if (visible) {
             setTieneVencidas(false);
+            setMetodoPago('EFECTIVO');
         }
     }, [visible]);
 
@@ -85,22 +87,72 @@ export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido })
                         {/* Total */}
                         <View style={styles.totalesContainer}>
                             <View style={styles.totalRow}>
-                                <Text style={styles.granTotalLabel}>TOTAL:</Text>
+                                <Text style={styles.granTotalLabel}>TOTAL A COBRAR:</Text>
                                 <Text style={styles.granTotalValor}>{formatearMoneda(parseFloat(total || 0))}</Text>
                             </View>
                         </View>
 
                         <View style={styles.divider} />
 
+                        {/* 🆕 SELECCIÓN DE MÉTODO DE PAGO */}
+                        <View style={styles.seccion}>
+                            <Text style={styles.seccionTitulo}>💰 Método de Pago</Text>
+                            <View style={styles.pagosContainer}>
+                                {/* Efectivo */}
+                                <TouchableOpacity
+                                    style={[styles.pagoBtn, metodoPago === 'EFECTIVO' && styles.pagoBtnActivo]}
+                                    onPress={() => setMetodoPago('EFECTIVO')}
+                                >
+                                    <Ionicons
+                                        name="cash-outline"
+                                        size={24}
+                                        color={metodoPago === 'EFECTIVO' ? 'white' : '#666'}
+                                    />
+                                    <Text style={[styles.pagoTexto, metodoPago === 'EFECTIVO' && styles.pagoTextoActivo]}>
+                                        Efectivo
+                                    </Text>
+                                </TouchableOpacity>
+
+                                {/* Nequi */}
+                                <TouchableOpacity
+                                    style={[styles.pagoBtn, metodoPago === 'NEQUI' && styles.pagoBtnActivo]}
+                                    onPress={() => setMetodoPago('NEQUI')}
+                                >
+                                    <Ionicons
+                                        name="phone-portrait-outline"
+                                        size={24}
+                                        color={metodoPago === 'NEQUI' ? 'white' : '#666'}
+                                    />
+                                    <Text style={[styles.pagoTexto, metodoPago === 'NEQUI' && styles.pagoTextoActivo]}>
+                                        Nequi
+                                    </Text>
+                                </TouchableOpacity>
+
+                                {/* Daviplata */}
+                                <TouchableOpacity
+                                    style={[styles.pagoBtn, metodoPago === 'DAVIPLATA' && styles.pagoBtnActivo]}
+                                    onPress={() => setMetodoPago('DAVIPLATA')}
+                                >
+                                    <Ionicons
+                                        name="card-outline"
+                                        size={24}
+                                        color={metodoPago === 'DAVIPLATA' ? 'white' : '#666'}
+                                    />
+                                    <Text style={[styles.pagoTexto, metodoPago === 'DAVIPLATA' && styles.pagoTextoActivo]}>
+                                        Daviplata
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
                         {/* Mensaje de confirmación */}
                         <View style={styles.confirmacionContainer}>
-                            <Ionicons name="checkmark-circle-outline" size={48} color="#22c55e" />
                             <Text style={styles.confirmacionTexto}>
-                                ¿Confirmar que este pedido fue entregado al cliente?
+                                ¿Confirmar entrega?
                             </Text>
                         </View>
 
-                        {/* 🆕 Pregunta de vencidas */}
+                        {/* Pregunta de vencidas */}
                         <View style={styles.vencidasContainer}>
                             <Text style={styles.vencidasPregunta}>¿El cliente tiene vencidas?</Text>
                             <View style={styles.vencidasOpciones}>
@@ -155,7 +207,7 @@ export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido })
 
                         <TouchableOpacity
                             style={styles.btnConfirmar}
-                            onPress={() => onConfirmar(tieneVencidas)}
+                            onPress={() => onConfirmar(tieneVencidas, metodoPago)} // 🆕 Pasar método de pago
                         >
                             <Ionicons name="checkmark-circle" size={20} color="white" />
                             <Text style={styles.btnConfirmarTexto}>Confirmar Entrega</Text>
@@ -366,6 +418,37 @@ const styles = StyleSheet.create({
         color: '#666',
     },
     opcionTextoActivo: {
+        color: 'white',
+    },
+    opcionTextoActivo: {
+        color: 'white',
+    },
+    // 🆕 Estilos para métodos de pago
+    pagosContainer: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        gap: 8,
+    },
+    pagoBtn: {
+        flex: 1,
+        alignItems: 'center',
+        paddingVertical: 12,
+        borderRadius: 8,
+        borderWidth: 1.5,
+        borderColor: '#eee',
+        backgroundColor: 'white',
+        gap: 5,
+    },
+    pagoBtnActivo: {
+        backgroundColor: '#003d88', // Azul App
+        borderColor: '#003d88',
+    },
+    pagoTexto: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#666',
+    },
+    pagoTextoActivo: {
         color: 'white',
     },
 });
