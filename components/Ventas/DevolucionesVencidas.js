@@ -17,7 +17,19 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { obtenerProductos, formatearMoneda } from '../../services/ventasService';
 import { API_URL } from '../../config'; // 🆕 Import estático en lugar de dinámico
 
-const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devoluciones', datosGuardados = [], fotosGuardadas = {}, userId, fechaSeleccionada }) => {
+const DevolucionesVencidas = ({
+    visible,
+    onClose,
+    onGuardar,
+    tipo = 'devoluciones',
+    datosGuardados = [],
+    fotosGuardadas = {},
+    userId,
+    fechaSeleccionada,
+    modoSoloRegistro = false, // 🆕 Modo directo sin "completar venta"
+    clienteId = null, // 🆕 ID del cliente para modo registro directo
+    onVencidasRegistradas = null // 🆕 Callback cuando se completa registro directo
+}) => {
     const [cantidades, setCantidades] = useState({});
     const [fotos, setFotos] = useState({}); // { productoId: [uri1, uri2, ...] }
     const productos = obtenerProductos();
@@ -143,7 +155,104 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
                 }
             }
 
-            // 🆕 NUEVO FLUJO: Solo guardar localmente, se enviará al confirmar venta
+            // 🆕 MODO SOLO REGISTRO: Enviar directamente al backend
+            if (modoSoloRegistro) {
+                try {
+                    console.log(`📤 Enviando vencidas directamente (${productosConCantidad.length} productos)`);
+
+                    // Format productos vencidos para el backend
+                    const productosVencidosFormateados = productosConCantidad.map(item => ({
+                        id: item.id,
+                        producto: item.nombre,
+                        cantidad: item.cantidad,
+                        motivo: 'Devolución al entregar pedido'
+                    }));
+
+                    // 🆕 Convertir fotos a base64 para el backend
+                    const fotosBase64 = {};
+                    for (const [prodId, uris] of Object.entries(fotos)) {
+                        fotosBase64[prodId] = [];
+                        for (const uri of uris) {
+                            try {
+                                // Leer archivo y convertir a base64
+                                const response = await fetch(uri);
+                                const blob = await response.blob();
+                                const base64 = await new Promise((resolve, reject) => {
+                                    const reader = new FileReader();
+                                    reader.onloadend = () => resolve(reader.result);
+                                    reader.onerror = reject;
+                                    reader.readAsDataURL(blob);
+                                });
+                                fotosBase64[prodId].push(base64);
+                            } catch (error) {
+                                console.error('Error convirtiendo foto a base64:', error);
+                            }
+                        }
+                    }
+
+                    // Crear venta ficticia de $0 solo con vencidas
+                    const ventaVencidas = {
+                        id_local: `VENC-${Date.now()}`, // ID único
+                        vendedor_id: userId,
+                        cliente_nombre: clienteId ? `Cliente ID ${clienteId}` : 'Sin cliente',
+                        nombre_negocio: '',
+                        total: 0, // Sin venta, solo vencidas
+                        detalles: [], // Sin productos vendidos
+                        metodo_pago: 'N/A',
+                        productos_vencidos: productosVencidosFormateados,
+                        foto_vencidos: fotosBase64, // 🆕 Fotos en base64
+                        fecha: fechaSeleccionada.toISOString()
+                    };
+
+                    const response = await fetch(`${API_URL}/ventas-ruta/`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(ventaVencidas),
+                    });
+
+                    console.log('📡 Response status:', response.status);
+                    console.log('📡 Response headers:', response.headers);
+
+                    // Leer respuesta como texto primero para ver qué devuelve
+                    const responseText = await response.text();
+                    console.log('📡 Response text:', responseText.substring(0, 500)); // Primeros 500 caracteres
+
+                    let data;
+                    try {
+                        data = JSON.parse(responseText);
+                    } catch (parseError) {
+                        console.error('❌ Error parseando JSON:', parseError);
+                        console.error('📄 Respuesta completa:', responseText);
+                        throw new Error('El servidor no devolvió JSON válido');
+                    }
+
+
+                    if (response.ok) {
+                        Alert.alert(
+                            '✅ Vencidas Registradas',
+                            `${productosConCantidad.length} producto(s) registrados correctamente.`,
+                            [{
+                                text: 'OK', onPress: () => {
+                                    setCantidades({});
+                                    setFotos({});
+                                    onClose();
+                                    if (onGuardar) onGuardar([], {}); // Limpiar en padre
+                                    // 🆕 Llamar callback para completar flujo (marcar pedido como entregado)
+                                    if (onVencidasRegistradas) onVencidasRegistradas();
+                                }
+                            }]
+                        );
+                    } else {
+                        throw new Error(data.error || 'Error al registrar vencidas');
+                    }
+                } catch (error) {
+                    console.error('❌ Error enviando vencidas:', error);
+                    Alert.alert('Error', 'No se pudieron registrar las vencidas. Intenta de nuevo.');
+                }
+                return;
+            }
+
+            // MODO NORMAL: Solo guardar localmente
             console.log(`📝 Vencidas registradas localmente (${productosConCantidad.length} productos)`);
             console.log(`📸 Fotos adjuntas:`, Object.keys(fotos).length);
             Alert.alert(
@@ -299,7 +408,9 @@ const DevolucionesVencidas = ({ visible, onClose, onGuardar, tipo = 'devolucione
                     >
                         <Ionicons name="checkmark-circle" size={20} color="white" />
                         <Text style={styles.btnGuardarTexto}>
-                            {totalProductos === 0 ? 'Limpiar' : `Guardar (${totalProductos})`}
+                            {totalProductos === 0 ? 'Limpiar' :
+                                modoSoloRegistro ? `Registrar Vencidas (${totalProductos})` :
+                                    `Guardar (${totalProductos})`}
                         </Text>
                     </TouchableOpacity>
                 </View>

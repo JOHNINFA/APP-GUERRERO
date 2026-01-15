@@ -20,7 +20,8 @@ import {
     obtenerVentas  // 🆕 Agregar para contar ventas del día
 } from '../../services/ventasService';
 import { imprimirTicket } from '../../services/printerService';
-import { ENDPOINTS } from '../../config'; // 🆕 Importar config centralizado
+import { ENDPOINTS } from '../../config';
+import { actualizarPedido } from '../../services/rutasApiService';
 
 // Días de la semana
 const DIAS_SEMANA = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO', 'DOMINGO'];
@@ -64,6 +65,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     const [ventasDelDia, setVentasDelDia] = useState([]); // 🆕 Almacenar ventas del día
     const [pedidoEnNovedad, setPedidoEnNovedad] = useState(null);
     const [pedidosEntregadosHoy, setPedidosEntregadosHoy] = useState([]); // 🆕 IDs de pedidos entregados hoy
+    const [pedidosNoEntregadosHoy, setPedidosNoEntregadosHoy] = useState([]); // 🆕 Pedidos NO entregados hoy
 
     // 🆕 Cargar Pedidos
     const verificarPedidosPendientes = async (fechaStr) => {
@@ -82,9 +84,20 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             if (response.ok) {
                 const data = await response.json();
                 if (Array.isArray(data)) {
-                    // 🆕 Separar pendientes de entregados
-                    const pendientes = data.filter(p => p.estado !== 'ENTREGADO');
+                    // 🆕 Separar pendientes de entregados y novedades
+                    const pendientes = data.filter(p => p.estado !== 'ENTREGADO' && p.estado !== 'ANULADA');
+
                     const entregados = data.filter(p => p.estado === 'ENTREGADO').map(p => ({
+                        id: p.id,
+                        destinatario: p.destinatario,
+                        numero_pedido: p.numero_pedido
+                    }));
+
+                    // 🆕 SOLO mostrar pedidos anulados desde App Móvil (no los del frontend)
+                    const noEntregados = data.filter(p =>
+                        p.estado === 'ANULADA' &&
+                        p.nota?.includes('App Móvil') // Solo si fue reportado como "No Entregado" desde app
+                    ).map(p => ({
                         id: p.id,
                         destinatario: p.destinatario,
                         numero_pedido: p.numero_pedido
@@ -92,6 +105,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
                     setPedidosPendientes(pendientes);
                     setPedidosEntregadosHoy(entregados);
+                    setPedidosNoEntregadosHoy(noEntregados);
 
                     console.log(`✅ ${pendientes.length} pedidos pendientes, ${entregados.length} entregados`);
                 }
@@ -162,6 +176,17 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
             if (response.ok) {
                 Alert.alert('Registrado', 'La novedad ha sido reportada y el pedido se ha retirado de la lista.');
+
+                // 🆕 Agregar a lista local de no entregados
+                setPedidosNoEntregadosHoy(prev => [...prev, {
+                    id: pedidoEnNovedad.id,
+                    destinatario: pedidoEnNovedad.destinatario || 'Cliente',
+                    numero_pedido: pedidoEnNovedad.numero_pedido
+                }]);
+
+                // 🆕 Limpiar selección
+                setPedidoClienteSeleccionado(null);
+
                 setModalNovedadVisible(false);
                 setMotivoNovedad('');
                 // Recargar lista
@@ -181,9 +206,12 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         setMostrarResumenEntrega(true);
     };
 
-    const confirmarEntregaPedido = async () => {
+    const confirmarEntregaPedido = async (tieneVencidas = false) => {
         if (!pedidoParaEntregar) return;
 
+        // Marcar como entregado siempre (vencidas se reportan manualmente después)
+
+        // Si NO tiene vencidas, marcar como entregado directamente
         try {
             const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_ENTREGADO(pedidoParaEntregar.id), { method: 'POST' });
             const data = await response.json();
@@ -206,7 +234,15 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
                 await verificarPedidosPendientes(fechaStr);
 
-                Alert.alert('✅ Pedido Entregado', `El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado exitosamente.`);
+                // Mensaje según si reportó vencidas
+                if (tieneVencidas) {
+                    Alert.alert(
+                        '✅ Pedido Entregado',
+                        `El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado.\n\n⚠️ Recuerda reportar las vencidas usando el botón "Vencidas" del cliente.`
+                    );
+                } else {
+                    Alert.alert('✅ Pedido Entregado', `El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado exitosamente.`);
+                }
             } else {
                 Alert.alert('Error', data.message || 'No se pudo actualizar el pedido');
             }
@@ -216,6 +252,8 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             Alert.alert('Error', 'No se pudo actualizar el pedido. Revisa tu conexión.');
         }
     };
+
+
     const [nota, setNota] = useState('');
     const [clientes, setClientes] = useState([]);
 
@@ -581,7 +619,11 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             // 4. 🆕 Recargar stock del cargue
             await cargarStockCargue(diaSeleccionado, fechaSeleccionada);
 
-            // 5. Actualizar contador de pendientes
+            // 5. 🆕 Recargar pedidos pendientes (para mostrar nuevos pedidos asignados)
+            const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+            await verificarPedidosPendientes(fechaStr);
+
+            // 6. Actualizar contador de pendientes
             await verificarPendientes();
 
             // Mostrar resultado
@@ -785,38 +827,110 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             window.__guardandoVenta = true;
             console.log('💾 Guardando venta...');
 
-            const ventaGuardada = await guardarVenta(ventaConDatos);
+            let ventaGuardada;
 
-            console.log('✅ Venta guardada:', ventaGuardada.id);
+            if (pedidoClienteSeleccionado) {
+                // 📦 LÓGICA DE ACTUALIZACIÓN DE PEDIDO Y NOVEDADES
+                const novedades = [];
+                const detallesNuevos = [];
 
-            // 🆕 ACTUALIZAR STOCK EN TIEMPO REAL
-            // Restar las cantidades vendidas del stock local
-            const nuevoStock = { ...stockCargue };
-
-            // 1. Restar productos vendidos
-            Object.keys(carrito).forEach(productoId => {
-                const producto = productos.find(p => p.id === parseInt(productoId));
-                if (producto) {
-                    const nombreProducto = producto.nombre.toUpperCase();
-                    const cantidadVendida = carrito[productoId];
-                    const stockActual = nuevoStock[nombreProducto] || 0;
-                    nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVendida);
-                    console.log(`📉 Vendido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
-                }
-            });
-
-            // 🆕 2. Restar productos vencidos (también salen del stock)
-            if (vencidas && vencidas.length > 0) {
-                vencidas.forEach(item => {
-                    const nombreProducto = item.nombre.toUpperCase();
-                    const cantidadVencida = item.cantidad || 0;
-                    const stockActual = nuevoStock[nombreProducto] || 0;
-                    nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVencida);
-                    console.log(`🗑️ Vencido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                // 1. Reconstruir detalles nuevos basados en el carrito (lo que realmente se entrega)
+                Object.keys(carrito).forEach(id => {
+                    const prod = productos.find(p => p.id == parseInt(id));
+                    if (prod && carrito[id] > 0) {
+                        detallesNuevos.push({
+                            producto: prod.id,
+                            cantidad: carrito[id],
+                            precio_unitario: prod.precio
+                        });
+                    }
                 });
+
+                // 2. Calcular Novedades (Diferencias vs Original)
+                if (pedidoClienteSeleccionado.detalles) {
+                    pedidoClienteSeleccionado.detalles.forEach(detalleOriginal => {
+                        const id = detalleOriginal.producto;
+                        const cantidadNueva = carrito[id] || 0;
+
+                        if (cantidadNueva < detalleOriginal.cantidad) {
+                            novedades.push({
+                                producto: detalleOriginal.producto_nombre,
+                                cantidad: detalleOriginal.cantidad - cantidadNueva,
+                                motivo: 'Devolución en entrega'
+                            });
+                        }
+                    });
+                }
+
+                console.log('⚠️ Novedades detectadas:', novedades);
+
+                // 3. Actualizar en Backend
+                await actualizarPedido(pedidoClienteSeleccionado.id, {
+                    estado: 'ENTREGADA',
+                    total: ventaConDatos.total,
+                    metodo_pago: ventaConDatos.metodo_pago,
+                    detalles: detallesNuevos,
+                    novedades: novedades,
+                    fecha_entrega: fechaFormateada.split('T')[0]
+                });
+
+                // 🆕 ACTUALIZAR LISTAS LOCALES INMEDIATAMENTE
+                // Mover de Pendientes a Entregados para actualizar la UI (Badge Verde)
+                setPedidosPendientes(prev => prev.filter(p => p.id !== pedidoClienteSeleccionado.id));
+                setPedidosEntregadosHoy(prev => [...prev, {
+                    ...pedidoClienteSeleccionado,
+                    estado: 'ENTREGADA',
+                    total: ventaConDatos.total,
+                    detalles: detallesNuevos,
+                    novedades: novedades
+                }]);
+
+                // Mock de respuesta para la UI
+                ventaGuardada = {
+                    ...ventaConDatos,
+                    id: pedidoClienteSeleccionado.numero_pedido,
+                    es_pedido: true
+                };
+
+            } else {
+                // Venta Normal
+                ventaGuardada = await guardarVenta(ventaConDatos);
             }
 
-            setStockCargue(nuevoStock);
+            console.log('✅ Proceso finalizado:', ventaGuardada.id);
+
+            // 🆕 ACTUALIZAR STOCK EN TIEMPO REAL
+            // IMPORTANTE: Solo afectar stock si es VENTA DIRECTA.
+            // Los pedidos asignados ya tienen su stock reservado/descontado en el cargue inicial.
+            if (!pedidoClienteSeleccionado) {
+                // Restar las cantidades vendidas del stock local
+                const nuevoStock = { ...stockCargue };
+
+                // 1. Restar productos vendidos
+                Object.keys(carrito).forEach(productoId => {
+                    const producto = productos.find(p => p.id === parseInt(productoId));
+                    if (producto) {
+                        const nombreProducto = producto.nombre.toUpperCase();
+                        const cantidadVendida = carrito[productoId];
+                        const stockActual = nuevoStock[nombreProducto] || 0;
+                        nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVendida);
+                        console.log(`📉 Vendido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                    }
+                });
+
+                // 2. Restar productos vencidos (también salen del stock si es cambio mano a mano)
+                if (vencidas && vencidas.length > 0) {
+                    vencidas.forEach(item => {
+                        const nombreProducto = item.nombre.toUpperCase();
+                        const cantidadVencida = item.cantidad || 0;
+                        const stockActual = nuevoStock[nombreProducto] || 0;
+                        nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVencida);
+                        console.log(`🗑️ Vencido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                    });
+                }
+
+                setStockCargue(nuevoStock);
+            }
 
             // 🆕 Actualizar contador y agregar venta al estado inmediatamente
             setTotalVentasHoy(prev => prev + 1);
@@ -978,6 +1092,12 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
     // Manejar selección de cliente
     const handleSeleccionarCliente = (cliente) => {
+        // 🆕 Limpiar datos de venta anterior al cambiar cliente
+        setCarrito({});
+        setVencidas([]);
+        setFotoVencidas(null);
+        setNota('');
+
         // 🆕 Verificar si ya le vendió hoy
         const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
         const yaVendidoHoy = ventasDelDia.some(venta => {
@@ -1024,6 +1144,15 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         });
 
         setPedidoClienteSeleccionado(pedido || null);
+
+        // 🆕 Si hay pedido y el cliente no tiene dirección, usar la del pedido
+        if (pedido && pedido.direccion_entrega && !cliente.direccion) {
+            setClienteSeleccionado({
+                ...cliente,
+                direccion: pedido.direccion_entrega
+            });
+        }
+
         console.log('🔍 Pedido del cliente:', pedido ? `#${pedido.numero_pedido}` : 'Sin pedido');
     };
 
@@ -1447,23 +1576,42 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                             const vNombre = norm(venta.cliente_nombre);
                             const cNegocio = norm(clienteSeleccionado.negocio);
                             const cNombre = norm(clienteSeleccionado.nombre);
-                            return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
+                            // Verificar coincidencia y que el total sea mayor a 0 (para excluir solo vencidas)
+                            return ((vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre)) && parseFloat(venta.total) > 0;
                         });
 
                         return yaVendido ? (
-                            <View style={styles.headerCheckVendido}>
-                                <Ionicons name="checkmark-circle" size={24} color="#10b981" />
+                            <View style={styles.badgeVendido}>
+                                <Text style={styles.badgeVendidoTexto}>Vendido</Text>
                             </View>
                         ) : null;
                     })()}
+
+                    {/* 🆕 Badge "No Entregado" */}
+                    {clienteSeleccionado && (() => {
+                        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                        const noEntregado = pedidosNoEntregadosHoy.find(p => {
+                            const pDestinatario = norm(p.destinatario);
+                            const cNegocio = norm(clienteSeleccionado.negocio);
+                            const cNombre = norm(clienteSeleccionado.nombre);
+                            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                        });
+                        return noEntregado ? (
+                            <View style={styles.badgeNoEntregado}>
+                                <Text style={styles.badgeNoEntregadoTexto}>No Entregado</Text>
+                            </View>
+                        ) : null;
+                    })()}
+
 
                     {/* 🆕 X roja si tiene pedido */}
                     {pedidoClienteSeleccionado && (
                         <TouchableOpacity
                             style={styles.headerXPedido}
                             onPress={() => {
-                                // Por ahora solo un placeholder, luego defines la acción
-                                Alert.alert('Cancelar Pedido', 'Funcionalidad por definir');
+                                setPedidoEnNovedad(pedidoClienteSeleccionado);
+                                setMotivoNovedad(''); // Limpiar motivo previo
+                                setModalNovedadVisible(true);
                             }}
                         >
                             <Ionicons name="close-circle" size={28} color="#dc3545" />
@@ -1579,7 +1727,12 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 >
                     <Ionicons name="checkmark-circle" size={24} color="white" style={styles.iconoBoton} />
                     <Text style={styles.btnCompletarTexto}>
-                        COMPLETAR VENTA {formatearMoneda(total)}
+                        {pedidoClienteSeleccionado
+                            ? `CONFIRMAR PEDIDO ${formatearMoneda(total)}`
+                            : (Object.keys(carrito).filter(id => carrito[id] > 0).length === 0 && vencidas.length > 0)
+                                ? 'REGISTRAR VENCIDAS'
+                                : `COMPLETAR VENTA ${formatearMoneda(total)}`
+                        }
                     </Text>
                 </TouchableOpacity>
             </View>
@@ -1656,6 +1809,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 ventasDelDia={ventasDelDia} // 🆕 Pasar ventas del día
                 pedidosPendientes={pedidosPendientes} // 🆕 Pasar pedidos pendientes
                 pedidosEntregadosHoy={pedidosEntregadosHoy} // 🆕 Pasar pedidos entregados
+                pedidosNoEntregadosHoy={pedidosNoEntregadosHoy} // 🆕 Pasar pedidos NO entregados
                 onCargarPedido={cargarPedidoEnCarrito} // 🆕 Cargar pedido en carrito
                 onMarcarEntregado={marcarPedidoEntregado} // 🆕 Marcar como entregado
                 onMarcarNoEntregado={(pedido) => { // 🆕 Marcar como no entregado
@@ -2044,6 +2198,34 @@ const styles = StyleSheet.create({
         borderRadius: 12,
     },
     badgeEntregadoTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    badgeVendido: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#00ad53',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    badgeVendidoTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    badgeNoEntregado: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#dc3545',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    badgeNoEntregadoTexto: {
         color: 'white',
         fontSize: 10,
         fontWeight: 'bold',

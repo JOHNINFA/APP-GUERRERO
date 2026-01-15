@@ -39,6 +39,7 @@ const ClienteSelector = ({
     ventasDelDia = [],
     pedidosPendientes = [], // 🆕 Lista de pedidos pendientes
     pedidosEntregadosHoy = [], // 🆕 Lista de pedidos entregados hoy
+    pedidosNoEntregadosHoy = [], // 🆕 Lista de pedidos no entregados hoy
     onCargarPedido, // 🆕 Función para cargar pedido en carrito
     onMarcarEntregado, // 🆕 Función para marcar pedido como entregado
     onMarcarNoEntregado // 🆕 Función para marcar pedido como no entregado
@@ -230,10 +231,10 @@ const ClienteSelector = ({
     const renderCliente = ({ item }) => {
         // 🆕 Verificar si ya le vendieron hoy
         const norm = (t) => t ? t.toString().toLowerCase().trim() : '';
-        let yaVendido = false;
+        let ventaRealizada = null;
 
         if (ventasDelDia && Array.isArray(ventasDelDia) && ventasDelDia.length > 0) {
-            yaVendido = ventasDelDia.some(venta => {
+            ventaRealizada = ventasDelDia.find(venta => {
                 const vNegocio = norm(venta.cliente_negocio);
                 const vNombre = norm(venta.cliente_nombre);
                 const cNegocio = norm(item.negocio);
@@ -242,6 +243,8 @@ const ClienteSelector = ({
                 return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
             });
         }
+
+        const yaVendido = !!ventaRealizada;
 
         // 🆕 Verificar si tiene pedidos pendientes
         const pedidosCliente = pedidosPendientes.filter(p => {
@@ -256,6 +259,14 @@ const ClienteSelector = ({
 
         // 🆕 Verificar si tiene pedidos entregados
         const pedidoEntregado = pedidosEntregadosHoy.find(p => {
+            const pDestinatario = norm(p.destinatario);
+            const cNegocio = norm(item.negocio);
+            const cNombre = norm(item.nombre);
+            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+        });
+
+        // 🆕 Verificar si tiene pedidos NO entregados
+        const pedidoNoEntregado = pedidosNoEntregadosHoy.find(p => {
             const pDestinatario = norm(p.destinatario);
             const cNegocio = norm(item.negocio);
             const cNombre = norm(item.nombre);
@@ -303,6 +314,47 @@ const ClienteSelector = ({
             );
         }
 
+        // 🆕 Si tiene pedido NO entregado, mostrar card roja
+        if (pedidoNoEntregado) {
+            return (
+                <TouchableOpacity
+                    style={[
+                        styles.clienteItem,
+                        styles.clienteItemNoEntregado, // 🆕 Fondo rojo transparente
+                    ]}
+                    onPress={() => handleSelectCliente(item)}
+                    activeOpacity={0.9}
+                >
+                    {/* Icono del cliente */}
+                    <View style={styles.clienteIcono}>
+                        <Ionicons name="alert-circle" size={24} color="#dc3545" />
+                    </View>
+
+                    {/* Información del cliente */}
+                    <View style={styles.clienteInfo}>
+                        <Text style={styles.clienteNombre}>{item.negocio}</Text>
+                        {item.nombre && item.nombre !== item.negocio && (
+                            <Text style={styles.clienteContacto}>👤 {item.nombre}</Text>
+                        )}
+                        <Text style={styles.clienteDetalle}>
+                            📦 Pedido #{pedidoNoEntregado.numero_pedido}
+                        </Text>
+                        {item.direccion && (
+                            <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
+                        )}
+                    </View>
+
+                    {/* Flecha indicadora */}
+                    <Ionicons name="chevron-forward" size={20} color="#dc3545" />
+
+                    {/* 🆕 Badge "No Entregado" en esquina superior derecha */}
+                    <View style={styles.badgeNoEntregadoCliente}>
+                        <Text style={styles.badgeNoEntregadoTexto}>No Entregado</Text>
+                    </View>
+                </TouchableOpacity>
+            );
+        }
+
         // Si tiene pedidos, mostrar card especial
         if (tienePedidos && pedido) {
             return (
@@ -316,7 +368,7 @@ const ClienteSelector = ({
                 >
                     {/* Icono del cliente */}
                     <View style={styles.clienteIcono}>
-                        <Ionicons name="cube" size={24} color="#dc3545" />
+                        <Ionicons name="cube" size={24} color="#ff9800" />
                     </View>
 
                     {/* Información del cliente */}
@@ -334,7 +386,12 @@ const ClienteSelector = ({
                     </View>
 
                     {/* Flecha indicadora */}
-                    <Ionicons name="chevron-forward" size={20} color="#dc3545" />
+                    <Ionicons name="chevron-forward" size={20} color="#ff9800" />
+
+                    {/* 🆕 Badge "Pendiente" en esquina superior derecha */}
+                    <View style={styles.badgePendienteCliente}>
+                        <Text style={styles.badgePendienteTexto}>Pendiente</Text>
+                    </View>
                 </TouchableOpacity>
             );
         }
@@ -343,9 +400,7 @@ const ClienteSelector = ({
         return (
             <TouchableOpacity
                 style={[
-                    styles.clienteItem,
-                    yaVendido && styles.clienteItemVendido,
-                    yaVendido && { borderColor: '#00ad53' }
+                    styles.clienteItem
                 ]}
                 onPress={() => handleSelectCliente(item)}
             >
@@ -367,8 +422,18 @@ const ClienteSelector = ({
                     {item.direccion && (
                         <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
                     )}
+                    {ventaRealizada && (
+                        <Text style={styles.clienteDetalleVenta}>
+                            💰 Venta: ${parseFloat(ventaRealizada.total).toLocaleString('es-CO')}
+                        </Text>
+                    )}
                 </View>
                 <Ionicons name="chevron-forward" size={20} color={yaVendido ? "#00ad53" : "#666"} />
+                {yaVendido && (
+                    <View style={styles.badgeVendidoCliente}>
+                        <Text style={styles.badgeVendidoTexto}>Vendido</Text>
+                    </View>
+                )}
             </TouchableOpacity>
         );
     };
@@ -684,8 +749,8 @@ const styles = StyleSheet.create({
     },
     // 🆕 Estilos Clientes con Pedido
     clienteItemConPedido: {
-        backgroundColor: 'rgba(220, 53, 69, 0.02)', // Fondo rojo super transparente
-        borderColor: '#dc3545', // Borde rojo
+        backgroundColor: 'rgba(255, 152, 0, 0.08)', // 🟠 Fondo naranja transparente
+        borderColor: '#ff9800', // 🟠 Borde naranja
         borderWidth: 1,
         elevation: 0, // Sin sombra
     },
@@ -705,6 +770,20 @@ const styles = StyleSheet.create({
         borderRadius: 12,
     },
     badgeEntregadoTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    badgeVendidoCliente: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#00ad53',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    badgeVendidoTexto: {
         color: 'white',
         fontSize: 10,
         fontWeight: 'bold',
@@ -731,6 +810,48 @@ const styles = StyleSheet.create({
     },
     btnEditar: {
         borderColor: '#007bff',
+    },
+    clienteDetalleVenta: {
+        fontSize: 12,
+        color: '#00ad53',
+        fontWeight: 'bold',
+        marginTop: 2,
+    },
+    // 🆕 Estilos No Entregado
+    clienteItemNoEntregado: {
+        backgroundColor: 'rgba(220, 53, 69, 0.1)', // Fondo rojo transparente
+        borderColor: '#dc3545', // Borde rojo
+        borderWidth: 1,
+        elevation: 0,
+    },
+    badgeNoEntregadoCliente: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#dc3545',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    badgeNoEntregadoTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    // 🟠 Estilos Badge Pendiente
+    badgePendienteCliente: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#ff9800',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    badgePendienteTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
     },
 });
 

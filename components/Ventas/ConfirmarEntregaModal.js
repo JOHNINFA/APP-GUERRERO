@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
     View,
     Text,
@@ -11,6 +11,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { formatearMoneda } from '../../services/ventasService';
 
 export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido }) => {
+    const [tieneVencidas, setTieneVencidas] = useState(false);
+
+    // Resetear valor cuando se abre el modal
+    React.useEffect(() => {
+        if (visible) {
+            setTieneVencidas(false);
+        }
+    }, [visible]);
+
     if (!pedido) return null;
 
     const {
@@ -90,6 +99,48 @@ export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido })
                                 ¿Confirmar que este pedido fue entregado al cliente?
                             </Text>
                         </View>
+
+                        {/* 🆕 Pregunta de vencidas */}
+                        <View style={styles.vencidasContainer}>
+                            <Text style={styles.vencidasPregunta}>¿El cliente tiene vencidas?</Text>
+                            <View style={styles.vencidasOpciones}>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.opcionBtn,
+                                        tieneVencidas && styles.opcionBtnActivo
+                                    ]}
+                                    onPress={() => setTieneVencidas(true)}
+                                >
+                                    <Ionicons
+                                        name={tieneVencidas ? "checkmark-circle" : "checkmark-circle-outline"}
+                                        size={20}
+                                        color={tieneVencidas ? "white" : "#22c55e"}
+                                    />
+                                    <Text style={[
+                                        styles.opcionTexto,
+                                        tieneVencidas && styles.opcionTextoActivo
+                                    ]}>Sí</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[
+                                        styles.opcionBtn,
+                                        !tieneVencidas && styles.opcionBtnActivo
+                                    ]}
+                                    onPress={() => setTieneVencidas(false)}
+                                >
+                                    <Ionicons
+                                        name={!tieneVencidas ? "close-circle" : "close-circle-outline"}
+                                        size={20}
+                                        color={!tieneVencidas ? "white" : "#dc3545"}
+                                    />
+                                    <Text style={[
+                                        styles.opcionTexto,
+                                        !tieneVencidas && styles.opcionTextoActivo
+                                    ]}>No</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
                     </ScrollView>
 
                     {/* Botones */}
@@ -104,7 +155,7 @@ export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido })
 
                         <TouchableOpacity
                             style={styles.btnConfirmar}
-                            onPress={onConfirmar}
+                            onPress={() => onConfirmar(tieneVencidas)}
                         >
                             <Ionicons name="checkmark-circle" size={20} color="white" />
                             <Text style={styles.btnConfirmarTexto}>Confirmar Entrega</Text>
@@ -273,5 +324,48 @@ const styles = StyleSheet.create({
         color: 'white',
         fontWeight: 'bold',
         fontSize: 14,
+    },
+    // 🆕 Estilos para pregunta de vencidas
+    vencidasContainer: {
+        padding: 15,
+        backgroundColor: '#f8f9fa',
+        borderRadius: 8,
+        marginHorizontal: 15,
+        marginTop: 10,
+    },
+    vencidasPregunta: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#333',
+        textAlign: 'center',
+        marginBottom: 12,
+    },
+    vencidasOpciones: {
+        flexDirection: 'row',
+        gap: 10,
+        justifyContent: 'center',
+    },
+    opcionBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingVertical: 10,
+        paddingHorizontal: 20,
+        borderRadius: 8,
+        borderWidth: 1.5,
+        borderColor: '#ddd',
+        backgroundColor: 'white',
+    },
+    opcionBtnActivo: {
+        backgroundColor: '#22c55e',
+        borderColor: '#22c55e',
+    },
+    opcionTexto: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#666',
+    },
+    opcionTextoActivo: {
+        color: 'white',
     },
 });

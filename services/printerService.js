@@ -18,39 +18,50 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
     vencidas
   } = venta;
 
-  // Valores por defecto si no hay configuración
+  // 🆕 Configuración completa con estilos visuales
   const nombreNegocio = config?.nombre_negocio || 'AREPAS EL GUERRERO';
-  const nitNegocio = config?.nit_negocio || 'Nit: 123456789-0';
+  const nitNegocio = config?.nit_negocio || '';
   const direccionNegocio = config?.direccion_negocio || '';
-  const telefonoNegocio = config?.telefono_negocio || 'Tel: 300 123 4567';
+  const ciudadNegocio = config?.ciudad_negocio || '';
+  const paisNegocio = config?.pais_negocio || '';
+  const telefonoNegocio = config?.telefono_negocio || '';
   const encabezado = config?.encabezado_ticket || '';
   const piePagina = config?.pie_pagina_ticket || 'Software: App Guerrero';
   const mensajeGracias = config?.mensaje_agradecimiento || '¡Gracias por su compra!';
   const mostrarLogo = config?.mostrar_logo !== false;
-  // 🆕 Usar logo base64 si está disponible
   const logoSrc = logoBase64 || (config?.logo ? `${SERVER_URL}${config.logo}` : null);
+
+  // 🆕 Estilos visuales configurables
+  const fuenteTicket = config?.fuente_ticket || 'Lucida Console, Monaco, Consolas';
+  const tamanioGeneral = config?.tamanio_fuente_general || 9;
+  const tamanioNombreNegocio = config?.tamanio_fuente_nombre_negocio || 11;
+  const tamanioInfo = config?.tamanio_fuente_info || 8;
+  const tamanioTabla = config?.tamanio_fuente_tabla || 8;
+  const tamanioTotales = config?.tamanio_fuente_totales || 9;
+  const letraSpaciado = config?.letter_spacing || -0.2;
+  const letraSpaciadoDivider = config?.letter_spacing_divider || -0.8;
 
   const fechaFormateada = new Date(fecha).toLocaleString('es-CO');
 
   let productosHTML = productos.map(p => `
     <tr>
-      <td style="font-size: 12px;">${p.nombre}</td>
-      <td style="text-align: center; font-size: 12px;">${p.cantidad}</td>
-      <td style="text-align: right; font-size: 12px;">${formatearMoneda(p.subtotal)}</td>
+      <td>${p.cantidad}</td>
+      <td>${p.nombre}</td>
+      <td style="text-align: right;">${formatearMoneda(p.subtotal)}</td>
     </tr>
   `).join('');
 
   let vencidasHTML = '';
   if (vencidas && vencidas.length > 0) {
     vencidasHTML = `
-      <div style="margin-top: 10px; border-top: 1px dashed black; padding-top: 5px;">
-        <div style="font-weight: bold; font-size: 12px;">CAMBIOS REALIZADOS</div>
-        <table style="width: 100%;">
+      <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dotted #000;">
+        <div style="font-weight: bold; font-size: ${tamanioInfo}px; margin-bottom: 5px;">CAMBIOS REALIZADOS</div>
+        <table style="width: 100%; font-size: ${tamanioTabla - 1}px;">
           ${vencidas.map(v => `
             <tr>
-              <td style="font-size: 11px;">${v.nombre}</td>
-              <td style="text-align: center; font-size: 11px;">${v.cantidad}</td>
-              <td style="text-align: right; font-size: 11px; font-style: italic;">(Cambio)</td>
+              <td>${v.cantidad}</td>
+              <td>${v.nombre}</td>
+              <td style="text-align: right; font-style: italic;">(Cambio)</td>
             </tr>
           `).join('')}
         </table>
@@ -62,39 +73,161 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
     <html>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+        <style>
+          * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+          }
+          
+          body {
+            margin: 0;
+            padding: 15px;
+            font-family: ${fuenteTicket}, monospace;
+            font-size: ${tamanioGeneral}px;
+            font-weight: bold;
+            background: white;
+            color: #000;
+            letter-spacing: ${letraSpaciado}px;
+            width: 300px;
+            margin: 0 auto;
+          }
+          
+          .ticket-header {
+            text-align: center;
+            margin-bottom: 15px;
+          }
+          
+          .ticket-logo {
+            max-width: 135px;
+            max-height: 115px;
+            margin-bottom: 8px;
+            filter: grayscale(100%);
+            -webkit-filter: grayscale(100%);
+          }
+
+          .ticket-business-name {
+            font-size: ${tamanioNombreNegocio}px;
+            font-weight: bold;
+            margin: 8px 0;
+            text-transform: uppercase;
+          }
+          
+          .ticket-business-info {
+            font-size: 12px;
+            margin-bottom: 5px;
+            font-weight: 900;
+            color: #000;
+          }
+
+          .ticket-divider {
+            text-align: center;
+            margin: 8px 0;
+            font-size: 10px;
+            font-weight: normal;
+            letter-spacing: ${letraSpaciadoDivider}px;
+            line-height: 1;
+          }
+          
+          .ticket-info {
+            font-size: ${tamanioInfo}px;
+            margin: 4px 0;
+            line-height: 1.5;
+            font-weight: bold;
+          }
+          
+          .ticket-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: ${tamanioTabla}px;
+            margin: 12px 0;
+          }
+          
+          .ticket-table th {
+            text-align: left;
+            border-bottom: 1px dotted #000;
+            padding: 3px 1px;
+            font-weight: 900;
+            font-size: ${tamanioTabla}px;
+            color: #000;
+          }
+          
+          .ticket-table td {
+            padding: 3px 1px;
+            vertical-align: top;
+            font-weight: normal;
+            font-size: ${tamanioTabla - 1}px;
+          }
+          
+          .ticket-table th:first-child,
+          .ticket-table td:first-child {
+            width: 30px;
+            text-align: center;
+          }
+          
+          .ticket-table th:last-child,
+          .ticket-table td:last-child {
+            width: 60px;
+            text-align: right;
+          }
+          
+          .ticket-totals {
+            margin: 12px 0;
+            font-size: ${tamanioTotales}px;
+            font-weight: bold;
+          }
+          
+          .total-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+          }
+          
+          .total-final {
+            font-size: ${tamanioTotales + 1}px;
+            margin-top: 5px;
+            padding-top: 5px;
+            border-top: 1px dashed #000;
+            font-weight: bold;
+          }
+          
+          .ticket-footer {
+            text-align: center;
+            margin-top: 12px;
+            font-size: ${tamanioTotales}px;
+            font-weight: bold;
+          }
+        </style>
       </head>
-      <body style="font-family: monospace; padding: 20px; width: 300px; margin: 0 auto;">
-        <div style="text-align: center; margin-bottom: 10px;">
-          ${mostrarLogo && logoSrc ? `<img src="${logoSrc}" style="max-width: 100px; max-height: 80px; margin-bottom: 5px;" />` : ''}
-          <div style="font-weight: bold; font-size: 16px; margin-bottom: 5px;">
-            ${nombreNegocio}
-          </div>
-          <div style="font-size: 12px;">
-            ${nitNegocio ? `Nit: ${nitNegocio}<br>` : ''}
-            ${direccionNegocio ? `${direccionNegocio}<br>` : ''}
-            ${telefonoNegocio ? `Tel: ${telefonoNegocio}` : ''}
-          </div>
-          ${encabezado ? `<div style="font-size: 11px; margin-top: 5px; font-style: italic;">${encabezado}</div>` : ''}
+      <body>
+        <div class="ticket-header">
+          ${mostrarLogo && logoSrc ? `<img src="${logoSrc}" class="ticket-logo" />` : ''}
+          <div class="ticket-business-name">${nombreNegocio}</div>
+          ${nitNegocio ? `<div class="ticket-business-info">NIT: ${nitNegocio}</div>` : ''}
+          ${telefonoNegocio ? `<div class="ticket-business-info">Tel: ${telefonoNegocio}</div>` : ''}
+          ${paisNegocio || ciudadNegocio ? `<div class="ticket-business-info">${paisNegocio}${paisNegocio && ciudadNegocio ? '- ' : ''}${ciudadNegocio}</div>` : ''}
+          ${direccionNegocio ? `<div class="ticket-business-info">${direccionNegocio}</div>` : ''}
+          ${encabezado ? `<div class="ticket-business-info" style="margin-top:5px; font-style:italic;">${encabezado}</div>` : ''}
         </div>
         
-        <div style="border-bottom: 1px dashed black; margin-bottom: 10px;"></div>
+        <div class="ticket-divider">................................................</div>
         
-        <div style="font-size: 12px; margin-bottom: 5px;">
+        <div class="ticket-info">
           <b>Ticket:</b> #${id}<br>
           <b>Fecha:</b> ${fechaFormateada}<br>
           <b>Cliente:</b> ${cliente_nombre}<br>
-          <b>Negocio:</b> ${cliente_negocio || 'N/A'}<br>
+          ${cliente_negocio ? `<b>Negocio:</b> ${cliente_negocio}<br>` : ''}
           <b>Vendedor:</b> ${vendedor}
         </div>
 
-        <div style="border-bottom: 1px dashed black; margin-bottom: 10px;"></div>
+        <div class="ticket-divider">................................................</div>
 
-        <table style="width: 100%; margin-bottom: 10px;">
+        <table class="ticket-table">
           <thead>
             <tr>
-              <th style="text-align: left; font-size: 12px;">Prod</th>
-              <th style="text-align: center; font-size: 12px;">Cant</th>
-              <th style="text-align: right; font-size: 12px;">Total</th>
+              <th style="text-align: center;">Cant</th>
+              <th>Producto</th>
+              <th style="text-align: right;">Total</th>
             </tr>
           </thead>
           <tbody>
@@ -102,25 +235,34 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
           </tbody>
         </table>
 
-        <div style="border-top: 1px dashed black; margin-top: 5px; padding-top: 5px;">
-          <div style="display: flex; justify-content: space-between; font-size: 12px;">
+        <div class="ticket-divider">................................................</div>
+
+        <div class="ticket-totals">
+          <div class="total-row">
+            <span>Art</span>
+            <span>${productos.length}</span>
+          </div>
+          <div class="total-row">
+            <span>Cant.Art</span>
+            <span>${productos.reduce((sum, p) => sum + p.cantidad, 0)}</span>
+          </div>
+          <div class="total-row">
             <span>Subtotal:</span>
             <span>${formatearMoneda(subtotal)}</span>
           </div>
-          <div style="display: flex; justify-content: space-between; font-size: 12px;">
+          <div class="total-row">
             <span>Descuento:</span>
             <span>${formatearMoneda(descuento)}</span>
           </div>
-          <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; margin-top: 5px;">
+          <div class="total-row total-final">
             <span>TOTAL:</span>
             <span>${formatearMoneda(total)}</span>
           </div>
         </div>
 
-
         ${vencidasHTML}
 
-        <div style="margin-top: 20px; text-align: center; font-size: 11px;">
+        <div class="ticket-footer">
           ${mensajeGracias}<br>
           ${piePagina}
         </div>

@@ -155,11 +155,36 @@ export const obtenerConfiguracionImpresion = async () => {
     }
 };
 
+export const actualizarPedido = async (pedidoId, datos) => {
+    try {
+        console.log('📝 Actualizando pedido:', pedidoId, datos);
+        const response = await fetch(`${API_BASE}/pedidos/${pedidoId}/`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(datos)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('❌ Error actualizando pedido:', errorText);
+            throw new Error(`Error actualizando pedido: ${errorText}`);
+        }
+
+        const result = await response.json();
+        console.log('✅ Pedido actualizado correctamente');
+        return result;
+    } catch (error) {
+        console.error('Error enviando actualización de pedido:', error);
+        throw error;
+    }
+};
+
 export default {
     obtenerRutasPorUsuario,
     obtenerClientesPorRutaYDia,
     enviarVentaRuta,
     marcarClienteVisitado,
     limpiarTodasLasVisitas,
-    obtenerConfiguracionImpresion
+    obtenerConfiguracionImpresion,
+    actualizarPedido
 };
