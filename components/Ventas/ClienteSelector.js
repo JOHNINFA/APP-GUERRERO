@@ -8,7 +8,9 @@ import {
     StyleSheet,
     Modal,
     ActivityIndicator,
-    SectionList
+    SectionList,
+    Linking, // 🆕 Importar Linking
+    Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -119,6 +121,7 @@ const ClienteSelector = ({
                     celular: c.telefono || '',
                     direccion: c.direccion || '',
                     dia_visita: c.dia_visita,
+                    nota: c.nota, // 🆕 Incluir nota
                     tipo_negocio: c.tipo_negocio, // 🆕 Mapear tipo de negocio para saber origen
                     esDeRuta: true
                 }));
@@ -166,6 +169,7 @@ const ClienteSelector = ({
                         celular: c.telefono || '',
                         direccion: c.direccion || '',
                         dia_visita: c.dia_visita,
+                        nota: c.nota, // 🆕 Incluir nota
                         tipo_negocio: c.tipo_negocio, // 🆕 Mapear tipo de negocio para saber origen
                         esDeRuta: true
                     }));
@@ -228,6 +232,17 @@ const ClienteSelector = ({
         onNuevoCliente();
         setMostrarTodos(false);
         onClose();
+    };
+
+    // 🆕 Función para navegar
+    const handleNavegar = (direccion) => {
+        if (!direccion) {
+            Alert.alert('Sin dirección', 'Este cliente no tiene una dirección registrada.');
+            return;
+        }
+        const query = encodeURIComponent(direccion);
+        // Intentar abrir Google Maps
+        Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`);
     };
 
     const renderCliente = ({ item }) => {
@@ -300,6 +315,9 @@ const ClienteSelector = ({
                         <Text style={styles.clienteDetalle}>
                             📦 Pedido #{pedidoEntregado.numero_pedido}
                         </Text>
+                        {item.celular || (pedidoEntregado && pedidoEntregado.telefono_contacto) ? (
+                            <Text style={styles.clienteDetalle}>📞 {item.celular || (pedidoEntregado && pedidoEntregado.telefono_contacto)}</Text>
+                        ) : null}
                         {item.direccion && (
                             <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
                         )}
@@ -311,6 +329,29 @@ const ClienteSelector = ({
                     {/* 🆕 Badge "Entregado" en esquina superior derecha */}
                     <View style={styles.badgeEntregadoCliente}>
                         <Text style={styles.badgeEntregadoTexto}>Entregado</Text>
+                    </View>
+
+                    {/* 🆕 Acciones Verticales */}
+                    <View style={{ flexDirection: 'column', alignItems: 'center', marginRight: 5, gap: 5 }}>
+                        {item.nota ? (
+                            <TouchableOpacity
+                                onPress={() => Alert.alert('Nota', item.nota)}
+                            >
+                                <Ionicons name="document-text" size={26} color="#dc3545" />
+                            </TouchableOpacity>
+                        ) : null}
+
+                        {item.direccion ? (
+                            <TouchableOpacity
+                                style={styles.btnNavegar}
+                                onPress={() => {
+                                    handleSelectCliente(item);
+                                    handleNavegar(item.direccion);
+                                }}
+                            >
+                                <Ionicons name="navigate-circle" size={32} color="#22c55e" />
+                            </TouchableOpacity>
+                        ) : null}
                     </View>
                 </TouchableOpacity>
             );
@@ -341,6 +382,9 @@ const ClienteSelector = ({
                         <Text style={styles.clienteDetalle}>
                             📦 Pedido #{pedidoNoEntregado.numero_pedido}
                         </Text>
+                        {item.celular || (pedidoNoEntregado && pedidoNoEntregado.telefono_contacto) ? (
+                            <Text style={styles.clienteDetalle}>📞 {item.celular || (pedidoNoEntregado && pedidoNoEntregado.telefono_contacto)}</Text>
+                        ) : null}
                         {item.direccion && (
                             <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
                         )}
@@ -352,6 +396,29 @@ const ClienteSelector = ({
                     {/* 🆕 Badge "No Entregado" en esquina superior derecha */}
                     <View style={styles.badgeNoEntregadoCliente}>
                         <Text style={styles.badgeNoEntregadoTexto}>No Entregado</Text>
+                    </View>
+
+                    {/* 🆕 Acciones Verticales */}
+                    <View style={{ flexDirection: 'column', alignItems: 'center', marginRight: 5, gap: 5 }}>
+                        {item.nota ? (
+                            <TouchableOpacity
+                                onPress={() => Alert.alert('Nota', item.nota)}
+                            >
+                                <Ionicons name="document-text" size={26} color="#dc3545" />
+                            </TouchableOpacity>
+                        ) : null}
+
+                        {item.direccion ? (
+                            <TouchableOpacity
+                                style={styles.btnNavegar}
+                                onPress={() => {
+                                    handleSelectCliente(item);
+                                    handleNavegar(item.direccion);
+                                }}
+                            >
+                                <Ionicons name="navigate-circle" size={32} color="#22c55e" />
+                            </TouchableOpacity>
+                        ) : null}
                     </View>
                 </TouchableOpacity>
             );
@@ -380,8 +447,11 @@ const ClienteSelector = ({
                             <Text style={styles.clienteContacto}>👤 {item.nombre}</Text>
                         )}
                         <Text style={styles.clienteDetalle}>
-                            📦 Pedido #{pedido.numero_pedido} • ${parseFloat(pedido.total).toLocaleString()}
+                            📦 Pedido #{pedido.numero_pedido}
                         </Text>
+                        {item.celular || pedido.telefono_contacto ? (
+                            <Text style={styles.clienteDetalle}>📞 {item.celular || pedido.telefono_contacto}</Text>
+                        ) : null}
                         {item.direccion && (
                             <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
                         )}
@@ -393,6 +463,29 @@ const ClienteSelector = ({
                     {/* 🆕 Badge "Pendiente" en esquina superior derecha */}
                     <View style={styles.badgePendienteCliente}>
                         <Text style={styles.badgePendienteTexto}>Pendiente</Text>
+                    </View>
+
+                    {/* 🆕 Acciones Verticales */}
+                    <View style={{ flexDirection: 'column', alignItems: 'center', marginRight: 5, gap: 5 }}>
+                        {item.nota ? (
+                            <TouchableOpacity
+                                onPress={() => Alert.alert('Nota', item.nota)}
+                            >
+                                <Ionicons name="document-text" size={26} color="#dc3545" />
+                            </TouchableOpacity>
+                        ) : null}
+
+                        {item.direccion ? (
+                            <TouchableOpacity
+                                style={styles.btnNavegar}
+                                onPress={() => {
+                                    handleSelectCliente(item);
+                                    handleNavegar(item.direccion);
+                                }}
+                            >
+                                <Ionicons name="navigate-circle" size={32} color="#22c55e" />
+                            </TouchableOpacity>
+                        ) : null}
                     </View>
                 </TouchableOpacity>
             );
@@ -451,13 +544,40 @@ const ClienteSelector = ({
                         <Text style={styles.clienteDia}>📅 {item.dia_visita}</Text>
                     )}
                 </View>
+
+
+                {/* 🆕 Acciones Verticales */}
+                <View style={{ flexDirection: 'column', alignItems: 'center', marginRight: 5, gap: 5 }}>
+                    {item.nota ? (
+                        <TouchableOpacity
+                            onPress={() => Alert.alert('Nota', item.nota)}
+                        >
+                            <Ionicons name="document-text" size={26} color="#dc3545" />
+                        </TouchableOpacity>
+                    ) : null}
+
+                    {item.direccion ? (
+                        <TouchableOpacity
+                            style={styles.btnNavegar}
+                            onPress={() => {
+                                handleSelectCliente(item);
+                                handleNavegar(item.direccion);
+                            }}
+                        >
+                            <Ionicons name="navigate-circle" size={32} color="#22c55e" />
+                        </TouchableOpacity>
+                    ) : null}
+                </View>
+
                 <Ionicons name="chevron-forward" size={20} color={yaVendido ? "#00ad53" : "#666"} />
-                {yaVendido && (
-                    <View style={styles.badgeVendidoCliente}>
-                        <Text style={styles.badgeVendidoTexto}>Vendido</Text>
-                    </View>
-                )}
-            </TouchableOpacity>
+                {
+                    yaVendido && (
+                        <View style={styles.badgeVendidoCliente}>
+                            <Text style={styles.badgeVendidoTexto}>Vendido</Text>
+                        </View>
+                    )
+                }
+            </TouchableOpacity >
         );
     };
 
@@ -811,6 +931,7 @@ const styles = StyleSheet.create({
         fontSize: 10,
         fontWeight: 'bold',
     },
+
     botonesAccionPedido: {
         flexDirection: 'column',
         gap: 8,
@@ -903,6 +1024,10 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 10,
         fontWeight: 'bold',
+    },
+    btnNavegar: {
+        padding: 5,
+        marginRight: 5,
     },
 });
 

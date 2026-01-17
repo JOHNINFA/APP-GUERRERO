@@ -25,14 +25,10 @@ const OptionsScreen = ({ navigation, userId }) => {
 
 
 
-      {/* Botón Ventas - NUEVO */}
-      <TouchableOpacity
-        style={styles.option}
-        onPress={() => navigation.navigate('Ventas', { userId })}
-      >
+      <TouchableOpacity style={styles.option} onPress={() => handleOptionPress('Main')}>
         <View style={styles.iconWithText}>
-          <Ionicons name="cart-outline" size={24} color="white" style={styles.icon} />
-          <Text style={styles.optionText}>Ventas</Text>
+          <Ionicons name="cloud-upload-outline" size={24} color="white" style={styles.icon} />
+          <Text style={styles.optionText}>Sugeridos</Text>
         </View>
       </TouchableOpacity>
 
@@ -43,10 +39,13 @@ const OptionsScreen = ({ navigation, userId }) => {
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.option} onPress={() => handleOptionPress('Main')}>
+      <TouchableOpacity
+        style={styles.option}
+        onPress={() => navigation.navigate('Ventas', { userId })}
+      >
         <View style={styles.iconWithText}>
-          <Ionicons name="cloud-upload-outline" size={24} color="white" style={styles.icon} />
-          <Text style={styles.optionText}>Sugerido</Text>
+          <Ionicons name="cart-outline" size={24} color="white" style={styles.icon} />
+          <Text style={styles.optionText}>Ventas</Text>
         </View>
       </TouchableOpacity>
 
@@ -57,12 +56,7 @@ const OptionsScreen = ({ navigation, userId }) => {
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.option} onPress={() => navigation.navigate('InicioRutas')}>
-        <View style={styles.iconWithText}>
-          <Ionicons name="map-outline" size={24} color="white" style={styles.icon} />
-          <Text style={styles.optionText}>Rutas</Text>
-        </View>
-      </TouchableOpacity>
+
     </ImageBackground>
   );
 };

@@ -30,6 +30,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
     const [numeroWhatsApp, setNumeroWhatsApp] = useState('');
     const [enviarCorreo, setEnviarCorreo] = useState(false);
     const [correoDestino, setCorreoDestino] = useState('');
+    const [nota, setNota] = useState(''); // 🆕 Estado para nota
 
     // Resetear valores cuando se abre el modal
     useEffect(() => {
@@ -39,7 +40,10 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
             setEnviarWhatsApp(false);
             setNumeroWhatsApp(venta?.cliente_celular || '');
             setEnviarCorreo(false);
+            setNumeroWhatsApp(venta?.cliente_celular || '');
+            setEnviarCorreo(false);
             setCorreoDestino('');
+            setNota(''); // 🆕 Limpiar nota
         }
     }, [visible]);
 
@@ -79,7 +83,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
             whatsapp: enviarWhatsApp ? numeroWhatsApp : null,
             correo: enviarCorreo ? correoDestino : null
         };
-        onConfirmar(fechaVenta, metodoPago, opcionesEnvio);
+        onConfirmar(fechaVenta, metodoPago, opcionesEnvio, nota); // 🆕 Pasar nota
     };
 
     return (
@@ -202,6 +206,22 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                                     </TouchableOpacity>
                                 ))}
                             </View>
+                        </View>
+
+                         <View style={styles.divider} />
+
+                        {/* 🆕 Notas del Pedido */}
+                        <View style={styles.seccion}>
+                            <Text style={styles.seccionTitulo}>📝 Notas del Pedido</Text>
+                            <TextInput
+                                style={styles.inputNota}
+                                value={nota}
+                                onChangeText={setNota}
+                                placeholder="Escribe aquí observaciones para el pedido..."
+                                multiline
+                                numberOfLines={3}
+                                textAlignVertical="top"
+                            />
                         </View>
 
                         <View style={styles.divider} />
@@ -566,6 +586,16 @@ const styles = StyleSheet.create({
         color: 'white',
         fontWeight: 'bold',
         fontSize: 16,
+    },
+    // 🆕 Estilos Nota
+    inputNota: {
+        borderWidth: 1,
+        borderColor: '#ccc',
+        borderRadius: 8,
+        padding: 10,
+        fontSize: 14,
+        backgroundColor: '#f9f9f9',
+        minHeight: 80,
     },
 });
 

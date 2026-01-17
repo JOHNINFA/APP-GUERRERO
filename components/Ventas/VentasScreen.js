@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker'; // 🆕 Import DatePicker
 import ClienteSelector from './ClienteSelector';
 import ClienteModal from './ClienteModal';
+import ClienteNotaModal from './ClienteNotaModal'; // 🆕 Importar
 import DevolucionesVencidas from './DevolucionesVencidas';
 import ResumenVentaModal from './ResumenVentaModal';
 import { ConfirmarEntregaModal } from './ConfirmarEntregaModal'; // 🆕 Importar modal
@@ -84,24 +85,29 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             if (response.ok) {
                 const data = await response.json();
                 if (Array.isArray(data)) {
-                    // 🆕 Separar pendientes de entregados y novedades
-                    // Filtrar tanto ENTREGADO como ENTREGADA
-                    const pendientes = data.filter(p => p.estado !== 'ENTREGADO' && p.estado !== 'ENTREGADA' && p.estado !== 'ANULADA');
+                    // 🆕 Incluir: 1) Pendientes normales, 2) ANULADOS reportados desde App (No Entregados)
+                    // Excluir: ANULADOS administrativos y ENTREGADOS
+                    const pendientes = data.filter(p =>
+                        (p.estado !== 'ENTREGADO' && p.estado !== 'ENTREGADA' && p.estado !== 'ANULADA') ||
+                        (p.estado === 'ANULADA' && p.nota?.toLowerCase().includes('entregado')) // Case-insensitive
+                    );
 
                     const entregados = data.filter(p => p.estado === 'ENTREGADO' || p.estado === 'ENTREGADA').map(p => ({
                         id: p.id,
                         destinatario: p.destinatario,
-                        numero_pedido: p.numero_pedido
+                        numero_pedido: p.numero_pedido,
+                        total: parseFloat(p.total) || 0
                     }));
 
                     // 🆕 SOLO mostrar pedidos anulados desde App Móvil (no los del frontend)
                     const noEntregados = data.filter(p =>
                         p.estado === 'ANULADA' &&
-                        p.nota?.includes('App Móvil') // Solo si fue reportado como "No Entregado" desde app
+                        p.nota?.toLowerCase().includes('entregado') // Case-insensitive
                     ).map(p => ({
                         id: p.id,
                         destinatario: p.destinatario,
-                        numero_pedido: p.numero_pedido
+                        numero_pedido: p.numero_pedido,
+                        total: parseFloat(p.total) || 0
                     }));
 
                     setPedidosPendientes(pendientes);
@@ -176,23 +182,33 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             });
 
             if (response.ok) {
-                Alert.alert('Registrado', 'La novedad ha sido reportada y el pedido se ha retirado de la lista.');
+                Alert.alert('Registrado', 'La novedad ha sido reportada.');
 
                 // 🆕 Agregar a lista local de no entregados
                 setPedidosNoEntregadosHoy(prev => [...prev, {
                     id: pedidoEnNovedad.id,
                     destinatario: pedidoEnNovedad.destinatario || 'Cliente',
-                    numero_pedido: pedidoEnNovedad.numero_pedido
+                    numero_pedido: pedidoEnNovedad.numero_pedido,
+                    total: parseFloat(pedidoEnNovedad.total) || 0
                 }]);
+
+                // 🆕 Actualizar el pedido en la lista de pendientes para marcarlo como anulado
+                // En lugar de eliminarlo, lo marcamos como ANULADA localmente
+                setPedidosPendientes(prev => prev.map(p =>
+                    p.id === pedidoEnNovedad.id
+                        ? { ...p, estado: 'ANULADA', nota: `No entregado: ${motivoNovedad}${p.nota ? ' | ' + p.nota : ''}` }
+                        : p
+                ));
 
                 // 🆕 Limpiar selección
                 setPedidoClienteSeleccionado(null);
 
                 setModalNovedadVisible(false);
                 setMotivoNovedad('');
-                // Recargar lista
-                const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
-                verificarPedidosPendientes(fechaStr);
+
+                // ❌ NO recargar - esto eliminaba el pedido de la lista
+                // const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+                // verificarPedidosPendientes(fechaStr);
             } else {
                 Alert.alert('Error', 'No se pudo registrar la novedad.');
             }
@@ -241,7 +257,8 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     id: pedidoParaEntregar.id,
                     destinatario: pedidoParaEntregar.destinatario || clienteSeleccionado?.negocio || 'Cliente',
                     numero_pedido: pedidoParaEntregar.numero_pedido,
-                    metodo_pago: metodoPago // 🆕 Guardar localmente también
+                    metodo_pago: metodoPago, // 🆕 Guardar localmente también
+                    total: parseFloat(pedidoParaEntregar.total) || 0 // 🆕 Guardar total
                 }]);
 
                 // 🆕 Limpiar pedido del cliente para volver a botones normales
@@ -294,6 +311,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
     // 🆕 Estado para cerrar turno
     const [mostrarModalCerrarTurno, setMostrarModalCerrarTurno] = useState(false);
+    const [mostrarNotaModal, setMostrarNotaModal] = useState(false); // 🆕 Estado para modal notas
     const [totalVentasHoy, setTotalVentasHoy] = useState(0);
     const [totalDineroHoy, setTotalDineroHoy] = useState(0);
 
@@ -1176,7 +1194,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         if (yaVendidoHoy) {
             Alert.alert(
                 '⚠️ Cliente con Venta',
-                `Ya se realizó una venta a ${cliente.negocio || cliente.nombre} el día de hoy.\n\n¿Deseas continuar de todas formas?`,
+                `Ya realizaste una venta a ${cliente.negocio || cliente.nombre} el día de hoy.\n\n¿Deseas continuar de todas formas?`,
                 [
                     { text: 'Cancelar', style: 'cancel' },
                     {
@@ -1448,6 +1466,22 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         );
     };
 
+    // 🆕 Handler para cuando se guarda una nota
+    const handleNotaGuardada = async (nota) => {
+        // Actualizar cliente seleccionado localmente
+        if (clienteSeleccionado) {
+            setClienteSeleccionado({
+                ...clienteSeleccionado,
+                nota: nota
+            });
+        }
+
+        // Recargar lista completa de clientes para mantener consistencia
+        // (Esto asegura que si cambias de cliente y vuelves, la nota persista)
+        const clientesData = await obtenerClientes();
+        setClientes(clientesData);
+    };
+
     return (
         <View style={styles.container}>
             {/* 🆕 Pantalla de carga mientras verifica turno */}
@@ -1555,7 +1589,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
             {/* Header - Cliente */}
             <View style={styles.headerCliente}>
-                <TouchableOpacity
+                <View
                     style={[
                         styles.clienteSelector,
                         // 🆕 Fondo y borde verde si tiene pedido entregado
@@ -1573,47 +1607,69 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                             } : null;
                         })()
                     ]}
-                    onPress={() => setMostrarSelectorCliente(true)}
                 >
-                    <Ionicons name="person" size={20} color="#003d88" />
-                    <View style={styles.clienteInfo}>
-                        <Text style={styles.clienteNombre}>
-                            {clienteSeleccionado?.negocio || 'Seleccionar Cliente'}
-                        </Text>
-                        {clienteSeleccionado?.nombre && (
-                            <Text style={styles.clienteDetalle}>
-                                👤 {clienteSeleccionado.nombre}
+                    {/* Área Táctil para Selector de Cliente */}
+                    <TouchableOpacity
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                        onPress={() => setMostrarSelectorCliente(true)}
+                    >
+                        <Ionicons name="person" size={20} color="#003d88" />
+                        <View style={styles.clienteInfo}>
+                            <Text style={styles.clienteNombre}>
+                                {clienteSeleccionado?.negocio || 'Seleccionar Cliente'}
                             </Text>
-                        )}
-                        <Text style={styles.clienteDetalle}>
-                            {(() => {
-                                // Buscar pedido pendiente
-                                if (pedidoClienteSeleccionado) {
-                                    return `📦 Pedido #${pedidoClienteSeleccionado.numero_pedido}`;
-                                }
+                            {clienteSeleccionado?.nombre && (
+                                <Text style={styles.clienteDetalle}>
+                                    👤 {clienteSeleccionado.nombre}
+                                </Text>
+                            )}
+                            <Text style={styles.clienteDetalle}>
+                                {(() => {
+                                    // Buscar pedido pendiente
+                                    if (pedidoClienteSeleccionado) {
+                                        return `📦 Pedido #${pedidoClienteSeleccionado.numero_pedido}`;
+                                    }
 
-                                // Buscar pedido entregado
-                                const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
-                                const pedidoEntregado = pedidosEntregadosHoy.find(p => {
-                                    const pDestinatario = norm(p.destinatario);
-                                    const cNegocio = norm(clienteSeleccionado?.negocio);
-                                    const cNombre = norm(clienteSeleccionado?.nombre);
-                                    return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
-                                });
+                                    // Buscar pedido entregado
+                                    const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                                    const pedidoEntregado = pedidosEntregadosHoy.find(p => {
+                                        const pDestinatario = norm(p.destinatario);
+                                        const cNegocio = norm(clienteSeleccionado?.negocio);
+                                        const cNombre = norm(clienteSeleccionado?.nombre);
+                                        return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                                    });
 
-                                if (pedidoEntregado) {
-                                    return `📦 Pedido #${pedidoEntregado.numero_pedido}`;
-                                }
+                                    if (pedidoEntregado) {
+                                        return `📦 Pedido #${pedidoEntregado.numero_pedido}`;
+                                    }
 
-                                // No hay pedido, mostrar teléfono
-                                return `📞 ${clienteSeleccionado?.celular || 'Sin teléfono'}`;
-                            })()}
-                        </Text>
-                        <Text style={styles.clienteDetalle}>
-                            📍 {clienteSeleccionado?.direccion || 'Sin dirección'}
-                        </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={20} color="#003d88" />
+                                    // No hay pedido, mostrar teléfono
+                                    return `📞 ${clienteSeleccionado?.celular || 'Sin teléfono'}`;
+                                })()}
+                            </Text>
+                            <Text style={styles.clienteDetalle}>
+                                📍 {clienteSeleccionado?.direccion || 'Sin dirección'}
+                            </Text>
+                        </View>
+                    </TouchableOpacity>
+
+                    {/* 🆕 Botón de Notas INTEGRADO (Lado derecho) */}
+                    {clienteSeleccionado && (
+                        <TouchableOpacity
+                            style={styles.btnNotaInterno}
+                            onPress={() => setMostrarNotaModal(true)}
+                        >
+                            <Ionicons
+                                name={clienteSeleccionado.nota ? "document-text" : "document-text-outline"}
+                                size={26}
+                                color={clienteSeleccionado.nota ? "#dc3545" : "#A0A0A0"}
+                            />
+                        </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity onPress={() => setMostrarSelectorCliente(true)}>
+                        <Ionicons name="chevron-forward" size={20} color="#003d88" style={{ marginLeft: 5 }} />
+                    </TouchableOpacity>
 
                     {/* 🆕 Badge "Entregado" en esquina superior derecha */}
                     {clienteSeleccionado && (() => {
@@ -1657,42 +1713,41 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
                         return yaVendido ? (
                             <View style={styles.badgeVendido}>
-                                <Text style={styles.badgeVendidoTexto}>Vendido</Text>
+                                <Text style={styles.badgeVendidoTexto}>Ya vendido</Text>
                             </View>
                         ) : null;
                     })()}
+                </View>
 
-                    {/* 🆕 Badge "No Entregado" */}
-                    {clienteSeleccionado && (() => {
-                        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
-                        const noEntregado = pedidosNoEntregadosHoy.find(p => {
-                            const pDestinatario = norm(p.destinatario);
-                            const cNegocio = norm(clienteSeleccionado.negocio);
-                            const cNombre = norm(clienteSeleccionado.nombre);
-                            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
-                        });
-                        return noEntregado ? (
-                            <View style={styles.badgeNoEntregado}>
-                                <Text style={styles.badgeNoEntregadoTexto}>No Entregado</Text>
-                            </View>
-                        ) : null;
-                    })()}
+                {/* 🆕 Badge "No Entregado" */}
+                {clienteSeleccionado && (() => {
+                    const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                    const noEntregado = pedidosNoEntregadosHoy.find(p => {
+                        const pDestinatario = norm(p.destinatario);
+                        const cNegocio = norm(clienteSeleccionado.negocio);
+                        const cNombre = norm(clienteSeleccionado.nombre);
+                        return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                    });
+                    return noEntregado ? (
+                        <View style={styles.badgeNoEntregado}>
+                            <Text style={styles.badgeNoEntregadoTexto}>No Entregado</Text>
+                        </View>
+                    ) : null;
+                })()}
 
-
-                    {/* 🆕 X roja si tiene pedido */}
-                    {pedidoClienteSeleccionado && (
-                        <TouchableOpacity
-                            style={styles.headerXPedido}
-                            onPress={() => {
-                                setPedidoEnNovedad(pedidoClienteSeleccionado);
-                                setMotivoNovedad(''); // Limpiar motivo previo
-                                setModalNovedadVisible(true);
-                            }}
-                        >
-                            <Ionicons name="close-circle" size={28} color="#dc3545" />
-                        </TouchableOpacity>
-                    )}
-                </TouchableOpacity>
+                {/* 🆕 X roja si tiene pedido PERO NO está anulado */}
+                {pedidoClienteSeleccionado && pedidoClienteSeleccionado.estado !== 'ANULADA' && (
+                    <TouchableOpacity
+                        style={styles.headerXPedido}
+                        onPress={() => {
+                            setPedidoEnNovedad(pedidoClienteSeleccionado);
+                            setMotivoNovedad(''); // Limpiar motivo previo
+                            setModalNovedadVisible(true);
+                        }}
+                    >
+                        <Ionicons name="close-circle" size={28} color="#dc3545" />
+                    </TouchableOpacity>
+                )}
             </View>
 
             {/* Botones Acciones: Cambian según si tiene pedido */}
@@ -1865,16 +1920,18 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             </Modal>
 
             {/* 🆕 DatePicker para Seleccionar Fecha */}
-            {mostrarDatePicker && (
-                <DateTimePicker
-                    value={fechaSeleccionada}
-                    mode="date"
-                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                    onChange={handleConfirmarFecha}
-                    maximumDate={new Date(2030, 11, 31)}
-                    minimumDate={new Date(2020, 0, 1)}
-                />
-            )}
+            {
+                mostrarDatePicker && (
+                    <DateTimePicker
+                        value={fechaSeleccionada}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={handleConfirmarFecha}
+                        maximumDate={new Date(2030, 11, 31)}
+                        minimumDate={new Date(2020, 0, 1)}
+                    />
+                )
+            }
 
             {/* Modales */}
             <ClienteSelector
@@ -1951,18 +2008,32 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                             <Text style={styles.modalCerrarText}>¿Estás seguro de cerrar el turno?</Text>
                             <Text style={styles.modalCerrarSubtext}>Esta acción calculará automáticamente las devoluciones.</Text>
 
-                            {totalVentasHoy > 0 && (
-                                <View style={styles.modalCerrarResumen}>
-                                    <View style={styles.modalCerrarFila}>
-                                        <Text style={styles.modalCerrarLabel}>Ventas realizadas:</Text>
-                                        <Text style={styles.modalCerrarValor}>{totalVentasHoy}</Text>
+                            {/* 🆕 Resumen Completo */}
+                            {(totalVentasHoy > 0 || pedidosEntregadosHoy.length > 0) && (() => {
+                                const totalPedidos = pedidosEntregadosHoy.reduce((sum, p) => sum + (parseFloat(p.total) || 0), 0);
+                                const granTotal = totalDineroHoy + totalPedidos;
+
+                                return (
+                                    <View style={styles.modalCerrarResumen}>
+                                        <View style={styles.modalCerrarFila}>
+                                            <Text style={styles.modalCerrarLabel}>Ventas Ruta ({totalVentasHoy}):</Text>
+                                            <Text style={styles.modalCerrarValor}>{formatearMoneda(totalDineroHoy)}</Text>
+                                        </View>
+
+                                        <View style={styles.modalCerrarFila}>
+                                            <Text style={styles.modalCerrarLabel}>Pedidos ({pedidosEntregadosHoy.length}):</Text>
+                                            <Text style={styles.modalCerrarValor}>{formatearMoneda(totalPedidos)}</Text>
+                                        </View>
+
+                                        <View style={[styles.modalCerrarFila, { marginTop: 10, borderTopWidth: 1, borderColor: '#eee', paddingTop: 10 }]}>
+                                            <Text style={[styles.modalCerrarLabel, { fontWeight: 'bold', fontSize: 16 }]}>TOTAL A ENTREGAR:</Text>
+                                            <Text style={[styles.modalCerrarValor, { fontWeight: 'bold', fontSize: 16, color: '#003d88' }]}>
+                                                {formatearMoneda(granTotal)}
+                                            </Text>
+                                        </View>
                                     </View>
-                                    <View style={styles.modalCerrarFila}>
-                                        <Text style={styles.modalCerrarLabel}>Total vendido:</Text>
-                                        <Text style={styles.modalCerrarValor}>{formatearMoneda(totalDineroHoy)}</Text>
-                                    </View>
-                                </View>
-                            )}
+                                );
+                            })()}
                         </View>
 
                         <View style={styles.modalCerrarBotones}>
@@ -2008,16 +2079,28 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                                 <Text style={{ textAlign: 'center', color: '#666', marginTop: 20 }}>No tienes pedidos pendientes</Text>
                             ) : (
                                 pedidosPendientes.map((p) => (
-                                    <View key={p.id} style={styles.pedidoCard}>
-                                        <TouchableOpacity
-                                            style={styles.btnNovedadX}
-                                            onPress={() => {
-                                                setPedidoEnNovedad(p);
-                                                setModalNovedadVisible(true);
-                                            }}
-                                        >
-                                            <Ionicons name="close-circle" size={28} color="#dc3545" />
-                                        </TouchableOpacity>
+                                    <View key={p.id} style={[
+                                        styles.pedidoCard,
+                                        p.estado === 'ANULADA' && { backgroundColor: '#fff5f5', borderColor: '#dc3545', borderWidth: 2 }
+                                    ]}>
+                                        {/* Badge "No Entregado" si está anulado */}
+                                        {p.estado === 'ANULADA' && (
+                                            <View style={{ position: 'absolute', top: 15, left: '50%', transform: [{ translateX: -70 }], backgroundColor: '#dc3545', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, zIndex: 5, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }}>
+                                                <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold', letterSpacing: 0.5 }}>❌ NO ENTREGADO</Text>
+                                            </View>
+                                        )}
+                                        {/* Botón X solo si NO está anulado */}
+                                        {p.estado !== 'ANULADA' && (
+                                            <TouchableOpacity
+                                                style={styles.btnNovedadX}
+                                                onPress={() => {
+                                                    setPedidoEnNovedad(p);
+                                                    setModalNovedadVisible(true);
+                                                }}
+                                            >
+                                                <Ionicons name="close-circle" size={28} color="#dc3545" />
+                                            </TouchableOpacity>
+                                        )}
 
                                         <View style={styles.pedidoHeader}>
                                             <Text style={styles.pedidoCliente}>{p.destinatario || 'Cliente'}</Text>
@@ -2035,23 +2118,26 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                                             ))}
                                         </View>
 
-                                        <View style={styles.pedidoAccionesRow}>
-                                            <TouchableOpacity
-                                                style={[styles.botonAccion, { backgroundColor: '#28a745', flex: 1, marginRight: 5 }]}
-                                                onPress={() => cargarPedidoEnCarrito(p)}
-                                            >
-                                                <Ionicons name="cart" size={18} color="white" />
-                                                <Text style={styles.textoBotonAccion}>Vender (Carrito)</Text>
-                                            </TouchableOpacity>
+                                        {/* Botones solo si NO está anulado */}
+                                        {p.estado !== 'ANULADA' && (
+                                            <View style={styles.pedidoAccionesRow}>
+                                                <TouchableOpacity
+                                                    style={[styles.botonAccion, { backgroundColor: '#28a745', flex: 1, marginRight: 5 }]}
+                                                    onPress={() => cargarPedidoEnCarrito(p)}
+                                                >
+                                                    <Ionicons name="cart" size={18} color="white" />
+                                                    <Text style={styles.textoBotonAccion}>Vender (Carrito)</Text>
+                                                </TouchableOpacity>
 
-                                            <TouchableOpacity
-                                                style={[styles.botonAccion, { backgroundColor: '#e9ecef', flex: 1, marginLeft: 5 }]}
-                                                onPress={() => marcarPedidoEntregado(p)}
-                                            >
-                                                <Ionicons name="checkmark-done" size={18} color="#003d88" />
-                                                <Text style={[styles.textoBotonAccion, { color: '#003d88' }]}>Solo Entregar</Text>
-                                            </TouchableOpacity>
-                                        </View>
+                                                <TouchableOpacity
+                                                    style={[styles.botonAccion, { backgroundColor: '#e9ecef', flex: 1, marginLeft: 5 }]}
+                                                    onPress={() => marcarPedidoEntregado(p)}
+                                                >
+                                                    <Ionicons name="checkmark-done" size={18} color="#003d88" />
+                                                    <Text style={[styles.textoBotonAccion, { color: '#003d88' }]}>Solo Entregar</Text>
+                                                </TouchableOpacity>
+                                            </View>
+                                        )}
                                     </View>
                                 ))
                             )}
@@ -2109,7 +2195,14 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     </View>
                 </View>
             </Modal>
-        </View>
+            {/* 🆕 MODAL NOTAS CLIENTE */}
+            <ClienteNotaModal
+                visible={mostrarNotaModal}
+                onClose={() => setMostrarNotaModal(false)}
+                cliente={clienteSeleccionado}
+                onGuardar={handleNotaGuardada}
+            />
+        </View >
     );
 };
 
@@ -2238,8 +2331,8 @@ const styles = StyleSheet.create({
     },
     headerXPedido: {
         position: 'absolute',
-        top: 4,
-        right: 4,
+        top: 18,
+        right: 20,
         backgroundColor: 'white',
         borderRadius: 14,
         padding: 0,
@@ -2293,8 +2386,8 @@ const styles = StyleSheet.create({
     },
     badgeNoEntregado: {
         position: 'absolute',
-        top: 4,
-        right: 4,
+        top: 20,
+        right: 20,
         backgroundColor: '#dc3545',
         paddingHorizontal: 8,
         paddingVertical: 3,
@@ -2800,6 +2893,83 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '600',
     },
+    btnAbrirTurnoTexto: {
+        color: 'white',
+        fontSize: 12,
+        fontWeight: '600',
+    },
+    // 🆕 Estilos Botón Nota
+    btnNotaCliente: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 8,
+        marginLeft: 8,
+        backgroundColor: '#e6f7ff',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#91d5ff',
+        position: 'relative'
+    },
+    btnNotaClienteTexto: {
+        fontSize: 12,
+        color: '#003d88',
+        fontWeight: 'bold',
+        marginLeft: 4
+    },
+    puntoNotificacion: {
+        position: 'absolute',
+        top: -4,
+        right: -4,
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#ff4d4f',
+        borderWidth: 1,
+        borderColor: 'white'
+    },
+    // 🆕 Estilos Icono Nota
+    btnNotaIcono: {
+        width: 44,
+        height: 44,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginLeft: 8,
+        backgroundColor: '#fffbe6', // Amarillo suave
+        borderRadius: 22, // Circular
+        borderWidth: 1,
+        borderColor: '#ffe58f',
+        position: 'relative'
+    },
+    puntoNotificacionIcono: {
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        backgroundColor: '#ff4d4f',
+        borderWidth: 2,
+        borderColor: 'white'
+    },
+    // 🆕 Estilos Botón Interno
+    btnNotaInterno: {
+        padding: 5,
+        marginHorizontal: 5,
+        justifyContent: 'center',
+        alignItems: 'center',
+        position: 'relative'
+    },
+    puntoNotificacionInterno: {
+        position: 'absolute',
+        top: 2,
+        right: 2,
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#ff4d4f',
+        borderWidth: 1.5,
+        borderColor: '#f0f8ff' // Mismo que fondo card
+    }
 });
 
 export default VentasScreen;
