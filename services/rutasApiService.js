@@ -44,31 +44,36 @@ export const obtenerClientesPorRutaYDia = async (rutaId, dia) => {
 
 export const enviarVentaRuta = async (ventaData) => {
     try {
-        const formData = new FormData();
+        console.log('📤 Enviando venta al backend...');
+        console.log('   id_local:', ventaData.id_local);
+        console.log('   dispositivo_id:', ventaData.dispositivo_id);
 
-        // Campos obligatorios
-        // CORRECCIÓN: Usar vendedor_id o vendedor
-        formData.append('vendedor', ventaData.vendedor_id || ventaData.vendedor);
+        // 🆕 Si hay fotos, usar FormData; si no, usar JSON
+        const hayFotos = ventaData.foto_vencidos && typeof ventaData.foto_vencidos === 'object' && Object.keys(ventaData.foto_vencidos).length > 0;
 
-        if (ventaData.ruta) formData.append('ruta', ventaData.ruta);
-        formData.append('cliente_nombre', ventaData.cliente_nombre);
-        if (ventaData.nombre_negocio) formData.append('nombre_negocio', ventaData.nombre_negocio);
-        if (ventaData.cliente) formData.append('cliente', ventaData.cliente);
-        formData.append('total', ventaData.total);
-        formData.append('metodo_pago', ventaData.metodo_pago);
+        if (hayFotos) {
+            // Usar FormData para fotos
+            const formData = new FormData();
 
-        // Fecha de la venta (si viene, usarla; si no, el backend usa la fecha actual)
-        if (ventaData.fecha) {
-            formData.append('fecha', ventaData.fecha);
-        }
+            // 🆕 Campos multi-dispositivo
+            if (ventaData.id_local) formData.append('id_local', ventaData.id_local);
+            if (ventaData.dispositivo_id) formData.append('dispositivo_id', ventaData.dispositivo_id);
 
-        // JSON Fields deben enviarse como string
-        formData.append('detalles', JSON.stringify(ventaData.detalles || []));
-        formData.append('productos_vencidos', JSON.stringify(ventaData.productos_vencidos || []));
+            // Campos obligatorios
+            formData.append('vendedor', ventaData.vendedor_id || ventaData.vendedor);
+            if (ventaData.ruta) formData.append('ruta', ventaData.ruta);
+            formData.append('cliente_nombre', ventaData.cliente_nombre);
+            if (ventaData.nombre_negocio) formData.append('nombre_negocio', ventaData.nombre_negocio);
+            if (ventaData.cliente) formData.append('cliente', ventaData.cliente);
+            formData.append('total', ventaData.total);
+            formData.append('metodo_pago', ventaData.metodo_pago);
+            if (ventaData.fecha) formData.append('fecha', ventaData.fecha);
 
-        // Fotos de evidencia por producto
-        // Formato: evidencia_<productoId>_<indice>
-        if (ventaData.foto_vencidos && typeof ventaData.foto_vencidos === 'object') {
+            // JSON Fields
+            formData.append('detalles', JSON.stringify(ventaData.detalles || []));
+            formData.append('productos_vencidos', JSON.stringify(ventaData.productos_vencidos || []));
+
+            // Fotos de evidencia
             for (const productoId in ventaData.foto_vencidos) {
                 const fotosProducto = ventaData.foto_vencidos[productoId];
                 if (Array.isArray(fotosProducto)) {
@@ -81,46 +86,90 @@ export const enviarVentaRuta = async (ventaData) => {
                     });
                 }
             }
-        }
 
-        console.log('📤 Enviando venta con FormData:', {
-            vendedor: ventaData.vendedor_id || ventaData.vendedor,
-            cliente: ventaData.cliente_nombre,
-            total: ventaData.total,
-            fotos: ventaData.foto_vencidos ? 'PRESENTES' : 'NO'
-        });
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-        // 🆕 Agregar timeout de 45 segundos (para fotos pesadas)
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 45000);
+            try {
+                const response = await fetch(`${API_BASE}/ventas-ruta/`, {
+                    method: 'POST',
+                    body: formData,
+                    signal: controller.signal
+                });
 
-        try {
-            const response = await fetch(`${API_BASE}/ventas-ruta/`, {
-                method: 'POST',
-                body: formData,
-                signal: controller.signal
-            });
+                clearTimeout(timeoutId);
 
-            clearTimeout(timeoutId);
+                // 🆕 Manejo mejorado de respuestas
+                if (response.status === 201) {
+                    const data = await response.json();
+                    console.log('✅ Venta creada en servidor:', data.id);
+                    return { success: true, data };
+                }
 
-            if (!response.ok) {
+                if (response.status === 200) {
+                    const data = await response.json();
+                    if (data.duplicada) {
+                        console.log('⚠️ Venta ya existía (duplicado):', data.id_local);
+                        return { success: true, warning: 'DUPLICADO', data };
+                    }
+                    return { success: true, data };
+                }
+
+                if (response.status === 409) {
+                    const error = await response.json();
+                    console.warn('⚠️ Conflicto de sincronización:', error.error);
+                    return { success: true, warning: 'CONFLICT', data: error };
+                }
+
                 const errorText = await response.text();
                 console.error('❌ Error respuesta servidor:', errorText);
                 throw new Error(`Error del servidor: ${response.status}`);
+            } catch (fetchError) {
+                clearTimeout(timeoutId);
+                if (fetchError.name === 'AbortError') {
+                    throw new Error('Timeout: El servidor tardó demasiado');
+                }
+                throw fetchError;
+            }
+        } else {
+            // 🆕 Sin fotos: usar JSON (más rápido)
+            const response = await fetch(`${API_BASE}/ventas-ruta/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(ventaData)
+            });
+
+            // 🆕 Manejo mejorado de respuestas
+            if (response.status === 201) {
+                const data = await response.json();
+                console.log('✅ Venta creada en servidor:', data.id);
+                return { success: true, data };
             }
 
-            const result = await response.json();
-            console.log('✅ Venta enviada al servidor:', result.id);
-            return result;
-        } catch (fetchError) {
-            clearTimeout(timeoutId);
-            if (fetchError.name === 'AbortError') {
-                throw new Error('Timeout: El servidor tardó demasiado');
+            if (response.status === 200) {
+                const data = await response.json();
+                if (data.duplicada) {
+                    console.log('⚠️ Venta ya existía (duplicado):', data.id_local);
+                    console.log('   Dispositivo original:', data.dispositivo_original);
+                    return { success: true, warning: 'DUPLICADO', data };
+                }
+                console.log('✅ Venta procesada:', data.id);
+                return { success: true, data };
             }
-            throw fetchError;
+
+            if (response.status === 409) {
+                const error = await response.json();
+                console.warn('⚠️ Conflicto de sincronización:', error.error);
+                return { success: true, warning: 'CONFLICT', data: error };
+            }
+
+            const errorText = await response.text();
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
         }
     } catch (error) {
-        console.error('Error enviando venta:', error);
+        console.error('❌ Error enviando venta:', error);
         throw error;
     }
 };

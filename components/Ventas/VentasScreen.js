@@ -18,7 +18,8 @@ import {
     sincronizarProductos,
     sincronizarVentasPendientes,
     obtenerVentasPendientes,
-    obtenerVentas  // 🆕 Agregar para contar ventas del día
+    obtenerVentas,  // 🆕 Agregar para contar ventas del día
+    limpiarVentasLocales // 🆕 Limpiar al cerrar turno
 } from '../../services/ventasService';
 import { imprimirTicket } from '../../services/printerService';
 import { ENDPOINTS } from '../../config';
@@ -1076,7 +1077,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             setTimeout(() => {
                 Alert.alert(
                     'Venta Completada',
-                    `Venta ${ventaGuardada.id} guardada exitosamente\nTotal: ${formatearMoneda(ventaConDatos.total)}\nMétodo: ${metodoPago}`,
+                    `Venta guardada exitosamente\nTotal: ${formatearMoneda(ventaConDatos.total)}\nMétodo: ${metodoPago}`,
                     alertOptions
                 );
             }, 500);
@@ -1385,6 +1386,9 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
                                     // 🆕 Limpiar stock local (turno cerrado)
                                     setStockCargue({});
+
+                                    // 🆕 Limpiar ventas locales para evitar fantasmas
+                                    await limpiarVentasLocales();
                                 } else if (data.error === 'TURNO_YA_CERRADO') {
                                     // 🆕 Turno ya fue cerrado anteriormente
                                     Alert.alert(

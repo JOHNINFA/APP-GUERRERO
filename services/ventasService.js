@@ -6,8 +6,50 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { enviarVentaRuta } from './rutasApiService';
 import { API_URL } from '../config';
+import * as Device from 'expo-device';  // 🆕 Para obtener info del dispositivo
+import Constants from 'expo-constants';  // 🆕 Para info adicional
 
 const API_BASE = `${API_URL}/api`;
+
+// ==================== SISTEMA MULTI-DISPOSITIVO ====================
+
+/**
+ * 🆕 Obtiene o genera un ID único del dispositivo
+ * Formato: OS-MODELO-RANDOM (ej: ANDROID-SM-G991B-K3J9X2)
+ * Se guarda en AsyncStorage para mantener el mismo ID entre sesiones
+ */
+export const obtenerDispositivoId = async () => {
+    try {
+        // Intentar obtener de caché
+        let deviceId = await AsyncStorage.getItem('DEVICE_ID');
+
+        if (!deviceId) {
+            // Generar nuevo ID basado en info del dispositivo
+            const os = Device.osName || 'UNKNOWN';  // ANDROID, IOS, etc.
+            const modelo = Device.modelName || Device.deviceName || 'DEVICE';
+            const random = Math.random().toString(36).substr(2, 6).toUpperCase();
+
+            // Limpiar modelo (remover espacios y caracteres especiales)
+            const modeloLimpio = modelo.replace(/[^a-zA-Z0-9]/g, '-').substr(0, 20);
+
+            deviceId = `${os}-${modeloLimpio}-${random}`.toUpperCase();
+
+            // Guardar en caché para futuras ejecuciones
+            await AsyncStorage.setItem('DEVICE_ID', deviceId);
+            console.log('📱 Dispositivo ID generado:', deviceId);
+        } else {
+            console.log('📱 Dispositivo ID desde caché:', deviceId);
+        }
+
+        return deviceId;
+    } catch (error) {
+        console.error('Error obteniendo device ID:', error);
+        // Fallback: generar ID aleatorio
+        const timestamp = Date.now();
+        const random = Math.random().toString(36).substr(2, 9).toUpperCase();
+        return `DEVICE-${timestamp}-${random}`;
+    }
+};
 
 
 // ==================== COLA DE SINCRONIZACIÓN OFFLINE ====================
@@ -143,6 +185,15 @@ export const sincronizarVentasPendientes = async () => {
                 console.log(`✅ Venta ${venta.id} sincronizada`);
             } catch (error) {
                 console.warn(`⚠️ Error sincronizando venta ${venta.id}:`, error.message);
+
+                // 🆕 Auto-limpieza: Si el error es 400 (Bad Request), los datos están mal y no se arreglarán.
+                // Eliminar para no bloquear la cola.
+                if (error.message.includes('400') || error.message.includes('HTTP 400')) {
+                    console.error(`❌ Venta ${venta.id} tiene datos inválidos (400), eliminando de cola.`);
+                    await eliminarDeColaPendientes(venta.id);
+                    continue;
+                }
+
                 // Incrementar intentos
                 venta.intentos++;
                 if (venta.intentos >= 5) {
@@ -484,14 +535,28 @@ export const calcularSubtotal = (productos) => {
  * Genera ID único para venta
  * @returns {Promise<string>} ID de venta
  */
-const generarIdVenta = async () => {
+/**
+ * 🆕 Genera ID único para venta con formato anti-colisión
+ * Formato: VENDEDOR-DISPOSITIVO-TIMESTAMP-RANDOM
+ * Ejemplo: ID1-ANDROID-SAMSUNG-K3J9X2-1737145200000-P9Q2X1
+ */
+const generarIdVenta = async (vendedorId) => {
     try {
-        const ventas = await obtenerVentas();
-        const numero = ventas.length + 1;
-        return `VEN-${String(numero).padStart(4, '0')}`;
-    } catch (error) {
+        const deviceId = await obtenerDispositivoId();
         const timestamp = Date.now();
-        return `VEN-${timestamp}`;
+        const random = Math.random().toString(36).substr(2, 6).toUpperCase();
+
+        // Formato largo y único
+        const idVenta = `${vendedorId}-${deviceId}-${timestamp}-${random}`;
+
+        console.log('🆔 ID Venta generado:', idVenta);
+        return idVenta;
+    } catch (error) {
+        console.error('Error generando ID venta:', error);
+        // Fallback
+        const timestamp = Date.now();
+        const random = Math.random().toString(36).substr(2, 9).toUpperCase();
+        return `${vendedorId}-UNKNOWN-${timestamp}-${random}`;
     }
 };
 
@@ -509,8 +574,11 @@ export const guardarVenta = async (venta) => {
         // Usar la fecha que viene en la venta, o la fecha actual si no viene
         const fechaVenta = venta.fecha || new Date().toISOString();
 
+        // 🆕 Generar ID único con vendedorId
+        const idVenta = await generarIdVenta(venta.vendedor_id || venta.vendedor);
+
         const nuevaVenta = {
-            id: await generarIdVenta(),
+            id: idVenta,  // 🆕 ID largo y único
             ...venta,
             fecha: fechaVenta,
             estado: 'completada',
@@ -529,16 +597,20 @@ export const guardarVenta = async (venta) => {
             motivo: item.motivo || 'No especificado'
         }));
 
+        // 🆕 Obtener dispositivo_id para tracking
+        const dispositivoId = await obtenerDispositivoId();
+
         const ventaBackend = {
             id_local: nuevaVenta.id, // 🆕 ID único para detectar duplicados
-            vendedor_id: venta.vendedor_id || venta.vendedor,
+            dispositivo_id: dispositivoId,  // 🆕 Tracking de dispositivo
+            vendedor: venta.vendedor_id || venta.vendedor, // ⚠️ Corrección: el serializer espera 'vendedor'
             cliente_nombre: venta.cliente_nombre,
             nombre_negocio: venta.cliente_negocio || '',
             total: venta.total,
             detalles: venta.productos,
             metodo_pago: venta.metodo_pago || 'EFECTIVO',
             productos_vencidos: productosVencidosFormateados,
-            foto_vencidos: venta.fotoVencidas || {},
+            foto_vencidos: (venta.fotoVencidas && Object.keys(venta.fotoVencidas).length > 0) ? venta.fotoVencidas : null, // ⚠️ Corrección: null si vacío
             fecha: fechaVenta
         };
 
@@ -550,14 +622,22 @@ export const guardarVenta = async (venta) => {
 
                 if (conectado) {
                     try {
-                        await enviarVentaRuta(ventaBackend);
-                        console.log('✅ Venta sincronizada con servidor');
+                        const resultado = await enviarVentaRuta(ventaBackend);
 
-                        // Marcar como sincronizada
-                        nuevaVenta.sincronizada = true;
-                        const ventasActuales = await obtenerVentas();
-                        const ventasActualizadas = ventasActuales.map(v => v.id === nuevaVenta.id ? { ...v, sincronizada: true } : v);
-                        await AsyncStorage.setItem('ventas', JSON.stringify(ventasActualizadas));
+                        if (resultado.success) {
+                            console.log('✅ Venta sincronizada con servidor');
+
+                            // Marcar como sincronizada
+                            nuevaVenta.sincronizada = true;
+                            const ventasActuales = await obtenerVentas();
+                            const ventasActualizadas = ventasActuales.map(v => v.id === nuevaVenta.id ? { ...v, sincronizada: true } : v);
+                            await AsyncStorage.setItem('ventas', JSON.stringify(ventasActualizadas));
+
+                            // 🆕 Manejar duplicados
+                            if (resultado.warning === 'DUPLICADO') {
+                                console.log('⚠️ Venta ya existía en servidor (otro dispositivo)');
+                            }
+                        }
                     } catch (err) {
                         console.warn('⚠️ Error enviando, agregando a cola:', err.message);
                         await agregarAColaPendientes(ventaBackend, nuevaVenta.id);

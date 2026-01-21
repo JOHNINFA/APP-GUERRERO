@@ -11,7 +11,6 @@ import Cargue from './components/Cargue';
 import Vencidas from './components/Vencidas';
 import VentasScreen from './components/Ventas/VentasScreen';
 import InicioRutas from './components/rutas/InicioRutas';
-import SeleccionarRuta from './components/rutas/SeleccionarRuta';
 import SeleccionarDia from './components/rutas/SeleccionarDia';
 import ListaClientes from './components/rutas/ListaClientes';
 import 'react-native-gesture-handler';

@@ -1,8 +1,7 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ImageBackground } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ImageBackground, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-
-
+import AsyncStorage from '@react-native-async-storage/async-storage'; // 🆕
 
 const OptionsScreen = ({ navigation, userId }) => {
   // Eliminado carguePressed, ya no es necesario forzar la navegación a Cargue
@@ -11,6 +10,33 @@ const OptionsScreen = ({ navigation, userId }) => {
   const handleOptionPress = (screen) => {
     // Navega directamente a la pantalla solicitada
     navigation.navigate(screen, { userId });
+  };
+
+  // 🆕 Función para borrar datos locales
+  const handleLimpiarDatos = () => {
+    Alert.alert(
+      '⚠️ Resetear App Móvil',
+      'Esto borrará todas las ventas guardadas localmente, clientes en caché y configuraciones de ESTE dispositivo.\n\nÚsalo para corregir problemas de "ventas fantasma" o datos desactualizados.\n\n¿Estás seguro?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'BORRAR TODO',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Borrar todas las keys relevantes
+              const keys = ['ventas', 'clientes', 'productos_cache', 'ventas_pendientes_sync', 'DEVICE_ID'];
+              await AsyncStorage.multiRemove(keys);
+              // Opcional: await AsyncStorage.clear(); // Demasiado agresivo si hay tokens de auth
+
+              Alert.alert('✅ Reseteo Completado', 'Por favor cierra completamente la aplicación y vuelve a abrirla para recargar todo limpio.');
+            } catch (e) {
+              Alert.alert('Error', 'No se pudo limpiar el almacenamiento: ' + e.message);
+            }
+          }
+        }
+      ]
+    );
   };
 
 
@@ -55,6 +81,8 @@ const OptionsScreen = ({ navigation, userId }) => {
           <Text style={styles.optionText}>Rendimiento</Text>
         </View>
       </TouchableOpacity>
+
+
 
 
     </ImageBackground>
