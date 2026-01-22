@@ -2,7 +2,7 @@
   "expo": {
     "name": "Aplicacion Guerrero",
     "slug": "AG",
-    "version": "1.0.0",
+    "version": "3.0.0",
     "orientation": "portrait",
     "icon": "assets/icono.png",
     "userInterfaceStyle": "light",
@@ -20,7 +20,9 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.johni1981.reactnativecourse",
+      "versionCode": 3,
       "minSdkVersion": 21,
+      "softwareKeyboardLayoutMode": "pan",
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
@@ -34,7 +36,7 @@
     },
     "extra": {
       "eas": {
-        "projectId": "125ff7fd-2f44-416d-93c7-cfcdaad3f9c6"
+        "projectId": "c89eb506-8180-49af-881c-c310768fc95a"
       }
     }
   }

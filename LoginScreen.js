@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { View, TextInput, Button, StyleSheet, Alert, ImageBackground, StatusBar, ActivityIndicator } from 'react-native';
+import { View, TextInput, Button, StyleSheet, Alert, ImageBackground, StatusBar, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons'; // 🆕 Importamos iconos profesionales
 import { API_URL } from './config';
 
 const LoginScreen = ({ onLogin }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
@@ -60,14 +62,32 @@ const LoginScreen = ({ onLogin }) => {
           editable={!loading}
           autoCapitalize="characters"
         />
-        <TextInput
-          style={styles.input}
-          placeholder="Contraseña"
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-          editable={!loading}
-        />
+
+        {/* 🆕 Container de contraseña con diseño integrado */}
+        <View style={styles.passwordContainer}>
+          <TextInput
+            style={styles.passwordInput}
+            placeholder="Contraseña"
+            secureTextEntry={!showPassword}
+            value={password}
+            onChangeText={setPassword}
+            editable={!loading}
+          />
+          {password.length > 0 && (
+            <TouchableOpacity
+              onPress={() => setShowPassword(!showPassword)}
+              style={styles.eyeButton}
+            >
+              {/* Icono vectorial profesional color gris suave/oscuro */}
+              <Ionicons
+                name={showPassword ? "eye-off-outline" : "eye-outline"}
+                size={20}
+                color="#333"
+              />
+            </TouchableOpacity>
+          )}
+        </View>
+
         {loading ? (
           <ActivityIndicator size="large" color="#003d88" style={{ marginTop: 10 }} />
         ) : (
@@ -99,6 +119,21 @@ const styles = StyleSheet.create({
     padding: 10,
     marginBottom: 15,
   },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white', // Mismo fondo que el input de arriba
+    borderRadius: 8,
+    marginBottom: 15,
+    paddingRight: 10,
+  },
+  passwordInput: {
+    flex: 1,
+    padding: 10,
+  },
+  eyeButton: {
+    padding: 5,
+  }
 });
 
 export default LoginScreen;

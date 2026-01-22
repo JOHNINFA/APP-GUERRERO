@@ -89,7 +89,7 @@ const App = () => {
       {isLoggedIn ? (
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen name="Options">
-            {(props) => <OptionsScreen {...props} userId={userId} />}
+            {(props) => <OptionsScreen {...props} userId={userId} onLogout={() => setIsLoggedIn(false)} />}
           </Stack.Screen>
           <Stack.Screen name="Main">
             {(props) => <MainScreen {...props} userId={userId} />}

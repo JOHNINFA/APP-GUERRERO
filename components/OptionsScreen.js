@@ -1,15 +1,30 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ImageBackground, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ImageBackground, Alert, BackHandler } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage'; // 🆕
 
-const OptionsScreen = ({ navigation, userId }) => {
+const OptionsScreen = ({ navigation, userId, onLogout }) => {
   // Eliminado carguePressed, ya no es necesario forzar la navegación a Cargue
   // Eliminado isPressed, ya no es necesario
 
   const handleOptionPress = (screen) => {
     // Navega directamente a la pantalla solicitada
     navigation.navigate(screen, { userId });
+  };
+
+  const confirmarSalida = () => {
+    Alert.alert(
+      "Cerrar Aplicación",
+      "¿Seguro que quieres salir de la app?",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Salir",
+          style: "destructive",
+          onPress: () => BackHandler.exitApp() // 🚪 Cierra la App (Android)
+        }
+      ]
+    );
   };
 
   // 🆕 Función para borrar datos locales
@@ -48,8 +63,14 @@ const OptionsScreen = ({ navigation, userId }) => {
     >
       <StatusBar hidden={true} />
 
-
-
+      {/* 🆕 Botón de Salida (Flecha/Logout) */}
+      <TouchableOpacity
+        style={styles.logoutButton}
+        onPress={confirmarSalida}
+      >
+        <Ionicons name="log-out-outline" size={32} color="white" />
+        {/* <Text style={styles.logoutText}>Salir</Text> */}
+      </TouchableOpacity>
 
       <TouchableOpacity style={styles.option} onPress={() => handleOptionPress('Main')}>
         <View style={styles.iconWithText}>
@@ -93,6 +114,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingBottom: 70, // ⬆️ Ajuste final fino
   },
 
   option: {
@@ -115,6 +137,20 @@ const styles = StyleSheet.create({
   icon: {
     marginRight: 10, // Espacio entre el ícono y el texto
   },
+  logoutButton: {
+    position: 'absolute',
+    top: 40, // Bajamos un poco para evitar el notch/status bar
+    right: 20,
+    padding: 10,
+    backgroundColor: 'rgba(0,0,0,0.3)', // Fondo semitransparente circular
+    borderRadius: 30,
+    zIndex: 10, // Asegura que esté por encima de todo
+  },
+  logoutText: {
+    color: 'white',
+    fontSize: 12,
+    marginTop: -2
+  }
 });
 
 export default OptionsScreen;

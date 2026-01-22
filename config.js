@@ -1,12 +1,17 @@
 // Configuración centralizada de la app
-// ⚠️ AJUSTAR ESTA IP SEGÚN EL ENTORNO
+// ⚠️ CAMBIAR 'ENV' ANTES DE GENERAR EL APK (BUILD)
 
-// Para desarrollo local:
-// - Emulador Android: 'http://10.0.2.2:8000'
-// - Dispositivo Físico: 'http://192.168.1.19:8000' (IP de tu PC)
-// - iOS Simulator: 'http://localhost:8000'
+const ENV = 'PROD'; // Opciones: 'DEV' (Local) | 'PROD' (VPS/Nube)
 
-export const API_URL = 'http://192.168.1.19:8000';
+// Direcciones IP
+const LOCAL_IP = '192.168.1.19'; // Tu IP local actual
+const PROD_URL = 'https://aglogistics.tech'; // Tu dominio real
+
+export const API_URL = ENV === 'PROD'
+  ? PROD_URL
+  : `http://${LOCAL_IP}:8000`;
+
+console.log(`🚀 App iniciada en modo: ${ENV} | API: ${API_URL}`);
 
 // Endpoints específicos
 export const ENDPOINTS = {
