@@ -562,6 +562,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         backgroundColor: 'white',
         padding: 15,
+        paddingBottom: 30, // Extra padding para barra de navegación Android
         borderTopWidth: 1,
         borderTopColor: '#e0e0e0',
         gap: 10,
