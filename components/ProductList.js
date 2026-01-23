@@ -46,45 +46,20 @@ const ProductList = ({ selectedDay, userId }) => {
       console.log('📦 Cargando productos para Sugeridos...');
       const productosData = obtenerProductos();
       
-      // Función para buscar imagen con coincidencia flexible
-      const buscarImagen = (nombreProducto) => {
-        const nombreNormalizado = nombreProducto.trim().toUpperCase().replace(/\s+/g, ' ');
-        
-        // 1. Buscar coincidencia exacta
-        for (const p of productosConImagenes) {
-          const nombreLocal = p.name.trim().toUpperCase().replace(/\s+/g, ' ');
-          if (nombreLocal === nombreNormalizado) {
-            return p.image;
-          }
-        }
-        
-        // 2. Buscar coincidencia parcial (el nombre del servidor está contenido en el local)
-        for (const p of productosConImagenes) {
-          const nombreLocal = p.name.trim().toUpperCase().replace(/\s+/g, ' ');
-          if (nombreLocal.includes(nombreNormalizado)) {
-            return p.image;
-          }
-        }
-        
-        // 3. Buscar coincidencia parcial inversa (el nombre local está contenido en el del servidor)
-        for (const p of productosConImagenes) {
-          const nombreLocal = p.name.trim().toUpperCase().replace(/\s+/g, ' ');
-          if (nombreNormalizado.includes(nombreLocal)) {
-            return p.image;
-          }
-        }
-        
-        return null;
+      // Función para buscar imagen por ID (más confiable que por nombre)
+      const buscarImagenPorId = (idProducto) => {
+        const producto = productosConImagenes.find(p => p.id === idProducto);
+        return producto ? producto.image : null;
       };
       
       // Filtrar y convertir al formato esperado (con name e image desde assets locales)
       const productosFormateados = productosData
         .filter(p => p.disponible_app_sugeridos !== false) // Filtrar por disponible_app_sugeridos
         .map(p => {
-          const imagen = buscarImagen(p.nombre);
+          const imagen = buscarImagenPorId(p.id);
           
           if (!imagen) {
-            console.log(`⚠️ Sin imagen para: "${p.nombre}"`);
+            console.log(`⚠️ Sin imagen para ID ${p.id}: "${p.nombre}"`);
           }
           
           return {

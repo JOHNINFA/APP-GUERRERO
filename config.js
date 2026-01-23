@@ -7,9 +7,9 @@ const ENV = 'PROD'; // Opciones: 'DEV' (Local) | 'PROD' (VPS/Nube)
 const LOCAL_IP = '192.168.1.19'; // Tu IP local actual
 const PROD_URL = 'https://aglogistics.tech'; // Tu dominio real
 
-export const API_URL = ENV === 'PROD'
-  ? PROD_URL
-  : `http://${LOCAL_IP}:8000`;
+export const API_URL = ENV === 'DEV'
+  ? `http://${LOCAL_IP}:8000`  // DEV → tu backend local
+  : PROD_URL;                   // PROD → aglogistics.tech
 
 console.log(`🚀 App iniciada en modo: ${ENV} | API: ${API_URL}`);
 
