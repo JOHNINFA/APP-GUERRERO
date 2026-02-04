@@ -123,54 +123,51 @@ export const enviarVentaRuta = async (ventaData) => {
 
                 const errorText = await response.text();
                 console.error('❌ Error respuesta servidor:', errorText);
-                throw new Error(`Error del servidor: ${response.status}`);
+                return { success: false, error: `Error servidor: ${response.status} ${errorText}` };
+
             } catch (fetchError) {
                 clearTimeout(timeoutId);
+                let msj = fetchError.message;
                 if (fetchError.name === 'AbortError') {
-                    throw new Error('Timeout: El servidor tardó demasiado');
+                    msj = 'Timeout: El servidor tardó demasiado';
                 }
-                throw fetchError;
+                console.warn('⚠️ Error fetch (se manejará offline):', msj);
+                return { success: false, error: msj };
             }
         } else {
             // 🆕 Sin fotos: usar JSON (más rápido)
-            const response = await fetch(`${API_BASE}/ventas-ruta/`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(ventaData)
-            });
+            try {
+                const response = await fetch(`${API_BASE}/ventas-ruta/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(ventaData)
+                });
 
-            // 🆕 Manejo mejorado de respuestas
-            if (response.status === 201) {
-                const data = await response.json();
-                console.log('✅ Venta creada en servidor:', data.id);
-                return { success: true, data };
-            }
-
-            if (response.status === 200) {
-                const data = await response.json();
-                if (data.duplicada) {
-                    console.log('⚠️ Venta ya existía (duplicado):', data.id_local);
-                    console.log('   Dispositivo original:', data.dispositivo_original);
-                    return { success: true, warning: 'DUPLICADO', data };
+                if (response.status === 201) {
+                    const data = await response.json();
+                    console.log('✅ Venta creada en servidor:', data.id);
+                    return { success: true, data };
                 }
-                console.log('✅ Venta procesada:', data.id);
-                return { success: true, data };
-            }
 
-            if (response.status === 409) {
-                const error = await response.json();
-                console.warn('⚠️ Conflicto de sincronización:', error.error);
-                return { success: true, warning: 'CONFLICT', data: error };
-            }
+                if (response.status === 200) {
+                    const data = await response.json();
+                    if (data.duplicada) {
+                        console.log('⚠️ Venta ya existía (duplicado):', data.id_local);
+                        return { success: true, warning: 'DUPLICADO', data };
+                    }
+                    console.log('✅ Venta procesada:', data.id);
+                    return { success: true, data };
+                }
 
-            const errorText = await response.text();
-            throw new Error(`HTTP ${response.status}: ${errorText}`);
+                const errorText = await response.text();
+                return { success: false, error: `HTTP ${response.status}: ${errorText}` };
+            } catch (jsonError) {
+                return { success: false, error: jsonError.message };
+            }
         }
     } catch (error) {
-        console.error('❌ Error enviando venta:', error);
-        throw error;
+        console.error('❌ Error general en enviarVentaRuta:', error);
+        return { success: false, error: error.message };
     }
 };
 

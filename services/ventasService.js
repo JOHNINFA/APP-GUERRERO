@@ -637,6 +637,9 @@ export const guardarVenta = async (venta) => {
                             if (resultado.warning === 'DUPLICADO') {
                                 console.log('⚠️ Venta ya existía en servidor (otro dispositivo)');
                             }
+                        } else {
+                            console.warn('⚠️ Fallo envío (API):', resultado.error);
+                            await agregarAColaPendientes(ventaBackend, nuevaVenta.id);
                         }
                     } catch (err) {
                         console.warn('⚠️ Error enviando, agregando a cola:', err.message);

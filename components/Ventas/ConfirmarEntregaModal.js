@@ -64,19 +64,21 @@ export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido })
                         <View style={styles.seccion}>
                             <Text style={styles.seccionTitulo}>📦 Productos del Pedido</Text>
                             {detalles && detalles.length > 0 ? (
-                                detalles.map((p, index) => (
-                                    <View key={index} style={styles.itemRow}>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.itemNombre}>{p.producto_nombre}</Text>
-                                            <Text style={styles.itemDetalle}>
-                                                {p.cantidad} x {formatearMoneda(p.precio_unitario)}
+                                detalles
+                                    .filter(p => p.cantidad > 0) // 🆕 Ocultar productos eliminados (cantidad 0)
+                                    .map((p, index) => (
+                                        <View key={index} style={styles.itemRow}>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={styles.itemNombre}>{p.producto_nombre}</Text>
+                                                <Text style={styles.itemDetalle}>
+                                                    {p.cantidad} x {formatearMoneda(p.precio_unitario)}
+                                                </Text>
+                                            </View>
+                                            <Text style={styles.itemTotal}>
+                                                {formatearMoneda(p.cantidad * p.precio_unitario)}
                                             </Text>
                                         </View>
-                                        <Text style={styles.itemTotal}>
-                                            {formatearMoneda(p.cantidad * p.precio_unitario)}
-                                        </Text>
-                                    </View>
-                                ))
+                                    ))
                             ) : (
                                 <Text style={styles.sinProductos}>Sin productos</Text>
                             )}

@@ -43,29 +43,34 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
 
   const fechaFormateada = new Date(fecha).toLocaleString('es-CO');
 
-  let productosHTML = productos.map(p => `
+  let productosHTML = productos.map(p => {
+    // Calcular unitario si no existe y evitar división por cero
+    const unitario = p.precio_unitario || (p.cantidad > 0 ? p.subtotal / p.cantidad : 0);
+    return `
     <tr>
-      <td>${p.cantidad}</td>
+      <td style="text-align: center;">${p.cantidad}</td>
       <td>${p.nombre}</td>
+      <td style="text-align: right;">${formatearMoneda(unitario)}</td>
       <td style="text-align: right;">${formatearMoneda(p.subtotal)}</td>
     </tr>
-  `).join('');
+  `}).join('');
 
   let vencidasHTML = '';
   if (vencidas && vencidas.length > 0) {
     vencidasHTML = `
-      <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dotted #000;">
-        <div style="font-weight: bold; font-size: ${tamanioInfo}px; margin-bottom: 5px;">CAMBIOS REALIZADOS</div>
+      <div style="margin: 5px 0;">
+        <div style="font-weight: bold; font-size: ${tamanioInfo}px; margin-bottom: 5px;">Cambios Realizados</div>
         <table style="width: 100%; font-size: ${tamanioTabla - 1}px;">
           ${vencidas.map(v => `
             <tr>
               <td>${v.cantidad}</td>
               <td>${v.nombre}</td>
-              <td style="text-align: right; font-style: italic;">(Cambio)</td>
+              <td style="text-align: right;">$ 0</td>
             </tr>
           `).join('')}
         </table>
       </div>
+      <div class="ticket-divider">................................................</div>
     `;
   }
 
@@ -213,7 +218,7 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
         <div class="ticket-divider">................................................</div>
         
         <div class="ticket-info">
-          <b>Ticket:</b> #${id}<br>
+          <b>Ticket:</b> #${id.split('-').pop()}<br>
           <b>Fecha:</b> ${fechaFormateada}<br>
           <b>Cliente:</b> ${cliente_nombre}<br>
           ${cliente_negocio ? `<b>Negocio:</b> ${cliente_negocio}<br>` : ''}
@@ -225,9 +230,10 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
         <table class="ticket-table">
           <thead>
             <tr>
-              <th style="text-align: center;">Cant</th>
+              <th style="width: 25px; text-align: center;">Cant</th>
               <th>Producto</th>
-              <th style="text-align: right;">Total</th>
+              <th style="width: 55px; text-align: right;">P.Unit</th>
+              <th style="width: 55px; text-align: right;">Total</th>
             </tr>
           </thead>
           <tbody>
@@ -236,6 +242,8 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
         </table>
 
         <div class="ticket-divider">................................................</div>
+
+        ${vencidasHTML}
 
         <div class="ticket-totals">
           <div class="total-row">
@@ -260,7 +268,7 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
           </div>
         </div>
 
-        ${vencidasHTML}
+
 
         <div class="ticket-footer">
           ${mensajeGracias}<br>

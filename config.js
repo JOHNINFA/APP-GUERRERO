@@ -1,7 +1,7 @@
 // Configuración centralizada de la app
 // ⚠️ CAMBIAR 'ENV' ANTES DE GENERAR EL APK (BUILD)
 
-const ENV = 'PROD'; // Opciones: 'DEV' (Local) | 'PROD' (VPS/Nube)
+const ENV = 'DEV'; // Opciones: 'DEV' (Local) | 'PROD' (VPS/Nube)
 
 // Direcciones IP
 const LOCAL_IP = '192.168.1.19'; // Tu IP local actual

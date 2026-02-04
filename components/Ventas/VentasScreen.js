@@ -37,7 +37,7 @@ const DIAS_MAP = {
     6: 'SABADO'
 };
 
-const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
+const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre }) => {
     // userId puede venir de route.params o como prop directa
     const userId = route?.params?.userId || userIdProp;
 
@@ -68,6 +68,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     const [pedidoEnNovedad, setPedidoEnNovedad] = useState(null);
     const [pedidosEntregadosHoy, setPedidosEntregadosHoy] = useState([]); // 🆕 IDs de pedidos entregados hoy
     const [pedidosNoEntregadosHoy, setPedidosNoEntregadosHoy] = useState([]); // 🆕 Pedidos NO entregados hoy
+    const [mostrarHistorialVentas, setMostrarHistorialVentas] = useState(false); // 🆕 Estado para modal historial
 
     // 🆕 Cargar Pedidos
     const verificarPedidosPendientes = async (fechaStr) => {
@@ -317,6 +318,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
     const [totalDineroHoy, setTotalDineroHoy] = useState(0);
 
     // 🆕 Estado para turno abierto (indicador visual)
+    const [preciosPersonalizados, setPreciosPersonalizados] = useState({}); // 🆕 Precios originales de pedidos editados
     const [turnoAbierto, setTurnoAbierto] = useState(false);
     const [horaTurno, setHoraTurno] = useState(null);
 
@@ -368,11 +370,14 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
                 if (data.error === 'TURNO_YA_CERRADO') {
                     Alert.alert(
-                        '⚠️ Turno Ya Cerrado',
-                        'El turno para este día ya fue cerrado.\n\nNo puedes abrir un nuevo turno para esta fecha.',
+                        '⛔ TURNO CERRADO',
+                        `El turno del ${fechaFormatted} ya fue cerrado definitivamente.\n\nPor seguridad, no es posible reabrir turnos cerrados ni modificar sus ventas.`,
                         [{
-                            text: 'OK',
-                            onPress: () => setMostrarSelectorDia(true) // Mostrar selector DESPUÉS de cerrar alert
+                            text: 'Entendido',
+                            onPress: () => {
+                                setFechaSeleccionada(new Date()); // Reset a hoy
+                                setMostrarSelectorDia(true);
+                            }
                         }]
                     );
                     return;
@@ -729,7 +734,12 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         productos.forEach(producto => {
             const cantidad = getCantidad(producto.id);
             if (cantidad > 0) {
-                subtotal += producto.precio * cantidad;
+                // 🆕 Usar precio personalizado si existe (pedido editado), sino precio de lista
+                const precioReal = preciosPersonalizados[producto.id] !== undefined
+                    ? preciosPersonalizados[producto.id]
+                    : producto.precio;
+
+                subtotal += precioReal * cantidad;
             }
         });
 
@@ -767,9 +777,10 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 return {
                     id: producto.id,
                     nombre: producto.nombre,
-                    precio: producto.precio,
+                    // 🆕 Usar precio personalizado si existe
+                    precio: preciosPersonalizados[id] !== undefined ? preciosPersonalizados[id] : producto.precio,
                     cantidad: cantidad,
-                    subtotal: producto.precio * cantidad
+                    subtotal: (preciosPersonalizados[id] !== undefined ? preciosPersonalizados[id] : producto.precio) * cantidad
                 };
             });
 
@@ -815,10 +826,20 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             const abrirModalConfirmacion = () => {
                 if (pedidoClienteSeleccionado) {
                     // Si es Edición de Pedido -> Modal Pequeño (ConfirmarEntregaModal)
+
+                    // 🆕 Construir detalles actualizados basados en el carrito para mostrar en el modal
+                    const detallesVisuales = productosVenta.map(p => ({
+                        producto_nombre: p.nombre,
+                        cantidad: p.cantidad,
+                        precio_unitario: p.precio,
+                        subtotal: p.subtotal
+                    }));
+
                     setPedidoParaEntregar({
                         ...pedidoClienteSeleccionado,
                         total: venta.total, // Usar el NUEVO total calculado
-                        numero_pedido: pedidoClienteSeleccionado.numero_pedido
+                        numero_pedido: pedidoClienteSeleccionado.numero_pedido,
+                        detalles: detallesVisuales // 🆕 Detalles actualizados
                     });
                     setMostrarResumenEntrega(true);
                 } else {
@@ -1017,8 +1038,11 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
             }
 
             // 🆕 Actualizar contador y agregar venta al estado inmediatamente
-            setTotalVentasHoy(prev => prev + 1);
-            setTotalDineroHoy(prev => prev + ventaConDatos.total);
+            // SOLO SI ES VENTA DE RUTA (NO PEDIDO) para evitar doble conteo en cierre
+            if (!pedidoClienteSeleccionado) {
+                setTotalVentasHoy(prev => prev + 1);
+                setTotalDineroHoy(prev => prev + ventaConDatos.total);
+            }
 
             // ✅ Agregar venta recién guardada al estado inmediatamente (sin esperar recarga)
             setVentasDelDia(prev => [...prev, {
@@ -1034,6 +1058,16 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
             // Actualizar contador de pendientes en segundo plano (no bloquea)
             verificarPendientes();
+
+            // 🆕 LIMPIEZA CRÍTICA: Limpiar estado inmediatamente para evitar duplicados si el usuario tarda en cerrar el Alert
+            // Guardamos copia para el ticket/alert
+            const ventaParaTicket = { ...ventaGuardada };
+
+            // Limpiar estados reactivos que podrían causar reenvíos
+            setVentaTemporal(null);
+            // No limpiamos el carrito completamente aún si queremos imprimir, PERO
+            // invalidamos la capacidad de reenviar la misma venta.
+            // Mejor opción: Marcar como procesado.
 
             // Preparar opciones del alert
             const alertOptions = [
@@ -1172,12 +1206,14 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         setNota('');
         setBusquedaProducto('');
         setPedidoClienteSeleccionado(null); // 🆕 Limpiar pedido del cliente
+        setPreciosPersonalizados({}); // 🆕 Limpiar precios personalizados
     };
 
     // Manejar selección de cliente
     const handleSeleccionarCliente = (cliente) => {
         // 🆕 Limpiar datos de venta anterior al cambiar cliente
         setCarrito({});
+        setPreciosPersonalizados({}); // 🆕 Limpiar precios al cambiar cliente
         setVencidas([]);
         setFotoVencidas(null);
         setNota('');
@@ -1259,6 +1295,21 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
         });
 
         setCarrito(nuevoCarrito);
+
+        // 🆕 Cargar precios personalizados del pedido original
+        const nuevosPrecios = {};
+        pedidoClienteSeleccionado.detalles.forEach(d => {
+            // Buscar el producto localmente para obtener SU ID real usado en la App
+            const prodReal = productos.find(p => p.id === d.producto || p.nombre === d.producto_nombre);
+            const precioUnitario = parseFloat(d.precio_unitario);
+
+            if (prodReal && !isNaN(precioUnitario)) {
+                // Usar el ID del producto LOCAL como clave, igual que el carrito
+                nuevosPrecios[prodReal.id] = precioUnitario;
+                console.log(`💲 Precio personalizado para ${prodReal.nombre}: ${precioUnitario}`);
+            }
+        });
+        setPreciosPersonalizados(nuevosPrecios);
 
         Alert.alert(
             '✏️ Pedido Cargado',
@@ -1355,7 +1406,18 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                                         `Vendido: ${data.totales.vendido}\n` +
                                         `Vencidas: ${data.totales.vencidas}\n` +
                                         `Devuelto: ${data.totales.devuelto}\n\n` +
-                                        `✅ Datos enviados al CRM`
+                                        `✅ Datos enviados al CRM`,
+                                        [
+                                            {
+                                                text: 'OK',
+                                                onPress: () => {
+                                                    // Redirigir al menú principal
+                                                    if (navigation) {
+                                                        navigation.goBack();
+                                                    }
+                                                }
+                                            }
+                                        ]
                                     );
 
                                     // Limpiar ventas del día
@@ -1518,13 +1580,8 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                     <View style={styles.turnoIndicadorContent}>
                         <View style={styles.puntoVerde} />
                         <Text style={styles.turnoTexto}>
-                            Turno Abierto
+                            Turno Abierto {horaTurno ? `• ${horaTurno.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}` : ''}
                         </Text>
-                        {horaTurno && (
-                            <Text style={styles.turnoHora}>
-                                desde {horaTurno.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
-                            </Text>
-                        )}
                     </View>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                         <Text style={styles.turnoDia}>
@@ -1554,6 +1611,14 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                             style={styles.btnCambiarDia}
                         >
                             <Ionicons name="calendar-outline" size={16} color="#003d88" />
+                        </TouchableOpacity>
+
+                        {/* 🆕 Botón Historial Ventas (Reimprimir) */}
+                        <TouchableOpacity
+                            onPress={() => setMostrarHistorialVentas(true)}
+                            style={[styles.btnCambiarDia, { marginLeft: 8, backgroundColor: '#e3f2fd', borderColor: '#2196f3' }]}
+                        >
+                            <Ionicons name="receipt-outline" size={16} color="#003d88" />
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -1773,7 +1838,7 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                             onPress={marcarEntregadoClienteSeleccionado}
                         >
                             <Ionicons name="checkmark-circle" size={18} color="white" />
-                            <Text style={styles.btnAccionTexto}>Entregado</Text>
+                            <Text style={styles.btnAccionTexto}>Entregar</Text>
                         </TouchableOpacity>
                     </>
                 ) : (
@@ -1794,14 +1859,16 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                             )}
                         </TouchableOpacity>
 
-                        {/* Botón Cerrar Turno - Cliente Normal */}
-                        <TouchableOpacity
-                            style={[styles.btnAccion, styles.btnCerrarPequeño]}
-                            onPress={() => setMostrarModalCerrarTurno(true)}
-                        >
-                            <Ionicons name="lock-closed" size={18} color="white" />
-                            <Text style={styles.btnAccionTexto}>Cerrar</Text>
-                        </TouchableOpacity>
+                        {/* Botón Cerrar Turno - Solo si turno abierto */}
+                        {turnoAbierto && (
+                            <TouchableOpacity
+                                style={[styles.btnAccion, styles.btnCerrarPequeño]}
+                                onPress={() => setMostrarModalCerrarTurno(true)}
+                            >
+                                <Ionicons name="lock-closed" size={18} color="white" />
+                                <Text style={styles.btnAccionTexto}>Cerrar</Text>
+                            </TouchableOpacity>
+                        )}
                     </>
                 )}
             </View>
@@ -2010,7 +2077,9 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
 
                         <View style={styles.modalCerrarBody}>
                             <Text style={styles.modalCerrarText}>¿Estás seguro de cerrar el turno?</Text>
-                            <Text style={styles.modalCerrarSubtext}>Esta acción calculará automáticamente las devoluciones.</Text>
+                            <Text style={[styles.modalCerrarSubtext, { color: '#dc3545', fontWeight: 'bold' }]}>
+                                ⚠️ ATENCIÓN: Una vez cerrado, NO podrás volver a abrirlo ni registrar más ventas para este día.
+                            </Text>
 
                             {/* 🆕 Resumen Completo */}
                             {(totalVentasHoy > 0 || pedidosEntregadosHoy.length > 0) && (() => {
@@ -2206,6 +2275,73 @@ const VentasScreen = ({ route, userId: userIdProp, vendedorNombre }) => {
                 cliente={clienteSeleccionado}
                 onGuardar={handleNotaGuardada}
             />
+            {/* 🆕 MODAL HISTORIAL VENTAS */}
+            <Modal
+                visible={mostrarHistorialVentas}
+                animationType="slide"
+                transparent={true}
+                onRequestClose={() => setMostrarHistorialVentas(false)}
+            >
+                <View style={[styles.modalOverlay, { justifyContent: 'flex-end' }]}>
+                    <View style={[styles.modalContent, { maxHeight: '80%', width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                            <Text style={styles.modalTitle}>🧾 Ventas del Día ({ventasDelDia.length})</Text>
+                            <TouchableOpacity onPress={() => setMostrarHistorialVentas(false)}>
+                                <Ionicons name="close-circle" size={30} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <Text style={{ textAlign: 'center', color: '#666', marginBottom: 10 }}>
+                            Toca el botón de imprimir para generar copia del ticket.
+                        </Text>
+
+                        <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
+                            {ventasDelDia.length === 0 ? (
+                                <Text style={{ textAlign: 'center', color: '#666', marginTop: 20 }}>No hay ventas registradas hoy</Text>
+                            ) : (
+                                [...ventasDelDia].reverse().map((venta, index) => (
+                                    <View key={index} style={{
+                                        backgroundColor: '#f8f9fa',
+                                        padding: 15,
+                                        borderRadius: 10,
+                                        marginBottom: 10,
+                                        borderWidth: 1,
+                                        borderColor: '#dee2e6',
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between'
+                                    }}>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={{ fontWeight: 'bold', fontSize: 16, color: '#333' }}>
+                                                {venta.cliente_negocio || venta.cliente_nombre || 'Cliente General'}
+                                            </Text>
+                                            <Text style={{ fontSize: 13, color: '#666', marginTop: 2 }}>
+                                                {venta.fecha ? new Date(venta.fecha).toLocaleTimeString() : 'Hora desconocida'}
+                                                {venta.metodo_pago ? ` • ${venta.metodo_pago}` : ''}
+                                            </Text>
+                                            <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#00ad53', marginTop: 4 }}>
+                                                {formatearMoneda(venta.total)}
+                                            </Text>
+                                        </View>
+
+                                        <TouchableOpacity
+                                            style={{
+                                                backgroundColor: '#003d88',
+                                                padding: 10,
+                                                borderRadius: 8,
+                                                marginLeft: 10
+                                            }}
+                                            onPress={() => imprimirTicket(venta)}
+                                        >
+                                            <Ionicons name="print" size={20} color="white" />
+                                        </TouchableOpacity>
+                                    </View>
+                                ))
+                            )}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
         </View >
     );
 };
@@ -2821,14 +2957,15 @@ const styles = StyleSheet.create({
         borderBottomColor: '#e5e7eb',
     },
     turnoIndicadorContent: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: 6,
     },
     puntoVerde: {
-        width: 10,
-        height: 10,
-        borderRadius: 5,
+        width: 8,
+        height: 8,
+        borderRadius: 4,
         backgroundColor: '#22c55e',
     },
     puntoGris: {
@@ -2838,8 +2975,8 @@ const styles = StyleSheet.create({
         backgroundColor: '#9ca3af',
     },
     turnoTexto: {
-        fontSize: 14,
-        fontWeight: '600',
+        fontSize: 13,
+        fontWeight: '700',
         color: '#166534',
     },
     turnoHora: {
@@ -2850,6 +2987,7 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '500',
         color: '#059669',
+        flexShrink: 1, // Evitar desbordamiento
     },
     // 🆕 Estilos para pantalla de carga
     cargandoOverlay: {

@@ -208,21 +208,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                             </View>
                         </View>
 
-                         <View style={styles.divider} />
 
-                        {/* 🆕 Notas del Pedido */}
-                        <View style={styles.seccion}>
-                            <Text style={styles.seccionTitulo}>📝 Notas del Pedido</Text>
-                            <TextInput
-                                style={styles.inputNota}
-                                value={nota}
-                                onChangeText={setNota}
-                                placeholder="Escribe aquí observaciones para el pedido..."
-                                multiline
-                                numberOfLines={3}
-                                textAlignVertical="top"
-                            />
-                        </View>
 
                         <View style={styles.divider} />
 

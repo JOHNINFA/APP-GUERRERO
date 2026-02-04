@@ -84,10 +84,23 @@ const DevolucionesVencidas = ({
     };
 
     const tomarFoto = async (productoId) => {
+        // 🆕 Validar límite de 2 fotos
+        if (fotos[productoId] && fotos[productoId].length >= 2) {
+            Alert.alert('Límite Alcanzado', 'Solo puedes agregar máximo 2 fotos por producto.');
+            return;
+        }
+
         try {
-            // 🆕 Abrir cámara directamente (permisos ya se pidieron al abrir el modal)
+            // 🆕 Verificar permisos explícitamente antes de lanzar
+            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+            if (status !== 'granted') {
+                Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+                return;
+            }
+
+            // 🆕 Abrir cámara directamente
             const result = await ImagePicker.launchCameraAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                mediaTypes: ImagePicker.MediaTypeOptions.Images, // 🔙 Revertido para compatibilidad
                 allowsEditing: false,
                 quality: 0.5, // Calidad media inicial
                 base64: false,
@@ -325,7 +338,11 @@ const DevolucionesVencidas = ({
                 {/* Sección de fotos (solo si es vencidas y tiene cantidad > 0) */}
                 {tipo === 'vencidas' && cantidad > 0 && (
                     <View style={styles.fotosSection}>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            keyboardShouldPersistTaps="always"
+                        >
                             {fotosProducto.map((uri, index) => (
                                 <View key={index} style={styles.fotoMiniatura}>
                                     <Image source={{ uri }} style={styles.fotoMiniaturaImagen} />
@@ -391,6 +408,7 @@ const DevolucionesVencidas = ({
                     keyExtractor={(item) => String(item.id)}
                     style={styles.lista}
                     contentContainerStyle={styles.listaContent}
+                    keyboardShouldPersistTaps="always"
                 />
 
                 {/* Footer con botones */}
