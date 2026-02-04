@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Vibration, ActivityIndicator, Alert, TextInput, Animated, Platform } from 'react-native';
 import Checkbox from 'expo-checkbox';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -174,8 +174,7 @@ const Cargue = ({ userId }) => {
   }, [selectedDay, selectedDate, userId]); // ✅ Quitamos 'productos' para evitar bucle
 
 
-  // 🚀 OPTIMIZACIÓN: useCallback para evitar recrear función en cada render
-  const handleCheckChange = useCallback(async (productName, type) => {
+  const handleCheckChange = async (productName, type) => {
     // Solo permitir cambiar V (Vendedor), D viene del CRM
     if (type === 'D') {
       Alert.alert('No Permitido', 'El check de Despachador solo se puede marcar desde el CRM.');
@@ -256,7 +255,7 @@ const Cargue = ({ userId }) => {
       console.error('Error actualizando check:', error);
       Alert.alert('Error', 'Error de conexión con el CRM');
     }
-  }, [checkedItems, quantities, userId, selectedDay, selectedDate]);
+  };
 
   const dias = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
 
@@ -293,8 +292,7 @@ const Cargue = ({ userId }) => {
     return date.toLocaleDateString('es-ES', options);
   };
 
-  // 🚀 OPTIMIZACIÓN: useCallback para evitar recrear función en cada render
-  const renderProduct = useCallback(({ item }) => {
+  const renderProduct = ({ item }) => {
     const scale = scaleAnims[item] || new Animated.Value(1);
     const cantidad = quantities[item] || '0';
 
@@ -332,7 +330,7 @@ const Cargue = ({ userId }) => {
         </View>
       </View>
     );
-  }, [checkedItems, quantities, handleCheckChange, scaleAnims]);
+  };
 
   return (
     <View style={styles.container}>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     View,
     Text,
@@ -430,8 +430,8 @@ const ClienteSelector = ({
         }
     };
 
-    // 🚀 OPTIMIZACIÓN: useMemo para evitar recalcular filtro en cada render
-    const clientesFiltrados = useMemo(() => {
+    // Filtrar clientes según búsqueda
+    const getClientesFiltrados = () => {
         const listaBase = mostrarTodos ? todosLosClientes : clientesDelDia;
 
         if (busqueda.trim() === '') {
@@ -444,7 +444,7 @@ const ClienteSelector = ({
             c.negocio?.toLowerCase().includes(queryLower) ||
             c.direccion?.toLowerCase().includes(queryLower)
         );
-    }, [clientesDelDia, todosLosClientes, busqueda, mostrarTodos]);
+    };
 
     const handleSelectCliente = (cliente) => {
         onSelectCliente(cliente);
@@ -998,6 +998,8 @@ const ClienteSelector = ({
             </TouchableOpacity >
         );
     };
+
+    const clientesFiltrados = getClientesFiltrados();
 
     return (
         <Modal

@@ -1,0 +1,3117 @@
+import React, { useState, useEffect } from 'react';
+import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Alert, SafeAreaView, StatusBar, Platform, RefreshControl, Modal, Linking, ScrollView } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker'; // 🆕 Import DatePicker
+import ClienteSelector from './ClienteSelector';
+import ClienteModal from './ClienteModal';
+import ClienteNotaModal from './ClienteNotaModal'; // 🆕 Importar
+import DevolucionesVencidas from './DevolucionesVencidas';
+import ResumenVentaModal from './ResumenVentaModal';
+import { ConfirmarEntregaModal } from './ConfirmarEntregaModal'; // 🆕 Importar modal
+import {
+    obtenerProductos,
+    buscarProductos,
+    obtenerClientes,
+    calcularSubtotal,
+    guardarVenta,
+    formatearMoneda,
+    sincronizarProductos,
+    sincronizarVentasPendientes,
+    obtenerVentasPendientes,
+    obtenerVentas,  // 🆕 Agregar para contar ventas del día
+    limpiarVentasLocales // 🆕 Limpiar al cerrar turno
+} from '../../services/ventasService';
+import { imprimirTicket } from '../../services/printerService';
+import { ENDPOINTS } from '../../config';
+import { actualizarPedido } from '../../services/rutasApiService';
+
+// Días de la semana
+const DIAS_SEMANA = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO', 'DOMINGO'];
+const DIAS_MAP = {
+    0: 'DOMINGO',
+    1: 'LUNES',
+    2: 'MARTES',
+    3: 'MIERCOLES',
+    4: 'JUEVES',
+    5: 'VIERNES',
+    6: 'SABADO'
+};
+
+const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre }) => {
+    // userId puede venir de route.params o como prop directa
+    const userId = route?.params?.userId || userIdProp;
+
+    // Estado para selección de día
+    const [mostrarSelectorDia, setMostrarSelectorDia] = useState(false); // 🆕 Inicia en FALSE para verificar turno primero
+    const [diaSeleccionado, setDiaSeleccionado] = useState(null);
+    const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
+    const [mostrarDatePicker, setMostrarDatePicker] = useState(false);
+    const [verificandoTurno, setVerificandoTurno] = useState(true); // 🆕 Estado de carga inicial
+
+    // Estados
+    const [clienteSeleccionado, setClienteSeleccionado] = useState(null);
+    const [pedidoClienteSeleccionado, setPedidoClienteSeleccionado] = useState(null); // 🆕 Pedido del cliente actual
+    const [busquedaProducto, setBusquedaProducto] = useState('');
+    const [productos, setProductos] = useState([]);
+    const [categorias, setCategorias] = useState([]);
+    const [carrito, setCarrito] = useState({});
+    const [descuento, setDescuento] = useState(0); // Restaurado
+
+    // 🆕 Estados para Pedidos Asignados
+    const [pedidosPendientes, setPedidosPendientes] = useState([]);
+    const [modalPedidosVisible, setModalPedidosVisible] = useState(false);
+
+    // 🆕 Estados para Novedades (No Entregado)
+    const [modalNovedadVisible, setModalNovedadVisible] = useState(false);
+    const [motivoNovedad, setMotivoNovedad] = useState('');
+    const [ventasDelDia, setVentasDelDia] = useState([]); // 🆕 Almacenar ventas del día
+    const [pedidoEnNovedad, setPedidoEnNovedad] = useState(null);
+    const [pedidosEntregadosHoy, setPedidosEntregadosHoy] = useState([]); // 🆕 IDs de pedidos entregados hoy
+    const [pedidosNoEntregadosHoy, setPedidosNoEntregadosHoy] = useState([]); // 🆕 Pedidos NO entregados hoy
+    const [mostrarHistorialVentas, setMostrarHistorialVentas] = useState(false); // 🆕 Estado para modal historial
+
+    // 🆕 Cargar Pedidos
+    const verificarPedidosPendientes = async (fechaStr) => {
+        try {
+            // Usar fecha proporcionada o la seleccionada
+            let fecha = fechaStr;
+            if (!fecha && fechaSeleccionada) {
+                fecha = fechaSeleccionada.toISOString().split('T')[0];
+            }
+            // Si no hay fecha ni userId, salir
+            if (!fecha || !userId) return;
+
+            console.log(`📦 Buscando pedidos para ${userId} en ${fecha}`);
+            const response = await fetch(`${ENDPOINTS.PEDIDOS_PENDIENTES}?vendedor_id=${userId}&fecha=${fecha}`);
+
+            if (response.ok) {
+                const data = await response.json();
+                if (Array.isArray(data)) {
+                    // 🆕 Incluir: 1) Pendientes normales, 2) ANULADOS reportados desde App (No Entregados)
+                    // Excluir: ANULADOS administrativos y ENTREGADOS
+                    const pendientes = data.filter(p =>
+                        (p.estado !== 'ENTREGADO' && p.estado !== 'ENTREGADA' && p.estado !== 'ANULADA') ||
+                        (p.estado === 'ANULADA' && p.nota?.toLowerCase().includes('entregado')) // Case-insensitive
+                    );
+
+                    const entregados = data.filter(p => p.estado === 'ENTREGADO' || p.estado === 'ENTREGADA').map(p => ({
+                        id: p.id,
+                        destinatario: p.destinatario,
+                        numero_pedido: p.numero_pedido,
+                        total: parseFloat(p.total) || 0
+                    }));
+
+                    // 🆕 SOLO mostrar pedidos anulados desde App Móvil (no los del frontend)
+                    const noEntregados = data.filter(p =>
+                        p.estado === 'ANULADA' &&
+                        p.nota?.toLowerCase().includes('entregado') // Case-insensitive
+                    ).map(p => ({
+                        id: p.id,
+                        destinatario: p.destinatario,
+                        numero_pedido: p.numero_pedido,
+                        total: parseFloat(p.total) || 0
+                    }));
+
+                    setPedidosPendientes(pendientes);
+                    setPedidosEntregadosHoy(entregados);
+                    setPedidosNoEntregadosHoy(noEntregados);
+
+                    console.log(`✅ ${pendientes.length} pedidos pendientes, ${entregados.length} entregados`);
+                }
+            }
+        } catch (e) {
+            console.log('Error buscando pedidos:', e);
+        }
+    };
+
+    const cargarPedidoEnCarrito = (pedido) => {
+        Alert.alert(
+            '🔄 Cargar Pedido',
+            'Esto reemplazará los productos actuales del carrito. ¿Continuar?',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Cargar',
+                    onPress: () => {
+                        const nuevoCarrito = {};
+                        let encontrados = 0;
+
+                        pedido.detalles.forEach(d => {
+                            // Buscar producto en catálogo local por ID o nombre
+                            const prodReal = productos.find(p => p.id === d.producto || p.nombre === d.producto_nombre);
+
+                            if (prodReal) {
+                                encontrados++;
+                                // Construir objeto carrito con ID como clave
+                                nuevoCarrito[prodReal.id] = {
+                                    ...prodReal, // ID, nombre, imagen, etc
+                                    cantidad: d.cantidad,
+                                    precio: parseFloat(d.precio_unitario), // Usar precio del pedido
+                                    subtotal: parseFloat(d.precio_unitario) * d.cantidad
+                                };
+                            }
+                        });
+
+                        setCarrito(nuevoCarrito);
+                        setModalPedidosVisible(false);
+
+                        // Intentar pre-seleccionar cliente (si existe lógica simple)
+                        // Por ahora solo avisar
+                        setTimeout(() => {
+                            Alert.alert(
+                                '✅ Pedido Cargado',
+                                `Se cargaron ${encontrados} productos del pedido.\n\nPor favor selecciona el cliente y confirma la venta.`
+                            );
+                        }, 500);
+                    }
+                }
+            ]
+        );
+    };
+
+    // 🆕 Reportar Novedad (No entregado)
+    const confirmarNovedad = async () => {
+        if (!motivoNovedad.trim()) {
+            Alert.alert('Atención', 'Por favor escribe el motivo de la no entrega.');
+            return;
+        }
+
+        try {
+            const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_NO_ENTREGADO(pedidoEnNovedad.id), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ motivo: motivoNovedad })
+            });
+
+            if (response.ok) {
+                Alert.alert('Registrado', 'La novedad ha sido reportada.');
+
+                // 🆕 Agregar a lista local de no entregados
+                setPedidosNoEntregadosHoy(prev => [...prev, {
+                    id: pedidoEnNovedad.id,
+                    destinatario: pedidoEnNovedad.destinatario || 'Cliente',
+                    numero_pedido: pedidoEnNovedad.numero_pedido,
+                    total: parseFloat(pedidoEnNovedad.total) || 0
+                }]);
+
+                // 🆕 Actualizar el pedido en la lista de pendientes para marcarlo como anulado
+                // En lugar de eliminarlo, lo marcamos como ANULADA localmente
+                setPedidosPendientes(prev => prev.map(p =>
+                    p.id === pedidoEnNovedad.id
+                        ? { ...p, estado: 'ANULADA', nota: `No entregado: ${motivoNovedad}${p.nota ? ' | ' + p.nota : ''}` }
+                        : p
+                ));
+
+                // 🆕 Limpiar selección
+                setPedidoClienteSeleccionado(null);
+
+                setModalNovedadVisible(false);
+                setMotivoNovedad('');
+
+                // ❌ NO recargar - esto eliminaba el pedido de la lista
+                // const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+                // verificarPedidosPendientes(fechaStr);
+            } else {
+                Alert.alert('Error', 'No se pudo registrar la novedad.');
+            }
+        } catch (error) {
+            console.error(error);
+            Alert.alert('Error', 'Error de conexión.');
+        }
+    };
+
+    const marcarPedidoEntregado = (pedido) => {
+        setPedidoParaEntregar(pedido);
+        setMostrarResumenEntrega(true);
+    };
+
+    const confirmarEntregaPedido = async (tieneVencidas = false, metodoPago = 'EFECTIVO') => {
+        if (!pedidoParaEntregar) return;
+
+        // 🆕 LÓGICA DE EDICIÓN: Si hay un pedido seleccionado en modo edición, usamos confirmarVenta
+        if (pedidoClienteSeleccionado && ventaTemporal) {
+            console.log('🔄 Confirmando pedido editado con método:', metodoPago);
+            setMostrarResumenEntrega(false); // Cerrar modal pequeño
+
+            // Llamar a confirmarVenta con el método de pago seleccionado
+            // confirmarVenta usa ventaTemporal que ya fue seteado en completarVenta
+            confirmarVenta(fechaSeleccionada, metodoPago, {});
+            return;
+        }
+
+        // Marcar como entregado siempre (vencidas se reportan manualmente después)
+        // 🆕 Ahora enviamos el metodo_pago seleccionado
+
+        try {
+            // Enviar metodo_pago en el cuerpo del POST
+            const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_ENTREGADO(pedidoParaEntregar.id), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ metodo_pago: metodoPago }) // 🆕 Enviar método de pago
+            });
+            const data = await response.json();
+
+            setMostrarResumenEntrega(false);
+
+            if (data.success) {
+                // 🆕 Agregar pedido con info del destinatario
+                setPedidosEntregadosHoy(prev => [...prev, {
+                    id: pedidoParaEntregar.id,
+                    destinatario: pedidoParaEntregar.destinatario || clienteSeleccionado?.negocio || 'Cliente',
+                    numero_pedido: pedidoParaEntregar.numero_pedido,
+                    metodo_pago: metodoPago, // 🆕 Guardar localmente también
+                    total: parseFloat(pedidoParaEntregar.total) || 0 // 🆕 Guardar total
+                }]);
+
+                // 🆕 Limpiar pedido del cliente para volver a botones normales
+                setPedidoClienteSeleccionado(null);
+                setPedidoParaEntregar(null);
+
+                // Recargar pedidos pendientes
+                const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+                await verificarPedidosPendientes(fechaStr);
+
+                // Mensaje según si reportó vencidas
+                if (tieneVencidas) {
+                    Alert.alert(
+                        '✅ Pedido Entregado',
+                        `Pago: ${metodoPago}\n\nEl pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado.\n\n⚠️ Recuerda reportar las vencidas usando el botón "Vencidas" del cliente.`
+                    );
+                } else {
+                    Alert.alert('✅ Pedido Entregado', `Pago: ${metodoPago}\n\nEl pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado exitosamente.`);
+                }
+            } else {
+                Alert.alert('Error', data.message || 'No se pudo actualizar el pedido');
+            }
+        } catch (e) {
+            setMostrarResumenEntrega(false);
+            console.error(e);
+            Alert.alert('Error', 'No se pudo actualizar el pedido. Revisa tu conexión.');
+        }
+    };
+
+
+    const [nota, setNota] = useState('');
+    const [clientes, setClientes] = useState([]);
+
+    // Estados para modales
+    const [mostrarSelectorCliente, setMostrarSelectorCliente] = useState(false);
+    const [mostrarModalCliente, setMostrarModalCliente] = useState(false);
+    const [mostrarVencidas, setMostrarVencidas] = useState(false);
+    const [mostrarResumen, setMostrarResumen] = useState(false);
+    const [mostrarResumenEntrega, setMostrarResumenEntrega] = useState(false); // 🆕 Para confirmar entrega de pedido
+    const [pedidoParaEntregar, setPedidoParaEntregar] = useState(null); // 🆕 Pedido a entregar
+    const [ventaTemporal, setVentaTemporal] = useState(null);
+
+    // Estados para vencidas
+    const [vencidas, setVencidas] = useState([]);
+    const [fotoVencidas, setFotoVencidas] = useState(null);
+
+    // Estado para pull to refresh
+    const [refreshing, setRefreshing] = useState(false);
+    const [ventasPendientes, setVentasPendientes] = useState(0);
+
+    // 🆕 Estado para cerrar turno
+    const [mostrarModalCerrarTurno, setMostrarModalCerrarTurno] = useState(false);
+    const [mostrarNotaModal, setMostrarNotaModal] = useState(false); // 🆕 Estado para modal notas
+    const [totalVentasHoy, setTotalVentasHoy] = useState(0);
+    const [totalDineroHoy, setTotalDineroHoy] = useState(0);
+
+    // 🆕 Estado para turno abierto (indicador visual)
+    const [preciosPersonalizados, setPreciosPersonalizados] = useState({}); // 🆕 Precios originales de pedidos editados
+    const [turnoAbierto, setTurnoAbierto] = useState(false);
+    const [horaTurno, setHoraTurno] = useState(null);
+
+    // 🆕 Estado para stock del cargue
+    const [stockCargue, setStockCargue] = useState({});
+
+    // Obtener día actual
+    const getDiaActual = () => {
+        return DIAS_MAP[new Date().getDay()];
+    };
+
+    // Seleccionar día - 🆕 Ahora abre el DatePicker
+    const handleSeleccionarDia = (dia) => {
+        setDiaSeleccionado(dia);
+        setMostrarSelectorDia(false);
+        setMostrarDatePicker(true); // 🆕 Abrir calendario
+    };
+
+    // 🆕 Confirmar fecha seleccionada
+    const handleConfirmarFecha = async (event, date) => {
+        setMostrarDatePicker(Platform.OS === 'ios'); // En iOS mantener visible
+
+        if (date) {
+            setFechaSeleccionada(date);
+
+            // Cargar inventario del cargue con la fecha seleccionada
+            cargarStockCargue(diaSeleccionado, date);
+
+            // 🆕 Llamar al backend para abrir turno (persistir estado)
+            try {
+                const fechaFormatted = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+                // 🆕 Cargar pedidos
+                verificarPedidosPendientes(fechaFormatted);
+
+                const response = await fetch(ENDPOINTS.TURNO_ABRIR, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vendedor_id: userId,
+                        vendedor_nombre: vendedorNombre || `Vendedor ${userId}`,
+                        dia: diaSeleccionado,
+                        fecha: fechaFormatted,
+                        dispositivo: Platform.OS
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error === 'TURNO_YA_CERRADO') {
+                    Alert.alert(
+                        '⛔ TURNO CERRADO',
+                        `El turno del ${fechaFormatted} ya fue cerrado definitivamente.\n\nPor seguridad, no es posible reabrir turnos cerrados ni modificar sus ventas.`,
+                        [{
+                            text: 'Entendido',
+                            onPress: () => {
+                                setFechaSeleccionada(new Date()); // Reset a hoy
+                                setMostrarSelectorDia(true);
+                            }
+                        }]
+                    );
+                    return;
+                }
+
+                console.log('✅ Turno abierto en backend:', data);
+            } catch (error) {
+                console.log('⚠️ Error abriendo turno en backend:', error);
+                // Continuar aunque falle (offline mode)
+            }
+
+            // Marcar turno como abierto localmente
+            setTurnoAbierto(true);
+            setHoraTurno(new Date());
+
+            // Mensaje de "ABRIR TURNO"
+            const fechaFormateada = date.toLocaleDateString('es-ES', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+
+            const horaActual = new Date().toLocaleTimeString('es-ES', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            Alert.alert(
+                '✅ Turno Abierto',
+                `Día: ${diaSeleccionado}\nFecha: ${fechaFormateada}\nHora: ${horaActual}\n\nTurno iniciado correctamente.\nPuedes comenzar a vender.`,
+                [{ text: 'OK' }]
+            );
+
+            // Si hay cliente preseleccionado desde rutas, usarlo
+            if (clientePreseleccionado) {
+                cargarDatosConClientePreseleccionado(clientePreseleccionado);
+            } else {
+                cargarDatos();
+            }
+            verificarPendientes();
+
+            // 🆕 Cargar ventas del día al abrir turno
+            await cargarVentasDelDia(date);
+        }
+    };
+
+    // Estado para cliente preseleccionado desde rutas
+    const [clientePreseleccionado, setClientePreseleccionado] = useState(null);
+
+    // 🆕 Función para cargar las ventas del día (para mostrar el conteo correcto)
+    const cargarVentasDelDia = async (fecha) => {
+        try {
+            const todasLasVentas = await obtenerVentas();
+
+            // Formatear fecha del día para comparar (YYYY-MM-DD)
+            const fechaDia = fecha.toISOString().split('T')[0];
+
+            // Filtrar ventas del día
+            const ventasHoy = todasLasVentas.filter(venta => {
+                const fechaVenta = venta.fecha.split('T')[0];
+                return fechaVenta === fechaDia;
+            });
+
+            // 🆕 DEBUG: Mostrar cada venta encontrada
+            console.log(`📊 Buscando ventas del día ${fechaDia}...`);
+            console.log(`📊 Total ventas guardadas: ${todasLasVentas.length}`);
+            ventasHoy.forEach((v, i) => {
+                console.log(`   ${i + 1}. Cliente: ${v.cliente_nombre || 'N/A'}, Total: ${formatearMoneda(v.total)}, Fecha: ${v.fecha}`);
+            });
+
+            // Calcular totales
+            const cantidadVentas = ventasHoy.length;
+            const totalDinero = ventasHoy.reduce((sum, v) => sum + (v.total || 0), 0);
+
+            console.log(`📊 Ventas del día ${fechaDia}: ${cantidadVentas} ventas, ${formatearMoneda(totalDinero)}`);
+
+            setTotalVentasHoy(cantidadVentas);
+            setTotalDineroHoy(totalDinero);
+            setVentasDelDia(ventasHoy); // 🆕 Guardar ventas para indicador visual
+        } catch (error) {
+            console.error('Error cargando ventas del día:', error);
+        }
+    };
+
+    // 🆕 Verificar turno activo al iniciar la app
+    const verificarTurnoActivo = async () => {
+        try {
+            const response = await fetch(`${ENDPOINTS.TURNO_VERIFICAR}?vendedor_id=${userId}`);
+            const data = await response.json();
+
+            if (data.turno_activo) {
+                console.log('✅ Turno activo encontrado:', data);
+                // Hay turno abierto - saltar modal de selección
+                setDiaSeleccionado(data.dia);
+
+                // Restaurar fecha seleccionada del turno
+                const fechaTurno = new Date(data.fecha + 'T12:00:00'); // Forzar hora mediodía para evitar UTC shift
+                setFechaSeleccionada(fechaTurno);
+
+                // 🆕 Cargar pedidos
+                verificarPedidosPendientes(data.fecha);
+
+                // Parsear hora de apertura
+                if (data.hora_apertura) {
+                    setHoraTurno(new Date(data.hora_apertura));
+                }
+
+                // Marcar turno como abierto
+                setTurnoAbierto(true);
+                setMostrarSelectorDia(false);
+
+                // Cargar datos
+                await cargarStockCargue(data.dia, fechaTurno);
+                cargarDatos();
+                verificarPendientes();
+
+                // 🆕 Cargar ventas reales del día
+                await cargarVentasDelDia(fechaTurno);
+
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.log('⚠️ Error verificando turno:', error);
+            return false;
+        }
+    };
+
+    // Cargar datos iniciales solo cuando se selecciona un día
+    useEffect(() => {
+        // 🆕 Verificar primero si hay turno activo
+        const inicializar = async () => {
+            // Si viene de rutas con cliente preseleccionado
+            if (route?.params?.fromRuta && route?.params?.clientePreseleccionado) {
+                setClientePreseleccionado(route.params.clientePreseleccionado);
+            }
+
+            // Verificar turno activo
+            setVerificandoTurno(true);
+            const hayTurno = await verificarTurnoActivo();
+            setVerificandoTurno(false);
+
+            if (!hayTurno) {
+                // No hay turno, mostrar selector de día
+                setMostrarSelectorDia(true);
+            }
+        };
+
+        inicializar();
+    }, []);
+
+    const cargarDatosConClientePreseleccionado = async (clientePre) => {
+        // Cargar productos filtrados por disponible_app_ventas
+        const productosData = obtenerProductos();
+        const productosFiltrados = productosData.filter(p => p.disponible_app_ventas !== false);
+        setProductos(productosFiltrados);
+
+        // Cargar clientes
+        const clientesData = await obtenerClientes();
+        setClientes(clientesData);
+
+        // Buscar si el cliente existe en la lista o crear uno temporal
+        const clienteExistente = clientesData.find(c =>
+            c.nombre_negocio === clientePre.nombre_negocio ||
+            c.id === clientePre.id
+        );
+
+        if (clienteExistente) {
+            setClienteSeleccionado(clienteExistente);
+        } else {
+            // Usar el cliente de la ruta directamente
+            setClienteSeleccionado({
+                id: clientePre.id,
+                nombre: clientePre.nombre_contacto || clientePre.nombre_negocio,
+                nombre_negocio: clientePre.nombre_negocio,
+                direccion: clientePre.direccion,
+                telefono: clientePre.telefono
+            });
+        }
+
+        verificarPendientes();
+    };
+
+    const cargarDatos = async () => {
+        // Cargar productos filtrados por disponible_app_ventas
+        const productosData = obtenerProductos();
+        const productosFiltrados = productosData.filter(p => p.disponible_app_ventas !== false);
+        setProductos(productosFiltrados);
+
+        // Cargar clientes
+        const clientesData = await obtenerClientes();
+        setClientes(clientesData);
+
+        // Seleccionar cliente general por defecto
+        setClienteSeleccionado(clientesData[0]);
+    };
+
+    // 🆕 Cargar stock del cargue según el día y fecha
+    const cargarStockCargue = async (dia, fecha) => {
+        try {
+            // Formatear fecha a YYYY-MM-DD
+            let fechaFormateada;
+            if (fecha instanceof Date) {
+                const year = fecha.getFullYear();
+                const month = String(fecha.getMonth() + 1).padStart(2, '0');
+                const day = String(fecha.getDate()).padStart(2, '0');
+                fechaFormateada = `${year}-${month}-${day}`;
+            } else {
+                fechaFormateada = fecha;
+            }
+
+            // 🆕 Agregar timeout de 30 segundos
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+            try {
+                // Llamar al endpoint de obtener cargue
+                const response = await fetch(
+                    `${ENDPOINTS.OBTENER_CARGUE}?vendedor_id=${userId}&dia=${dia}&fecha=${fechaFormateada}`,
+                    { signal: controller.signal }
+                );
+                clearTimeout(timeoutId);
+
+                const data = await response.json();
+
+                if (data && Object.keys(data).length > 0) {
+                    // Crear objeto con stock por producto
+                    const stockPorProducto = {};
+
+                    Object.keys(data).forEach(nombreProducto => {
+                        const item = data[nombreProducto];
+                        // Calcular stock disponible (total ya viene calculado desde backend)
+                        const stockDisponible = parseInt(item.quantity) || 0;
+                        stockPorProducto[nombreProducto.toUpperCase()] = stockDisponible;
+                    });
+
+                    setStockCargue(stockPorProducto);
+                    console.log('📦 Stock cargado:', Object.keys(stockPorProducto).length, 'productos');
+                } else {
+                    console.log('⚠️ No hay cargue para esta fecha');
+                    setStockCargue({});
+                }
+            } catch (fetchError) {
+                clearTimeout(timeoutId);
+                if (fetchError.name === 'AbortError') {
+                    console.error('⏱️ Timeout cargando stock');
+                } else {
+                    console.error('❌ Error cargando stock:', fetchError.message);
+                }
+                setStockCargue({});
+            }
+        } catch (error) {
+            console.error('❌ Error general cargando stock:', error);
+            setStockCargue({});
+        }
+    };
+
+    // Verificar ventas pendientes de sincronizar
+    const verificarPendientes = async () => {
+        const pendientes = await obtenerVentasPendientes();
+        setVentasPendientes(pendientes.length);
+    };
+
+    // Función para sincronizar al arrastrar hacia abajo
+    const onRefresh = async () => {
+        setRefreshing(true);
+        try {
+
+
+            // 1. Sincronizar ventas pendientes
+            const resultadoVentas = await sincronizarVentasPendientes();
+
+            // 2. Sincronizar productos
+            await sincronizarProductos();
+
+            // 3. Recargar productos actualizados filtrados por disponible_app_ventas
+            const productosData = obtenerProductos();
+            const productosFiltrados = productosData.filter(p => p.disponible_app_ventas !== false);
+            setProductos(productosFiltrados);
+
+            // 4. 🆕 Recargar stock del cargue
+            await cargarStockCargue(diaSeleccionado, fechaSeleccionada);
+
+            // 5. 🆕 Recargar pedidos pendientes (para mostrar nuevos pedidos asignados)
+            const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+            await verificarPedidosPendientes(fechaStr);
+
+            // 6. Actualizar contador de pendientes
+            await verificarPendientes();
+
+            // Mostrar resultado
+            let mensaje = 'Productos, precios y stock actualizados';
+            if (resultadoVentas.sincronizadas > 0) {
+                mensaje += `\n✅ ${resultadoVentas.sincronizadas} ventas sincronizadas`;
+            }
+            if (resultadoVentas.pendientes > 0) {
+                mensaje += `\n⏳ ${resultadoVentas.pendientes} ventas pendientes`;
+            }
+
+            Alert.alert('Sincronización', mensaje);
+        } catch (error) {
+            console.error('Error sincronizando:', error);
+            Alert.alert('Error', 'No se pudo sincronizar');
+        } finally {
+            setRefreshing(false);
+        }
+    };
+
+    // Filtrar productos según búsqueda
+    const productosFiltrados = busquedaProducto.trim() === ''
+        ? productos
+        : buscarProductos(busquedaProducto);
+
+    // Obtener cantidad de un producto en el carrito
+    const getCantidad = (productoId) => {
+        return carrito[productoId] || 0;
+    };
+
+    // Actualizar cantidad de un producto
+    const actualizarCantidad = (productoId, nuevaCantidad) => {
+        if (nuevaCantidad < 0) return;
+
+        // 🆕 Validación de Stock
+        const producto = productos.find(p => p.id === productoId);
+        if (producto) {
+            // Obtener stock disponible (usar nombre exacto del producto)
+            const nombreNormalizado = producto.nombre.trim().toUpperCase();
+            const stockDisponible = stockCargue[nombreNormalizado] !== undefined ? stockCargue[nombreNormalizado] : 0;
+
+            // Si intenta aumentar y supera el stock
+            // 🆕 EXCEPCIÓN: Si es un pedido seleccionado (edición), NO validar stock de la app
+            if (!pedidoClienteSeleccionado && nuevaCantidad > (carrito[productoId] || 0) && nuevaCantidad > stockDisponible) {
+                Alert.alert(
+                    'Stock Insuficiente',
+                    `Solo tienes ${stockDisponible} unidades de ${producto.nombre} disponibles en tu cargue.`
+                );
+                return; // ⛔ Evitar actualización
+            }
+        }
+
+        const nuevoCarrito = { ...carrito };
+        if (nuevaCantidad === 0) {
+            delete nuevoCarrito[productoId];
+        } else {
+            nuevoCarrito[productoId] = nuevaCantidad;
+        }
+        setCarrito(nuevoCarrito);
+    };
+
+    // Calcular totales
+    const calcularTotales = () => {
+        let subtotal = 0;
+
+        productos.forEach(producto => {
+            const cantidad = getCantidad(producto.id);
+            if (cantidad > 0) {
+                // 🆕 Usar precio personalizado si existe (pedido editado), sino precio de lista
+                const precioReal = preciosPersonalizados[producto.id] !== undefined
+                    ? preciosPersonalizados[producto.id]
+                    : producto.precio;
+
+                subtotal += precioReal * cantidad;
+            }
+        });
+
+        const total = subtotal - descuento;
+
+        return { subtotal, total };
+    };
+
+    const { subtotal, total } = calcularTotales();
+
+    // Completar venta
+    const completarVenta = async () => {
+        // Validar que haya productos en el carrito O vencidas
+        const productosEnCarrito = Object.keys(carrito).filter(id => carrito[id] > 0);
+
+        if (productosEnCarrito.length === 0 && vencidas.length === 0) {
+            Alert.alert('Error', 'Debe agregar al menos un producto o reportar vencidas');
+            return;
+        }
+
+        // Validar cliente
+        if (!clienteSeleccionado) {
+            Alert.alert('Error', 'Debe seleccionar un cliente');
+            return;
+        }
+
+        // 🆕 Función interna para procesar la venta después de validaciones
+        const procesarVenta = () => {
+            // Preparar datos de la venta
+            const productosVenta = productosEnCarrito.map(idStr => {
+                const id = parseInt(idStr);
+                const producto = productos.find(p => p.id === id);
+                const cantidad = carrito[id];
+
+                return {
+                    id: producto.id,
+                    nombre: producto.nombre,
+                    // 🆕 Usar precio personalizado si existe
+                    precio: preciosPersonalizados[id] !== undefined ? preciosPersonalizados[id] : producto.precio,
+                    cantidad: cantidad,
+                    subtotal: (preciosPersonalizados[id] !== undefined ? preciosPersonalizados[id] : producto.precio) * cantidad
+                };
+            });
+
+            const venta = {
+                cliente_id: clienteSeleccionado.id,
+                cliente_nombre: clienteSeleccionado.nombre,
+                cliente_negocio: clienteSeleccionado.negocio, // Asegurar que se pase el negocio
+                cliente_celular: clienteSeleccionado.celular || '',
+                vendedor: vendedorNombre || userId, // Usar nombre del vendedor para el ticket
+                vendedor_id: userId, // ID para el backend
+                productos: productosVenta,
+                subtotal: subtotal,
+                descuento: descuento,
+                total: total,
+                nota: nota,
+                vencidas: vencidas,
+                fotoVencidas: fotoVencidas
+            };
+
+            setVentaTemporal(venta);
+
+            // 🆕 Validar si hay stock suficiente para cambiar vencidas
+            const advertenciasVencidas = [];
+            if (vencidas && vencidas.length > 0) {
+                vencidas.forEach(vencida => {
+                    const nombreProducto = vencida.nombre.toUpperCase();
+                    const stockActual = stockCargue[nombreProducto] || 0;
+                    const cantidadVendida = productosVenta.find(p => p.nombre.toUpperCase() === nombreProducto)?.cantidad || 0;
+                    const stockDisponible = stockActual - cantidadVendida;
+
+                    if (vencida.cantidad > stockDisponible) {
+                        if (stockDisponible <= 0) {
+                            advertenciasVencidas.push(`⚠️ ${vencida.nombre}: No tienes stock para cambiar ${vencida.cantidad} vencidas`);
+                        } else {
+                            advertenciasVencidas.push(`⚠️ ${vencida.nombre}: Solo tienes ${stockDisponible} para cambiar ${vencida.cantidad} vencidas`);
+                        }
+                    }
+                });
+            }
+
+            // Si hay advertencias, mostrar alerta pero permitir continuar
+            // Función auxiliar para abrir el modal correcto
+            const abrirModalConfirmacion = () => {
+                if (pedidoClienteSeleccionado) {
+                    // Si es Edición de Pedido -> Modal Pequeño (ConfirmarEntregaModal)
+
+                    // 🆕 Construir detalles actualizados basados en el carrito para mostrar en el modal
+                    const detallesVisuales = productosVenta.map(p => ({
+                        producto_nombre: p.nombre,
+                        cantidad: p.cantidad,
+                        precio_unitario: p.precio,
+                        subtotal: p.subtotal
+                    }));
+
+                    setPedidoParaEntregar({
+                        ...pedidoClienteSeleccionado,
+                        total: venta.total, // Usar el NUEVO total calculado
+                        numero_pedido: pedidoClienteSeleccionado.numero_pedido,
+                        detalles: detallesVisuales // 🆕 Detalles actualizados
+                    });
+                    setMostrarResumenEntrega(true);
+                } else {
+                    // Si es Venta Normal -> Modal Grande (ResumenVentaModal)
+                    setMostrarResumen(true);
+                }
+            };
+
+            if (advertenciasVencidas.length > 0) {
+                Alert.alert(
+                    '⚠️ Advertencia de Stock',
+                    advertenciasVencidas.join('\n') + '\n\n¿Deseas continuar de todas formas?',
+                    [
+                        { text: 'Cancelar', style: 'cancel' },
+                        { text: 'Continuar', onPress: abrirModalConfirmacion }
+                    ]
+                );
+            } else {
+                abrirModalConfirmacion();
+            }
+        };
+
+        // 🆕 LÓGICA DE DETECCIÓN DE VENTA REPETIDA
+        // Verificar si este cliente ya tiene ventas hoy
+        // Usar == para comparar ID (puede ser string o number)
+        const ventaPrevia = ventasDelDia.find(v => v.cliente_id == clienteSeleccionado.id);
+
+        // Si ya vendió y NO estamos editando un pedido específico (flujo normal)
+        if (ventaPrevia && !pedidoClienteSeleccionado) {
+            Alert.alert(
+                '⚠️ Cliente Ya Atendido',
+                `Ya realizaste una venta a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\n¿Deseas registrar otra venta?`,
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    { text: 'Sí, Continuar', onPress: procesarVenta }
+                ]
+            );
+            return;
+        }
+
+        // Si no hay problema, procesar directamente
+        procesarVenta();
+    };
+
+    // Confirmar y guardar venta
+    const confirmarVenta = async (fechaSeleccionada, metodoPago, opcionesEnvio) => {
+
+        if (!ventaTemporal) {
+            console.log('❌ No hay ventaTemporal');
+            return;
+        }
+
+        // 🆕 Evitar duplicación - Si ya está guardando, salir
+        if (window.__guardandoVenta) {
+            console.log('⚠️ Ya se está guardando una venta, ignorando...');
+            return;
+        }
+
+        // Agregar la fecha y método de pago a la venta
+        // 🔧 Formatear fecha en zona horaria local para evitar cambios de día
+        let fechaFormateada;
+        if (fechaSeleccionada) {
+            const year = fechaSeleccionada.getFullYear();
+            const month = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
+            const day = String(fechaSeleccionada.getDate()).padStart(2, '0');
+            const hours = String(fechaSeleccionada.getHours()).padStart(2, '0');
+            const minutes = String(fechaSeleccionada.getMinutes()).padStart(2, '0');
+            const seconds = String(fechaSeleccionada.getSeconds()).padStart(2, '0');
+            fechaFormateada = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+        } else {
+            fechaFormateada = new Date().toISOString();
+        }
+
+        const ventaConDatos = {
+            ...ventaTemporal,
+            fecha: fechaFormateada,
+            metodo_pago: metodoPago || 'EFECTIVO'
+        };
+
+
+
+        try {
+            // 🆕 Marcar que está guardando
+            window.__guardandoVenta = true;
+            console.log('💾 Guardando venta...');
+
+            let ventaGuardada;
+
+            if (pedidoClienteSeleccionado) {
+                // 📦 LÓGICA DE ACTUALIZACIÓN DE PEDIDO Y NOVEDADES
+                const novedades = [];
+                const detallesNuevos = [];
+
+                // 1. Reconstruir detalles nuevos basados en el carrito (lo que realmente se entrega)
+                Object.keys(carrito).forEach(id => {
+                    const prod = productos.find(p => p.id == parseInt(id));
+                    if (prod && carrito[id] > 0) {
+                        detallesNuevos.push({
+                            producto: prod.id,
+                            cantidad: carrito[id],
+                            precio_unitario: prod.precio
+                        });
+                    }
+                });
+
+                // 2. Calcular Novedades (Diferencias vs Original)
+                if (pedidoClienteSeleccionado.detalles) {
+                    pedidoClienteSeleccionado.detalles.forEach(detalleOriginal => {
+                        const id = detalleOriginal.producto;
+                        const cantidadNueva = carrito[id] || 0;
+
+                        if (cantidadNueva < detalleOriginal.cantidad) {
+                            novedades.push({
+                                producto: detalleOriginal.producto_nombre,
+                                cantidad: detalleOriginal.cantidad - cantidadNueva,
+                                motivo: 'Devolución en entrega'
+                            });
+                        }
+                    });
+                }
+
+                console.log('⚠️ Novedades detectadas:', novedades);
+
+                // 3. Actualizar en Backend
+                await actualizarPedido(pedidoClienteSeleccionado.id, {
+                    estado: 'ENTREGADA',
+                    total: ventaConDatos.total,
+                    metodo_pago: ventaConDatos.metodo_pago,
+                    detalles: detallesNuevos,
+                    novedades: novedades,
+                    fecha_entrega: fechaFormateada.split('T')[0]
+                });
+
+                // 🆕 ACTUALIZAR LISTAS LOCALES INMEDIATAMENTE
+                // Mover de Pendientes a Entregados para actualizar la UI (Badge Verde)
+                setPedidosPendientes(prev => prev.filter(p => String(p.id) !== String(pedidoClienteSeleccionado.id)));
+
+                // Recargar explícitamente la lista de pendientes para asegurar sincronización
+                const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+                verificarPedidosPendientes(fechaStr);
+
+                setPedidosEntregadosHoy(prev => [...prev, {
+                    ...pedidoClienteSeleccionado,
+                    destinatario: pedidoClienteSeleccionado.destinatario || clienteSeleccionado?.negocio || clienteSeleccionado?.nombre || 'Cliente', // 🆕 Asegurar destinatario para match visual
+                    estado: 'ENTREGADA',
+                    total: ventaConDatos.total,
+                    detalles: detallesNuevos,
+                    novedades: novedades
+                }]);
+
+                // Mock de respuesta para la UI
+                ventaGuardada = {
+                    ...ventaConDatos,
+                    id: pedidoClienteSeleccionado.numero_pedido,
+                    es_pedido: true
+                };
+
+            } else {
+                // Venta Normal
+                ventaGuardada = await guardarVenta(ventaConDatos);
+            }
+
+            console.log('✅ Proceso finalizado:', ventaGuardada.id);
+
+            // 🆕 ACTUALIZAR STOCK EN TIEMPO REAL
+            // IMPORTANTE: Solo afectar stock si es VENTA DIRECTA.
+            // Los pedidos asignados ya tienen su stock reservado/descontado en el cargue inicial.
+            if (!pedidoClienteSeleccionado) {
+                // Restar las cantidades vendidas del stock local
+                const nuevoStock = { ...stockCargue };
+
+                // 1. Restar productos vendidos
+                Object.keys(carrito).forEach(productoId => {
+                    const producto = productos.find(p => p.id === parseInt(productoId));
+                    if (producto) {
+                        const nombreProducto = producto.nombre.toUpperCase();
+                        const cantidadVendida = carrito[productoId];
+                        const stockActual = nuevoStock[nombreProducto] || 0;
+                        nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVendida);
+                        console.log(`📉 Vendido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                    }
+                });
+
+                // 2. Restar productos vencidos (también salen del stock si es cambio mano a mano)
+                if (vencidas && vencidas.length > 0) {
+                    vencidas.forEach(item => {
+                        const nombreProducto = item.nombre.toUpperCase();
+                        const cantidadVencida = item.cantidad || 0;
+                        const stockActual = nuevoStock[nombreProducto] || 0;
+                        nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVencida);
+                        console.log(`🗑️ Vencido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                    });
+                }
+
+                setStockCargue(nuevoStock);
+            }
+
+            // 🆕 Actualizar contador y agregar venta al estado inmediatamente
+            // SOLO SI ES VENTA DE RUTA (NO PEDIDO) para evitar doble conteo en cierre
+            if (!pedidoClienteSeleccionado) {
+                setTotalVentasHoy(prev => prev + 1);
+                setTotalDineroHoy(prev => prev + ventaConDatos.total);
+            }
+
+            // ✅ Agregar venta recién guardada al estado inmediatamente (sin esperar recarga)
+            setVentasDelDia(prev => [...prev, {
+                ...ventaGuardada,
+                cliente_nombre: ventaConDatos.cliente_nombre,
+                cliente_negocio: ventaConDatos.cliente_negocio,
+                fecha: ventaConDatos.fecha,
+                total: ventaConDatos.total
+            }]);
+
+            // Cerrar modal después de actualizar datos
+            setMostrarResumen(false);
+
+            // Actualizar contador de pendientes en segundo plano (no bloquea)
+            verificarPendientes();
+
+            // 🆕 LIMPIEZA CRÍTICA: Limpiar estado inmediatamente para evitar duplicados si el usuario tarda en cerrar el Alert
+            // Guardamos copia para el ticket/alert
+            const ventaParaTicket = { ...ventaGuardada };
+
+            // Limpiar estados reactivos que podrían causar reenvíos
+            setVentaTemporal(null);
+            // No limpiamos el carrito completamente aún si queremos imprimir, PERO
+            // invalidamos la capacidad de reenviar la misma venta.
+            // Mejor opción: Marcar como procesado.
+
+            // Preparar opciones del alert
+            const alertOptions = [
+                {
+                    text: 'Cerrar',
+                    onPress: () => limpiarVenta(),
+                    style: 'cancel'
+                }
+            ];
+
+            // Agregar opción de imprimir
+            alertOptions.unshift({
+                text: 'Imprimir',
+                onPress: async () => {
+                    await imprimirTicket(ventaGuardada);
+                    limpiarVenta();
+                }
+            });
+
+            // Agregar opción de WhatsApp si se proporcionó número
+            if (opcionesEnvio?.whatsapp) {
+                alertOptions.push({
+                    text: 'WhatsApp',
+                    onPress: () => {
+                        enviarFacturaWhatsApp(ventaGuardada, opcionesEnvio.whatsapp);
+                    }
+                });
+            }
+
+            // Agregar opción de Correo si se proporcionó
+            if (opcionesEnvio?.correo) {
+                alertOptions.push({
+                    text: 'Correo',
+                    onPress: () => {
+                        enviarFacturaCorreo(ventaGuardada, opcionesEnvio.correo);
+                    }
+                });
+            }
+
+            // 🆕 Usar setTimeout para asegurar que el modal se cierre antes de lanzar el Alert
+            setTimeout(() => {
+                Alert.alert(
+                    'Venta Completada',
+                    `Venta guardada exitosamente\nTotal: ${formatearMoneda(ventaConDatos.total)}\nMétodo: ${metodoPago}`,
+                    alertOptions
+                );
+            }, 500);
+        } catch (error) {
+            console.error('❌ Error en confirmarVenta:', error);
+            Alert.alert('Error', 'No se pudo guardar la venta');
+        } finally {
+            // 🆕 Liberar el flag cuando termine (éxito o error)
+            window.__guardandoVenta = false;
+            console.log('🔓 Venta procesada, flag liberado');
+        }
+    };
+
+    // Enviar ticket PDF por WhatsApp (abre directamente al número)
+    const enviarFacturaWhatsApp = async (venta, numero) => {
+        try {
+            // Generar el PDF del ticket
+            const { generarTicketPDF } = require('../../services/printerService');
+            const pdfUri = await generarTicketPDF(venta);
+
+            // Formatear número (agregar código de país si no lo tiene)
+            let numeroFormateado = numero.replace(/\D/g, '');
+            if (!numeroFormateado.startsWith('57')) {
+                numeroFormateado = '57' + numeroFormateado;
+            }
+
+            // Abrir WhatsApp con el número específico
+            const whatsappUrl = `whatsapp://send?phone=${numeroFormateado}`;
+
+            // Primero compartir el PDF
+            const Sharing = require('expo-sharing');
+            if (await Sharing.isAvailableAsync()) {
+                await Sharing.shareAsync(pdfUri, {
+                    mimeType: 'application/pdf',
+                    dialogTitle: 'Enviar ticket'
+                });
+            }
+
+            limpiarVenta();
+        } catch (error) {
+            console.error('Error al enviar por WhatsApp:', error);
+            Alert.alert('Error', 'No se pudo generar el ticket para enviar');
+        }
+    };
+
+    // Enviar ticket por correo electrónico
+    const enviarFacturaCorreo = async (venta, correo) => {
+        try {
+            // Generar el PDF del ticket
+            const { generarTicketPDF } = require('../../services/printerService');
+            const pdfUri = await generarTicketPDF(venta);
+
+            // Crear el asunto y cuerpo del correo
+            const asunto = `Factura de Venta #${venta.id} - Arepas El Guerrero`;
+            const cuerpo = `Adjunto encontrará la factura de su compra.\n\nTotal: $${formatearMoneda(venta.total)}\nFecha: ${new Date(venta.fecha).toLocaleDateString()}\n\n¡Gracias por su compra!`;
+
+            // Abrir cliente de correo con el PDF adjunto
+            const mailUrl = `mailto:${correo}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
+
+            // Primero intentar abrir el correo
+            const canOpen = await Linking.canOpenURL(mailUrl);
+            if (canOpen) {
+                await Linking.openURL(mailUrl);
+            }
+
+            // Luego compartir el PDF para que pueda adjuntarlo
+            const Sharing = require('expo-sharing');
+            if (await Sharing.isAvailableAsync()) {
+                await Sharing.shareAsync(pdfUri, {
+                    mimeType: 'application/pdf',
+                    dialogTitle: 'Adjuntar ticket al correo'
+                });
+            }
+
+            limpiarVenta();
+        } catch (error) {
+            console.error('Error al enviar por correo:', error);
+            Alert.alert('Error', 'No se pudo enviar por correo');
+        }
+    };
+
+    // Limpiar venta
+    const limpiarVenta = () => {
+        setCarrito({});
+        setDescuento(0);
+        setCarrito({});
+        setDescuento(0);
+        setVencidas([]);
+        setFotoVencidas(null);
+        setVentaTemporal(null);
+        setMostrarResumen(false);
+        setNota('');
+        setBusquedaProducto('');
+        setPedidoClienteSeleccionado(null); // 🆕 Limpiar pedido del cliente
+        setPreciosPersonalizados({}); // 🆕 Limpiar precios personalizados
+    };
+
+    // Manejar selección de cliente
+    const handleSeleccionarCliente = (cliente) => {
+        // 🆕 Limpiar datos de venta anterior al cambiar cliente
+        setCarrito({});
+        setPreciosPersonalizados({}); // 🆕 Limpiar precios al cambiar cliente
+        setVencidas([]);
+        setFotoVencidas(null);
+        setNota('');
+
+        // 🆕 Verificar si ya le vendió hoy
+        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+        const yaVendidoHoy = ventasDelDia.some(venta => {
+            const vNegocio = norm(venta.cliente_negocio);
+            const vNombre = norm(venta.cliente_nombre);
+            const cNegocio = norm(cliente.negocio);
+            const cNombre = norm(cliente.nombre);
+            return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
+        });
+
+        if (yaVendidoHoy) {
+            Alert.alert(
+                '⚠️ Cliente con Venta',
+                `Ya realizaste una venta a ${cliente.negocio || cliente.nombre} el día de hoy.\n\n¿Deseas continuar de todas formas?`,
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    {
+                        text: 'Sí, Continuar',
+                        onPress: () => {
+                            setClienteSeleccionado(cliente);
+                            // 🆕 Verificar si tiene pedido
+                            verificarPedidoCliente(cliente);
+                        }
+                    }
+                ]
+            );
+            return;
+        }
+
+        setClienteSeleccionado(cliente);
+        // 🆕 Verificar si tiene pedido
+        verificarPedidoCliente(cliente);
+    };
+
+    // 🆕 Verificar si el cliente tiene pedido pendiente
+    const verificarPedidoCliente = (cliente) => {
+        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+        const cNegocio = norm(cliente.negocio);
+        const cNombre = norm(cliente.nombre);
+
+        const pedido = pedidosPendientes.find(p => {
+            const pDestinatario = norm(p.destinatario);
+            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+        });
+
+        setPedidoClienteSeleccionado(pedido || null);
+
+        // 🆕 Si hay pedido y el cliente no tiene dirección, usar la del pedido
+        if (pedido && pedido.direccion_entrega && !cliente.direccion) {
+            setClienteSeleccionado({
+                ...cliente,
+                direccion: pedido.direccion_entrega
+            });
+        }
+
+        console.log('🔍 Pedido del cliente:', pedido ? `#${pedido.numero_pedido}` : 'Sin pedido');
+    };
+
+    // 🆕 Editar pedido del cliente seleccionado (cargar en carrito)
+    const editarPedidoClienteSeleccionado = () => {
+        if (!pedidoClienteSeleccionado) return;
+
+        const nuevoCarrito = {};
+        let encontrados = 0;
+
+        pedidoClienteSeleccionado.detalles.forEach(d => {
+            // Buscar producto en catálogo local por ID o nombre
+            const prodReal = productos.find(p => p.id === d.producto || p.nombre === d.producto_nombre);
+
+            if (prodReal) {
+                encontrados++;
+                // Construir objeto carrito con ID como clave
+                nuevoCarrito[prodReal.id] = d.cantidad; // Solo la cantidad
+            }
+        });
+
+        setCarrito(nuevoCarrito);
+
+        // 🆕 Cargar precios personalizados del pedido original
+        const nuevosPrecios = {};
+        pedidoClienteSeleccionado.detalles.forEach(d => {
+            // Buscar el producto localmente para obtener SU ID real usado en la App
+            const prodReal = productos.find(p => p.id === d.producto || p.nombre === d.producto_nombre);
+            const precioUnitario = parseFloat(d.precio_unitario);
+
+            if (prodReal && !isNaN(precioUnitario)) {
+                // Usar el ID del producto LOCAL como clave, igual que el carrito
+                nuevosPrecios[prodReal.id] = precioUnitario;
+                console.log(`💲 Precio personalizado para ${prodReal.nombre}: ${precioUnitario}`);
+            }
+        });
+        setPreciosPersonalizados(nuevosPrecios);
+
+        Alert.alert(
+            '✏️ Pedido Cargado',
+            `Se cargaron ${encontrados} productos del pedido.\n\nPuedes modificar las cantidades y completar la venta.`
+        );
+    };
+
+    // 🆕 Marcar pedido del cliente seleccionado como entregado
+    const marcarEntregadoClienteSeleccionado = () => {
+        if (!pedidoClienteSeleccionado) return;
+        marcarPedidoEntregado(pedidoClienteSeleccionado);
+    };
+
+
+
+    // Manejar cliente guardado
+    const handleClienteGuardado = async (nuevoCliente) => {
+        setClienteSeleccionado(nuevoCliente);
+        // Recargar lista de clientes
+        const clientesData = await obtenerClientes();
+        setClientes(clientesData);
+    };
+
+    // Manejar vencidas
+    const handleGuardarVencidas = (productosVencidos, foto) => {
+        setVencidas(productosVencidos);
+        setFotoVencidas(foto);
+    };
+
+    // 🆕 Manejar cerrar turno
+    const handleCerrarTurno = async () => {
+        try {
+            // 🔧 CORREGIDO: Usar fechaSeleccionada en lugar de fecha actual
+            const fechaFormateada = fechaSeleccionada.toISOString().split('T')[0];
+
+            console.log(`🔒 CERRAR TURNO - Fecha: ${fechaFormateada}, Vendedor: ${userId}`);
+            console.log(`   Vencidas a reportar:`, vencidas);
+
+            // Preparar productos vencidos en formato correcto
+            const productosVencidosFormateados = vencidas.map(item => ({
+                producto: item.nombre,
+                cantidad: item.cantidad
+            }));
+
+            console.log(`   Productos formateados:`, productosVencidosFormateados);
+
+            // Mostrar confirmación
+            Alert.alert(
+                '🔒 Cerrar Turno',
+                `¿Estás seguro de cerrar el turno del día?\n\nVentas: ${totalVentasHoy}\nTotal: ${formatearMoneda(totalDineroHoy)}\n\nEsta acción calculará las devoluciones automáticamente.`,
+                [
+                    {
+                        text: 'Cancelar',
+                        style: 'cancel'
+                    },
+                    {
+                        text: 'Cerrar Turno',
+                        style: 'destructive',
+                        onPress: async () => {
+                            try {
+                                console.log(`📤 Enviando a ${ENDPOINTS.CERRAR_TURNO}`);
+
+                                // 🆕 Llamar al endpoint usando config centralizado
+                                const response = await fetch(ENDPOINTS.CERRAR_TURNO, {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                    },
+                                    body: JSON.stringify({
+                                        id_vendedor: userId,
+                                        fecha: fechaFormateada, // 🔧 CORREGIDO
+                                        productos_vencidos: productosVencidosFormateados
+                                    })
+                                });
+
+                                const data = await response.json();
+                                console.log(`📥 Respuesta:`, data);
+
+                                if (data.success) {
+                                    // Mostrar resumen
+                                    const resumenTexto = data.resumen.map(item =>
+                                        `${item.producto}:\n` +
+                                        `  Cargado: ${item.cargado}\n` +
+                                        `  Vendido: ${item.vendido}\n` +
+                                        `  Vencidas: ${item.vencidas}\n` +
+                                        `  Devuelto: ${item.devuelto}`
+                                    ).join('\n\n');
+
+                                    Alert.alert(
+                                        '✅ Turno Cerrado',
+                                        `Resumen del día:\n\n${resumenTexto}\n\n` +
+                                        `📊 TOTALES:\n` +
+                                        `Cargado: ${data.totales.cargado}\n` +
+                                        `Vendido: ${data.totales.vendido}\n` +
+                                        `Vencidas: ${data.totales.vencidas}\n` +
+                                        `Devuelto: ${data.totales.devuelto}\n\n` +
+                                        `✅ Datos enviados al CRM`,
+                                        [
+                                            {
+                                                text: 'OK',
+                                                onPress: () => {
+                                                    // Redirigir al menú principal
+                                                    if (navigation) {
+                                                        navigation.goBack();
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    );
+
+                                    // Limpiar ventas del día
+                                    setTotalVentasHoy(0);
+                                    setTotalDineroHoy(0);
+                                    setVencidas([]);
+                                    setMostrarModalCerrarTurno(false);
+
+                                    // 🆕 Marcar turno como cerrado EN LA BD
+                                    try {
+                                        const responseCerrar = await fetch(ENDPOINTS.TURNO_CERRAR, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                                vendedor_id: userId,
+                                                fecha: fechaFormateada
+                                            })
+                                        });
+                                        const dataCerrar = await responseCerrar.json();
+                                        console.log('✅ Turno cerrado en BD:', dataCerrar);
+                                    } catch (errorCerrar) {
+                                        console.error('⚠️ Error cerrando turno en BD:', errorCerrar);
+                                    }
+
+                                    // Marcar turno como cerrado localmente
+                                    setTurnoAbierto(false);
+                                    setHoraTurno(null);
+
+                                    // 🆕 Limpiar stock local (turno cerrado)
+                                    setStockCargue({});
+
+                                    // 🆕 Limpiar ventas locales para evitar fantasmas
+                                    await limpiarVentasLocales();
+                                } else if (data.error === 'TURNO_YA_CERRADO') {
+                                    // 🆕 Turno ya fue cerrado anteriormente
+                                    Alert.alert(
+                                        '⚠️ Turno Ya Cerrado',
+                                        'El turno para este día ya fue cerrado anteriormente.\n\nNo se pueden enviar devoluciones duplicadas.'
+                                    );
+                                    setMostrarModalCerrarTurno(false);
+                                    setTurnoAbierto(false);
+                                    setHoraTurno(null);
+                                    setStockCargue({}); // Limpiar stock
+                                } else {
+                                    Alert.alert('Error', data.error || 'No se pudo cerrar el turno');
+                                }
+                            } catch (error) {
+                                console.error('Error cerrando turno:', error);
+                                Alert.alert('Error', 'No se pudo conectar con el servidor');
+                            }
+                        }
+                    }
+                ]
+            );
+        } catch (error) {
+            console.error('Error:', error);
+            Alert.alert('Error', 'Ocurrió un error inesperado');
+        }
+    };
+
+    // Renderizar producto
+    const renderProducto = ({ item }) => {
+        const cantidad = getCantidad(item.id);
+        const subtotalProducto = item.precio * cantidad;
+
+        // 🆕 Obtener stock del cargue
+        const stock = stockCargue[item.nombre.toUpperCase()] || 0;
+
+        return (
+            <View style={styles.productoItem}>
+                <View style={styles.productoInfo}>
+                    <Text style={styles.productoNombre}>{item.nombre}</Text>
+                    <Text style={styles.productoPrecio}>
+                        Precio: {formatearMoneda(item.precio)}
+                        {stock > 0 && <Text style={styles.stockTexto}>({stock})</Text>}
+                    </Text>
+                    {cantidad > 0 && (
+                        <Text style={styles.productoSubtotal}>
+                            Total: {formatearMoneda(subtotalProducto)}
+                        </Text>
+                    )}
+                </View>
+
+                <View style={styles.cantidadControl}>
+                    <TouchableOpacity
+                        style={[styles.btnCantidad, cantidad === 0 && styles.btnDeshabilitado]}
+                        onPress={() => actualizarCantidad(item.id, cantidad - 1)}
+                        disabled={cantidad === 0}
+                    >
+                        <Ionicons name="remove" size={20} color={cantidad === 0 ? '#ccc' : 'white'} />
+                    </TouchableOpacity>
+
+                    <TextInput
+                        style={styles.inputCantidad}
+                        value={String(cantidad)}
+                        onChangeText={(texto) => {
+                            const num = parseInt(texto) || 0;
+                            actualizarCantidad(item.id, num);
+                        }}
+                        keyboardType="numeric"
+                        selectTextOnFocus
+                    />
+
+                    <TouchableOpacity
+                        style={styles.btnCantidad}
+                        onPress={() => actualizarCantidad(item.id, cantidad + 1)}
+                    >
+                        <Ionicons name="add" size={20} color="white" />
+                    </TouchableOpacity>
+                </View>
+            </View>
+        );
+    };
+
+    // 🆕 Handler para cuando se guarda una nota
+    const handleNotaGuardada = async (nota) => {
+        // Actualizar cliente seleccionado localmente
+        if (clienteSeleccionado) {
+            setClienteSeleccionado({
+                ...clienteSeleccionado,
+                nota: nota
+            });
+        }
+
+        // Recargar lista completa de clientes para mantener consistencia
+        // (Esto asegura que si cambias de cliente y vuelves, la nota persista)
+        const clientesData = await obtenerClientes();
+        setClientes(clientesData);
+    };
+
+    return (
+        <View style={styles.container}>
+            {/* 🆕 Pantalla de carga mientras verifica turno */}
+            {verificandoTurno && (
+                <View style={styles.cargandoOverlay}>
+                    <View style={styles.cargandoContainer}>
+                        <Ionicons name="time-outline" size={48} color="#003d88" />
+                        <Text style={styles.cargandoTexto}>Verificando turno...</Text>
+                    </View>
+                </View>
+            )}
+
+            {/* Indicador de ventas pendientes */}
+            {ventasPendientes > 0 && (
+                <TouchableOpacity
+                    style={styles.pendientesBar}
+                    onPress={onRefresh}
+                >
+                    <Ionicons name="cloud-upload-outline" size={16} color="white" />
+                    <Text style={styles.pendientesText}>
+                        {ventasPendientes} venta{ventasPendientes > 1 ? 's' : ''} pendiente{ventasPendientes > 1 ? 's' : ''} de sincronizar
+                    </Text>
+                    <Ionicons name="refresh" size={16} color="white" />
+                </TouchableOpacity>
+            )}
+
+            {/* 🆕 Indicador de Turno - ENCIMA del cliente */}
+            {turnoAbierto && (
+                <View style={styles.turnoIndicador}>
+                    <View style={styles.turnoIndicadorContent}>
+                        <View style={styles.puntoVerde} />
+                        <Text style={styles.turnoTexto}>
+                            Turno Abierto {horaTurno ? `• ${horaTurno.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                        </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <Text style={styles.turnoDia}>
+                            {diaSeleccionado} • {fechaSeleccionada?.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
+                        </Text>
+                        {/* 🆕 Botón para cambiar de día */}
+                        <TouchableOpacity
+                            onPress={() => {
+                                Alert.alert(
+                                    '🔄 Cambiar Día',
+                                    '¿Quieres seleccionar otro día?\n\nEsto NO cerrará el turno actual, solo te permite cambiar.',
+                                    [
+                                        { text: 'Cancelar', style: 'cancel' },
+                                        {
+                                            text: 'Cambiar',
+                                            onPress: () => {
+                                                // Limpiar estado local y mostrar selector
+                                                setTurnoAbierto(false);
+                                                setHoraTurno(null);
+                                                setDiaSeleccionado(null);
+                                                setMostrarSelectorDia(true);
+                                            }
+                                        }
+                                    ]
+                                );
+                            }}
+                            style={styles.btnCambiarDia}
+                        >
+                            <Ionicons name="calendar-outline" size={16} color="#003d88" />
+                        </TouchableOpacity>
+
+                        {/* 🆕 Botón Historial Ventas (Reimprimir) */}
+                        <TouchableOpacity
+                            onPress={() => setMostrarHistorialVentas(true)}
+                            style={[styles.btnCambiarDia, { marginLeft: 8, backgroundColor: '#e3f2fd', borderColor: '#2196f3' }]}
+                        >
+                            <Ionicons name="receipt-outline" size={16} color="#003d88" />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
+
+            {/* Indicador de turno cerrado */}
+            {!turnoAbierto && !mostrarSelectorDia && !verificandoTurno && (
+                <View style={[styles.turnoIndicador, styles.turnoCerrado]}>
+                    <View style={styles.turnoIndicadorContent}>
+                        <View style={styles.puntoGris} />
+                        <Text style={[styles.turnoTexto, { color: '#666' }]}>
+                            Sin turno activo
+                        </Text>
+                    </View>
+                    <TouchableOpacity
+                        onPress={() => setMostrarSelectorDia(true)}
+                        style={styles.btnAbrirTurno}
+                    >
+                        <Text style={styles.btnAbrirTurnoTexto}>Abrir Turno</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+
+            {/* 🆕 Botón Pedidos Asignados - DESACTIVADO (ahora se muestran en selector de clientes) */}
+            {/* {pedidosPendientes.length > 0 && turnoAbierto && (
+                <TouchableOpacity
+                    style={styles.btnPedidosFlotante}
+                    onPress={() => setModalPedidosVisible(true)}
+                >
+                    <Ionicons name="cube-outline" size={24} color="#fff" />
+                    <Text style={styles.btnPedidosTexto}>
+                        📦 Ver {pedidosPendientes.length} Pedidos Asignados
+                    </Text>
+                    <Ionicons name="chevron-forward" size={20} color="#fff" />
+                </TouchableOpacity>
+            )} */}
+
+            {/* Header - Cliente */}
+            <View style={styles.headerCliente}>
+                <View
+                    style={[
+                        styles.clienteSelector,
+                        // 🆕 Fondo y borde verde si tiene pedido entregado
+                        clienteSeleccionado && (() => {
+                            const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                            const tienePedidoEntregado = pedidosEntregadosHoy.some(p => {
+                                const pDestinatario = norm(p.destinatario);
+                                const cNegocio = norm(clienteSeleccionado.negocio);
+                                const cNombre = norm(clienteSeleccionado.nombre);
+                                return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                            });
+                            return tienePedidoEntregado ? {
+                                backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                                borderColor: '#22c55e' // Verde
+                            } : null;
+                        })()
+                    ]}
+                >
+                    {/* Área Táctil para Selector de Cliente */}
+                    <TouchableOpacity
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                        onPress={() => setMostrarSelectorCliente(true)}
+                    >
+                        <Ionicons name="person" size={20} color="#003d88" />
+                        <View style={styles.clienteInfo}>
+                            <Text style={styles.clienteNombre}>
+                                {clienteSeleccionado?.negocio || 'Seleccionar Cliente'}
+                            </Text>
+                            {clienteSeleccionado?.nombre && (
+                                <Text style={styles.clienteDetalle}>
+                                    👤 {clienteSeleccionado.nombre}
+                                </Text>
+                            )}
+                            <Text style={styles.clienteDetalle}>
+                                {(() => {
+                                    // Buscar pedido pendiente
+                                    if (pedidoClienteSeleccionado) {
+                                        return `📦 Pedido #${pedidoClienteSeleccionado.numero_pedido}`;
+                                    }
+
+                                    // Buscar pedido entregado
+                                    const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                                    const pedidoEntregado = pedidosEntregadosHoy.find(p => {
+                                        const pDestinatario = norm(p.destinatario);
+                                        const cNegocio = norm(clienteSeleccionado?.negocio);
+                                        const cNombre = norm(clienteSeleccionado?.nombre);
+                                        return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                                    });
+
+                                    if (pedidoEntregado) {
+                                        return `📦 Pedido #${pedidoEntregado.numero_pedido}`;
+                                    }
+
+                                    // No hay pedido, mostrar teléfono
+                                    return `📞 ${clienteSeleccionado?.celular || 'Sin teléfono'}`;
+                                })()}
+                            </Text>
+                            <Text style={styles.clienteDetalle}>
+                                📍 {clienteSeleccionado?.direccion || 'Sin dirección'}
+                            </Text>
+                        </View>
+                    </TouchableOpacity>
+
+                    {/* 🆕 Botón de Notas INTEGRADO (Lado derecho) */}
+                    {clienteSeleccionado && (
+                        <TouchableOpacity
+                            style={styles.btnNotaInterno}
+                            onPress={() => setMostrarNotaModal(true)}
+                        >
+                            <Ionicons
+                                name={clienteSeleccionado.nota ? "document-text" : "document-text-outline"}
+                                size={26}
+                                color={clienteSeleccionado.nota ? "#dc3545" : "#A0A0A0"}
+                            />
+                        </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity onPress={() => setMostrarSelectorCliente(true)}>
+                        <Ionicons name="chevron-forward" size={20} color="#003d88" style={{ marginLeft: 5 }} />
+                    </TouchableOpacity>
+
+                    {/* 🆕 Badge "Entregado" en esquina superior derecha */}
+                    {clienteSeleccionado && (() => {
+                        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                        const pedidoEntregado = pedidosEntregadosHoy.find(p => {
+                            const pDestinatario = norm(p.destinatario);
+                            const cNegocio = norm(clienteSeleccionado.negocio);
+                            const cNombre = norm(clienteSeleccionado.nombre);
+                            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                        });
+                        return pedidoEntregado ? (
+                            <View style={styles.badgeEntregado}>
+                                <Text style={styles.badgeEntregadoTexto}>Entregado</Text>
+                            </View>
+                        ) : null;
+                    })()}
+
+                    {/* 🆕 Check verde si ya se le vendió hoy (NO si solo está entregado) */}
+                    {clienteSeleccionado && (() => {
+                        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+
+                        // 🆕 VALIDACIÓN EXTRA: Si ya está entregado como pedido, NO mostrar "Vendido"
+                        const esPedidoEntregado = pedidosEntregadosHoy.some(p => {
+                            const pDestinatario = norm(p.destinatario);
+                            const cNegocio = norm(clienteSeleccionado.negocio);
+                            const cNombre = norm(clienteSeleccionado.nombre);
+                            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                        });
+
+                        if (esPedidoEntregado) return null;
+
+                        // Verificar si ya se le vendió (para clientes normales)
+                        const yaVendido = ventasDelDia.some(venta => {
+                            const vNegocio = norm(venta.cliente_negocio);
+                            const vNombre = norm(venta.cliente_nombre);
+                            const cNegocio = norm(clienteSeleccionado.negocio);
+                            const cNombre = norm(clienteSeleccionado.nombre);
+                            // Verificar coincidencia y que el total sea mayor a 0 (para excluir solo vencidas)
+                            return ((vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre)) && parseFloat(venta.total) > 0;
+                        });
+
+                        return yaVendido ? (
+                            <View style={styles.badgeVendido}>
+                                <Text style={styles.badgeVendidoTexto}>Ya vendido</Text>
+                            </View>
+                        ) : null;
+                    })()}
+                </View>
+
+                {/* 🆕 Badge "No Entregado" */}
+                {clienteSeleccionado && (() => {
+                    const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                    const noEntregado = pedidosNoEntregadosHoy.find(p => {
+                        const pDestinatario = norm(p.destinatario);
+                        const cNegocio = norm(clienteSeleccionado.negocio);
+                        const cNombre = norm(clienteSeleccionado.nombre);
+                        return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                    });
+                    return noEntregado ? (
+                        <View style={styles.badgeNoEntregado}>
+                            <Text style={styles.badgeNoEntregadoTexto}>No Entregado</Text>
+                        </View>
+                    ) : null;
+                })()}
+
+                {/* 🆕 X roja si tiene pedido PERO NO está anulado */}
+                {pedidoClienteSeleccionado && pedidoClienteSeleccionado.estado !== 'ANULADA' && (
+                    <TouchableOpacity
+                        style={styles.headerXPedido}
+                        onPress={() => {
+                            setPedidoEnNovedad(pedidoClienteSeleccionado);
+                            setMotivoNovedad(''); // Limpiar motivo previo
+                            setModalNovedadVisible(true);
+                        }}
+                    >
+                        <Ionicons name="close-circle" size={28} color="#dc3545" />
+                    </TouchableOpacity>
+                )}
+            </View>
+
+            {/* Botones Acciones: Cambian según si tiene pedido */}
+            <View style={styles.botonesAccionesContainer}>
+                {pedidoClienteSeleccionado ? (
+                    <>
+                        {/* Botón Editar (rojo) - Cliente con Pedido */}
+                        <TouchableOpacity
+                            style={[styles.btnAccion, styles.btnEditar]}
+                            onPress={editarPedidoClienteSeleccionado}
+                        >
+                            <Ionicons name="create" size={18} color="white" />
+                            <Text style={styles.btnAccionTexto}>Editar</Text>
+                        </TouchableOpacity>
+
+                        {/* Botón Entregado (verde) - Cliente con Pedido */}
+                        <TouchableOpacity
+                            style={[styles.btnAccion, styles.btnEntregado]}
+                            onPress={marcarEntregadoClienteSeleccionado}
+                        >
+                            <Ionicons name="checkmark-circle" size={18} color="white" />
+                            <Text style={styles.btnAccionTexto}>Entregar</Text>
+                        </TouchableOpacity>
+                    </>
+                ) : (
+                    <>
+                        {/* Botón Vencidas - Cliente Normal */}
+                        <TouchableOpacity
+                            style={[styles.btnAccion, styles.btnVencidas]}
+                            onPress={() => setMostrarVencidas(true)}
+                        >
+                            <Ionicons name="alert-circle" size={18} color="white" />
+                            <Text style={styles.btnAccionTexto}>Vencidas</Text>
+                            {vencidas.length > 0 && (
+                                <View style={styles.badgeAccion}>
+                                    <Text style={styles.badgeTexto}>
+                                        {vencidas.reduce((sum, p) => sum + p.cantidad, 0)}
+                                    </Text>
+                                </View>
+                            )}
+                        </TouchableOpacity>
+
+                        {/* Botón Cerrar Turno - Solo si turno abierto */}
+                        {turnoAbierto && (
+                            <TouchableOpacity
+                                style={[styles.btnAccion, styles.btnCerrarPequeño]}
+                                onPress={() => setMostrarModalCerrarTurno(true)}
+                            >
+                                <Ionicons name="lock-closed" size={18} color="white" />
+                                <Text style={styles.btnAccionTexto}>Cerrar</Text>
+                            </TouchableOpacity>
+                        )}
+                    </>
+                )}
+            </View>
+
+            {/* Búsqueda de productos */}
+            <View style={styles.busquedaContainer}>
+                <Ionicons name="search" size={20} color="#666" style={styles.iconoBusqueda} />
+                <TextInput
+                    style={styles.inputBusqueda}
+                    placeholder="Buscar producto..."
+                    value={busquedaProducto}
+                    onChangeText={setBusquedaProducto}
+                    autoCapitalize="characters"
+                />
+                {busquedaProducto.length > 0 && (
+                    <TouchableOpacity onPress={() => setBusquedaProducto('')}>
+                        <Ionicons name="close-circle" size={20} color="#666" />
+                    </TouchableOpacity>
+                )}
+            </View>
+
+            {/* Lista de productos - Arrastra hacia abajo para sincronizar */}
+            <FlatList
+                data={productosFiltrados}
+                renderItem={renderProducto}
+                keyExtractor={(item) => String(item.id)}
+                style={styles.listaProductos}
+                contentContainerStyle={styles.listaContent}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        colors={['#003d88']}
+                        tintColor="#003d88"
+                        title="Sincronizando productos..."
+                        titleColor="#666"
+                    />
+                }
+                ListEmptyComponent={
+                    <View style={styles.emptyContainer}>
+                        <Ionicons name="search-outline" size={48} color="#ccc" />
+                        <Text style={styles.emptyText}>No se encontraron productos</Text>
+                        <Text style={styles.emptySubtext}>Arrastra hacia abajo para sincronizar</Text>
+                    </View>
+                }
+            />
+
+            {/* Resumen y botón */}
+            <View style={styles.footer}>
+                <TouchableOpacity
+                    style={[
+                        styles.btnCompletar,
+                        (Object.keys(carrito).filter(id => carrito[id] > 0).length === 0 && vencidas.length === 0) && styles.btnDeshabilitado
+                    ]}
+                    onPress={completarVenta}
+                    disabled={Object.keys(carrito).filter(id => carrito[id] > 0).length === 0 && vencidas.length === 0}
+                >
+                    <Ionicons name="checkmark-circle" size={24} color="white" style={styles.iconoBoton} />
+                    <Text style={styles.btnCompletarTexto}>
+                        {pedidoClienteSeleccionado
+                            ? `CONFIRMAR PEDIDO ${formatearMoneda(total)}`
+                            : (Object.keys(carrito).filter(id => carrito[id] > 0).length === 0 && vencidas.length > 0)
+                                ? 'REGISTRAR VENCIDAS'
+                                : `COMPLETAR VENTA ${formatearMoneda(total)}`
+                        }
+                    </Text>
+                </TouchableOpacity>
+            </View>
+
+            {/* Modal Selección de Día */}
+            <Modal
+                visible={mostrarSelectorDia}
+                animationType="fade"
+                transparent={true}
+            >
+                <View style={styles.modalDiaOverlay}>
+                    <View style={styles.modalDiaContainer}>
+                        <View style={styles.modalDiaHeader}>
+                            <Ionicons name="calendar" size={32} color="#003d88" />
+                            <Text style={styles.modalDiaTitulo}>Selecciona el Día</Text>
+                            <Text style={styles.modalDiaSubtitulo}>¿Qué día vas a trabajar?</Text>
+                        </View>
+
+                        <View style={styles.modalDiaBotones}>
+                            {DIAS_SEMANA.map((dia) => {
+                                const esHoy = dia === getDiaActual();
+                                return (
+                                    <TouchableOpacity
+                                        key={dia}
+                                        style={[
+                                            styles.modalDiaBoton,
+                                            esHoy && styles.modalDiaBotonHoy
+                                        ]}
+                                        onPress={() => handleSeleccionarDia(dia)}
+                                    >
+                                        <Text style={[
+                                            styles.modalDiaBotonTexto,
+                                            esHoy && styles.modalDiaBotonTextoHoy
+                                        ]}>
+                                            {dia}
+                                        </Text>
+                                        {esHoy && (
+                                            <Text style={styles.modalDiaHoyLabel}>HOY</Text>
+                                        )}
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+
+                        {/* 🆕 Botón Volver para cerrar el modal */}
+                        <TouchableOpacity
+                            style={styles.modalDiaBotonVolver}
+                            onPress={() => setMostrarSelectorDia(false)}
+                        >
+                            <Ionicons name="arrow-back" size={20} color="#666" />
+                            <Text style={styles.modalDiaVolverTexto}>Volver</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* 🆕 DatePicker para Seleccionar Fecha */}
+            {
+                mostrarDatePicker && (
+                    <DateTimePicker
+                        value={fechaSeleccionada}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={handleConfirmarFecha}
+                        maximumDate={new Date(2030, 11, 31)}
+                        minimumDate={new Date(2020, 0, 1)}
+                    />
+                )
+            }
+
+            {/* Modales */}
+            <ClienteSelector
+                visible={mostrarSelectorCliente}
+                onClose={() => setMostrarSelectorCliente(false)}
+                onSelectCliente={handleSeleccionarCliente}
+                ventasDelDia={ventasDelDia} // 🆕 Pasar ventas del día
+                pedidosPendientes={pedidosPendientes} // 🆕 Pasar pedidos pendientes
+                pedidosEntregadosHoy={pedidosEntregadosHoy} // 🆕 Pasar pedidos entregados
+                pedidosNoEntregadosHoy={pedidosNoEntregadosHoy} // 🆕 Pasar pedidos NO entregados
+                onCargarPedido={cargarPedidoEnCarrito} // 🆕 Cargar pedido en carrito
+                onMarcarEntregado={marcarPedidoEntregado} // 🆕 Marcar como entregado
+                onMarcarNoEntregado={(pedido) => { // 🆕 Marcar como no entregado
+                    setPedidoEnNovedad(pedido);
+                    setModalNovedadVisible(true);
+                }}
+                onNuevoCliente={() => {
+                    setMostrarSelectorCliente(false);
+                    setMostrarModalCliente(true);
+                }}
+                userId={userId}
+                diaSeleccionado={diaSeleccionado}
+            />
+
+            <ClienteModal
+                visible={mostrarModalCliente}
+                onClose={() => setMostrarModalCliente(false)}
+                onSelect={handleSeleccionarCliente}
+                onClienteGuardado={handleClienteGuardado}
+                clientes={clientes}
+            />
+
+
+
+            <DevolucionesVencidas
+                visible={mostrarVencidas}
+                onClose={() => setMostrarVencidas(false)}
+                onGuardar={handleGuardarVencidas}
+                tipo="vencidas"
+                datosGuardados={vencidas}
+                fotosGuardadas={fotoVencidas}
+                userId={userId}
+                fechaSeleccionada={fechaSeleccionada}
+            />
+
+            <ResumenVentaModal
+                visible={mostrarResumen}
+                onClose={() => setMostrarResumen(false)}
+                onConfirmar={confirmarVenta}
+                venta={ventaTemporal}
+            />
+
+            <ConfirmarEntregaModal
+                visible={mostrarResumenEntrega}
+                onClose={() => setMostrarResumenEntrega(false)}
+                onConfirmar={confirmarEntregaPedido}
+                pedido={pedidoParaEntregar}
+            />
+
+            {/* Modal Cerrar Turno */}
+            <Modal
+                visible={mostrarModalCerrarTurno}
+                animationType="fade"
+                transparent={true}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalCerrarTurno}>
+                        <View style={styles.modalCerrarHeader}>
+                            <Ionicons name="lock-closed" size={40} color="#dc3545" />
+                            <Text style={styles.modalCerrarTitulo}>🔒 Cerrar Turno del Día</Text>
+                        </View>
+
+                        <View style={styles.modalCerrarBody}>
+                            <Text style={styles.modalCerrarText}>¿Estás seguro de cerrar el turno?</Text>
+                            <Text style={[styles.modalCerrarSubtext, { color: '#dc3545', fontWeight: 'bold' }]}>
+                                ⚠️ ATENCIÓN: Una vez cerrado, NO podrás volver a abrirlo ni registrar más ventas para este día.
+                            </Text>
+
+                            {/* 🆕 Resumen Completo */}
+                            {(totalVentasHoy > 0 || pedidosEntregadosHoy.length > 0) && (() => {
+                                const totalPedidos = pedidosEntregadosHoy.reduce((sum, p) => sum + (parseFloat(p.total) || 0), 0);
+                                const granTotal = totalDineroHoy + totalPedidos;
+
+                                return (
+                                    <View style={styles.modalCerrarResumen}>
+                                        <View style={styles.modalCerrarFila}>
+                                            <Text style={styles.modalCerrarLabel}>Ventas Ruta ({totalVentasHoy}):</Text>
+                                            <Text style={styles.modalCerrarValor}>{formatearMoneda(totalDineroHoy)}</Text>
+                                        </View>
+
+                                        <View style={styles.modalCerrarFila}>
+                                            <Text style={styles.modalCerrarLabel}>Pedidos ({pedidosEntregadosHoy.length}):</Text>
+                                            <Text style={styles.modalCerrarValor}>{formatearMoneda(totalPedidos)}</Text>
+                                        </View>
+
+                                        <View style={[styles.modalCerrarFila, { marginTop: 10, borderTopWidth: 1, borderColor: '#eee', paddingTop: 10 }]}>
+                                            <Text style={[styles.modalCerrarLabel, { fontWeight: 'bold', fontSize: 16 }]}>TOTAL A ENTREGAR:</Text>
+                                            <Text style={[styles.modalCerrarValor, { fontWeight: 'bold', fontSize: 16, color: '#003d88' }]}>
+                                                {formatearMoneda(granTotal)}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                );
+                            })()}
+                        </View>
+
+                        <View style={styles.modalCerrarBotones}>
+                            <TouchableOpacity
+                                style={[styles.modalCerrarBtn, styles.modalCancelarBtn]}
+                                onPress={() => setMostrarModalCerrarTurno(false)}
+                            >
+                                <Text style={styles.modalCancelarTexto}>Cancelar</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.modalCerrarBtn, styles.modalConfirmarBtn]}
+                                onPress={() => {
+                                    setMostrarModalCerrarTurno(false);
+                                    handleCerrarTurno();
+                                }}
+                            >
+                                <Ionicons name="lock-closed" size={18} color="white" />
+                                <Text style={styles.modalConfirmarTexto}>Cerrar Turno</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+            {/* 🆕 MODAL PEDIDOS ASIGNADOS */}
+            <Modal
+                visible={modalPedidosVisible}
+                animationType="slide"
+                transparent={true}
+                onRequestClose={() => setModalPedidosVisible(false)}
+            >
+                <View style={[styles.modalOverlay, { justifyContent: 'flex-end' }]}>
+                    <View style={[styles.modalContent, { maxHeight: '85%', width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                            <Text style={styles.modalTitle}>📦 Pedidos Asignados ({pedidosPendientes.length})</Text>
+                            <TouchableOpacity onPress={() => setModalPedidosVisible(false)}>
+                                <Ionicons name="close-circle" size={30} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
+                            {pedidosPendientes.length === 0 ? (
+                                <Text style={{ textAlign: 'center', color: '#666', marginTop: 20 }}>No tienes pedidos pendientes</Text>
+                            ) : (
+                                pedidosPendientes.map((p) => (
+                                    <View key={p.id} style={[
+                                        styles.pedidoCard,
+                                        p.estado === 'ANULADA' && { backgroundColor: '#fff5f5', borderColor: '#dc3545', borderWidth: 2 }
+                                    ]}>
+                                        {/* Badge "No Entregado" si está anulado */}
+                                        {p.estado === 'ANULADA' && (
+                                            <View style={{ position: 'absolute', top: 15, left: '50%', transform: [{ translateX: -70 }], backgroundColor: '#dc3545', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, zIndex: 5, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }}>
+                                                <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold', letterSpacing: 0.5 }}>❌ NO ENTREGADO</Text>
+                                            </View>
+                                        )}
+                                        {/* Botón X solo si NO está anulado */}
+                                        {p.estado !== 'ANULADA' && (
+                                            <TouchableOpacity
+                                                style={styles.btnNovedadX}
+                                                onPress={() => {
+                                                    setPedidoEnNovedad(p);
+                                                    setModalNovedadVisible(true);
+                                                }}
+                                            >
+                                                <Ionicons name="close-circle" size={28} color="#dc3545" />
+                                            </TouchableOpacity>
+                                        )}
+
+                                        <View style={styles.pedidoHeader}>
+                                            <Text style={styles.pedidoCliente}>{p.destinatario || 'Cliente'}</Text>
+                                            <Text style={styles.pedidoTotal}>${parseFloat(p.total).toLocaleString()}</Text>
+                                        </View>
+                                        <Text style={styles.pedidoInfo}>📍 {p.direccion_entrega || 'Sin dirección'}</Text>
+                                        <Text style={styles.pedidoInfo}>📄 Pedido #{p.numero_pedido} • {p.fecha.split('T')[0]}</Text>
+                                        <Text style={[styles.pedidoInfo, { fontStyle: 'italic' }]}>{p.nota}</Text>
+
+                                        <View style={styles.pedidoDetallesBox}>
+                                            {p.detalles.map((d, idx) => (
+                                                <Text key={idx} style={styles.pedidoDetalleText}>
+                                                    • {d.producto_nombre || 'Producto'} x{d.cantidad}
+                                                </Text>
+                                            ))}
+                                        </View>
+
+                                        {/* Botones solo si NO está anulado */}
+                                        {p.estado !== 'ANULADA' && (
+                                            <View style={styles.pedidoAccionesRow}>
+                                                <TouchableOpacity
+                                                    style={[styles.botonAccion, { backgroundColor: '#28a745', flex: 1, marginRight: 5 }]}
+                                                    onPress={() => cargarPedidoEnCarrito(p)}
+                                                >
+                                                    <Ionicons name="cart" size={18} color="white" />
+                                                    <Text style={styles.textoBotonAccion}>Vender (Carrito)</Text>
+                                                </TouchableOpacity>
+
+                                                <TouchableOpacity
+                                                    style={[styles.botonAccion, { backgroundColor: '#e9ecef', flex: 1, marginLeft: 5 }]}
+                                                    onPress={() => marcarPedidoEntregado(p)}
+                                                >
+                                                    <Ionicons name="checkmark-done" size={18} color="#003d88" />
+                                                    <Text style={[styles.textoBotonAccion, { color: '#003d88' }]}>Solo Entregar</Text>
+                                                </TouchableOpacity>
+                                            </View>
+                                        )}
+                                    </View>
+                                ))
+                            )}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* 🆕 MODAL REPORTE NOVEDAD */}
+            <Modal
+                visible={modalNovedadVisible}
+                animationType="fade"
+                transparent={true}
+                onRequestClose={() => setModalNovedadVisible(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, { width: '85%' }]}>
+                        <Text style={[styles.modalTitle, { color: '#dc3545' }]}>⚠️ Reportar No Entrega</Text>
+                        <Text style={{ marginBottom: 10, color: '#666' }}>
+                            ¿Por qué no se entregó el pedido de {pedidoEnNovedad?.destinatario}?
+                        </Text>
+
+                        <TextInput
+                            style={{
+                                borderWidth: 1,
+                                borderColor: '#ccc',
+                                borderRadius: 8,
+                                padding: 10,
+                                height: 80,
+                                textAlignVertical: 'top',
+                                marginBottom: 15,
+                                backgroundColor: '#f9f9f9'
+                            }}
+                            placeholder="Escribe el motivo (ej: Cerrado, Sin dinero...)"
+                            value={motivoNovedad}
+                            onChangeText={setMotivoNovedad}
+                            multiline
+                            autoFocus
+                        />
+
+                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
+                            <TouchableOpacity
+                                style={[styles.botonAccion, { backgroundColor: '#e9ecef', paddingHorizontal: 20 }]}
+                                onPress={() => setModalNovedadVisible(false)}
+                            >
+                                <Text style={{ color: '#666', fontWeight: 'bold' }}>Cancelar</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.botonAccion, { backgroundColor: '#dc3545', paddingHorizontal: 20 }]}
+                                onPress={confirmarNovedad}
+                            >
+                                <Text style={{ color: 'white', fontWeight: 'bold' }}>Reportar</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+            {/* 🆕 MODAL NOTAS CLIENTE */}
+            <ClienteNotaModal
+                visible={mostrarNotaModal}
+                onClose={() => setMostrarNotaModal(false)}
+                cliente={clienteSeleccionado}
+                onGuardar={handleNotaGuardada}
+            />
+            {/* 🆕 MODAL HISTORIAL VENTAS */}
+            <Modal
+                visible={mostrarHistorialVentas}
+                animationType="slide"
+                transparent={true}
+                onRequestClose={() => setMostrarHistorialVentas(false)}
+            >
+                <View style={[styles.modalOverlay, { justifyContent: 'flex-end' }]}>
+                    <View style={[styles.modalContent, { maxHeight: '80%', width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                            <Text style={styles.modalTitle}>🧾 Ventas del Día ({ventasDelDia.length})</Text>
+                            <TouchableOpacity onPress={() => setMostrarHistorialVentas(false)}>
+                                <Ionicons name="close-circle" size={30} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <Text style={{ textAlign: 'center', color: '#666', marginBottom: 10 }}>
+                            Toca el botón de imprimir para generar copia del ticket.
+                        </Text>
+
+                        <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
+                            {ventasDelDia.length === 0 ? (
+                                <Text style={{ textAlign: 'center', color: '#666', marginTop: 20 }}>No hay ventas registradas hoy</Text>
+                            ) : (
+                                [...ventasDelDia].reverse().map((venta, index) => (
+                                    <View key={index} style={{
+                                        backgroundColor: '#f8f9fa',
+                                        padding: 15,
+                                        borderRadius: 10,
+                                        marginBottom: 10,
+                                        borderWidth: 1,
+                                        borderColor: '#dee2e6',
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between'
+                                    }}>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={{ fontWeight: 'bold', fontSize: 16, color: '#333' }}>
+                                                {venta.cliente_negocio || venta.cliente_nombre || 'Cliente General'}
+                                            </Text>
+                                            <Text style={{ fontSize: 13, color: '#666', marginTop: 2 }}>
+                                                {venta.fecha ? new Date(venta.fecha).toLocaleTimeString() : 'Hora desconocida'}
+                                                {venta.metodo_pago ? ` • ${venta.metodo_pago}` : ''}
+                                            </Text>
+                                            <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#00ad53', marginTop: 4 }}>
+                                                {formatearMoneda(venta.total)}
+                                            </Text>
+                                        </View>
+
+                                        <TouchableOpacity
+                                            style={{
+                                                backgroundColor: '#003d88',
+                                                padding: 10,
+                                                borderRadius: 8,
+                                                marginLeft: 10
+                                            }}
+                                            onPress={() => imprimirTicket(venta)}
+                                        >
+                                            <Ionicons name="print" size={20} color="white" />
+                                        </TouchableOpacity>
+                                    </View>
+                                ))
+                            )}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+        </View >
+    );
+};
+
+const styles = StyleSheet.create({
+    btnNovedadX: {
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        zIndex: 10,
+        padding: 5,
+    },
+    // 🆕 Estilos Pedidos
+    btnPedidosFlotante: {
+        backgroundColor: '#00ad53', // Verde App
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 10, // Más compacto
+        paddingHorizontal: 15,
+        marginHorizontal: 15,
+        marginBottom: 10, // Menos espacio
+        marginTop: 5,
+        borderRadius: 10,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 3,
+        elevation: 3,
+    },
+    btnPedidosTexto: {
+        color: 'white',
+        fontWeight: 'bold',
+        fontSize: 15, // Texto un poco más pequeño
+        marginLeft: 10,
+        flex: 1,
+    },
+    pedidoCard: {
+        backgroundColor: '#f8f9fa',
+        padding: 15,
+        borderRadius: 10,
+        marginBottom: 15,
+        borderWidth: 1,
+        borderColor: '#dee2e6',
+    },
+    pedidoHeader: {
+        marginBottom: 8,
+        paddingRight: 40, // Espacio para la X
+    },
+    pedidoCliente: {
+        fontSize: 17,
+        fontWeight: 'bold',
+        color: '#212529',
+        marginBottom: 4,
+    },
+    pedidoTotal: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#28a745',
+    },
+    pedidoInfo: {
+        color: '#6c757d',
+        marginBottom: 2,
+        fontSize: 14,
+    },
+    pedidoDetallesBox: {
+        marginTop: 10,
+        padding: 10,
+        backgroundColor: '#fff',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#e9ecef',
+    },
+    pedidoDetalleText: {
+        color: '#495057',
+        fontSize: 14,
+        marginBottom: 2,
+    },
+    pedidoAccionesRow: {
+        flexDirection: 'row',
+        marginTop: 15,
+    },
+    botonAccion: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 12,
+        borderRadius: 8,
+    },
+    textoBotonAccion: {
+        fontWeight: 'bold',
+        marginLeft: 5,
+        fontSize: 14,
+    },
+    container: {
+        flex: 1,
+        backgroundColor: '#f5f5f5',
+        paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
+    },
+    headerCliente: {
+        backgroundColor: 'white',
+        padding: 15,
+        borderBottomWidth: 1,
+        borderBottomColor: '#e0e0e0',
+    },
+    clienteSelector: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 10,
+        backgroundColor: '#f0f8ff',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#003d88',
+        position: 'relative',
+    },
+    headerCheckVendido: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: 'white',
+        borderRadius: 12,
+        padding: 2,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 3,
+        elevation: 4,
+    },
+    headerXPedido: {
+        position: 'absolute',
+        top: 18,
+        right: 20,
+        backgroundColor: 'white',
+        borderRadius: 14,
+        padding: 0,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 3,
+        elevation: 5,
+    },
+    clienteInfo: {
+        marginLeft: 10,
+        flex: 1,
+    },
+    clienteNombre: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#003d88',
+    },
+    clienteDetalle: {
+        fontSize: 12,
+        color: '#666',
+        marginTop: 2,
+    },
+    badgeEntregado: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#22c55e',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    badgeEntregadoTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    badgeVendido: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#00ad53',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    badgeVendidoTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    badgeNoEntregado: {
+        position: 'absolute',
+        top: 20,
+        right: 20,
+        backgroundColor: '#dc3545',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    badgeNoEntregadoTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    busquedaContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'white',
+        padding: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#e0e0e0',
+    },
+    iconoBusqueda: {
+        marginRight: 8,
+    },
+    inputBusqueda: {
+        flex: 1,
+        fontSize: 16,
+        padding: 8,
+    },
+    listaProductos: {
+        flex: 1,
+    },
+    listaContent: {
+        padding: 10,
+    },
+    productoItem: {
+        flexDirection: 'row',
+        backgroundColor: 'white',
+        padding: 12,
+        marginBottom: 8,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#66b3ff',
+        elevation: 1,
+    },
+    productoInfo: {
+        flex: 1,
+    },
+    productoNombre: {
+        fontSize: 13,
+        fontWeight: 'bold',
+        color: '#333',
+        marginBottom: 4,
+    },
+    productoPrecio: {
+        fontSize: 12,
+        color: '#666',
+    },
+    stockTexto: {
+        fontSize: 12,
+        color: '#666',
+        fontWeight: 'normal',
+    },
+    productoSubtotal: {
+        fontSize: 13,
+        fontWeight: 'bold',
+        color: '#00ad53',
+        marginTop: 4,
+    },
+    cantidadControl: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    btnCantidad: {
+        backgroundColor: '#00ad53',
+        borderRadius: 6,
+        padding: 8,
+        width: 36,
+        height: 36,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    btnDeshabilitado: {
+        backgroundColor: '#ccc',
+    },
+    inputCantidad: {
+        width: 50,
+        textAlign: 'center',
+        fontSize: 16,
+        fontWeight: 'bold',
+        marginHorizontal: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: '#66b3ff',
+        paddingVertical: 4,
+    },
+    emptyContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 40,
+    },
+    emptyText: {
+        fontSize: 16,
+        color: '#999',
+        marginTop: 10,
+    },
+    emptySubtext: {
+        fontSize: 12,
+        color: '#bbb',
+        marginTop: 5,
+    },
+    pendientesBar: {
+        backgroundColor: '#ff9800',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 8,
+        gap: 8,
+    },
+    pendientesText: {
+        color: 'white',
+        fontSize: 12,
+        fontWeight: 'bold',
+        marginTop: 10,
+    },
+    footer: {
+        backgroundColor: 'white',
+        borderTopWidth: 1,
+        borderTopColor: '#e0e0e0',
+        padding: 15,
+        paddingBottom: Platform.OS === 'android' ? 40 : 15,
+    },
+    btnCompletar: {
+        backgroundColor: '#00ad53',
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 15,
+        borderRadius: 10,
+    },
+    iconoBoton: {
+        marginRight: 8,
+    },
+    btnCompletarTexto: {
+        color: 'white',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+    botonesAccionesContainer: {
+        flexDirection: 'row',
+        backgroundColor: 'white',
+        padding: 10,
+        gap: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#e0e0e0',
+    },
+    btnAccion: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 12,
+        borderRadius: 8,
+        gap: 6,
+    },
+    btnVencidas: {
+        backgroundColor: '#ff6b6b',
+    },
+    btnEditar: {
+        backgroundColor: '#dc3545', // Rojo
+    },
+    btnEntregado: {
+        backgroundColor: '#28a745', // Verde
+    },
+    btnAccionTexto: {
+        color: 'white',
+        fontSize: 14,
+        fontWeight: 'bold',
+    },
+    badgeAccion: {
+        backgroundColor: 'rgba(255, 255, 255, 0.3)',
+        borderRadius: 12,
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        marginLeft: 4,
+    },
+    badgeTexto: {
+        color: 'white',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    // 🆕 Estilos botón Cerrar Turno pequeño
+    btnCerrarPequeño: {
+        backgroundColor: '#003d88', // Azul de la app
+    },
+    // 🆕 Estilos sección cerrar turno (expandida)
+    seccionCerrarTurno: {
+        marginTop: 15,
+        backgroundColor: '#fff3cd',
+        borderRadius: 10,
+        padding: 15,
+        borderWidth: 2,
+        borderColor: '#dc3545',
+    },
+    resumenDia: {
+        marginBottom: 12,
+    },
+    resumenTitulo: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#dc3545',
+        marginBottom: 8,
+    },
+    resumenFila: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginVertical: 4,
+    },
+    resumenLabel: {
+        fontSize: 14,
+        color: '#666',
+    },
+    resumenValor: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#333',
+    },
+    btnCerrarTurnoGrande: {
+        backgroundColor: '#dc3545',
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 15,
+        borderRadius: 10,
+        gap: 8,
+    },
+    btnCerrarTurnoTexto: {
+        color: 'white',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+    // Estilos Modal Selección de Día
+    modalDiaOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    modalDiaContainer: {
+        backgroundColor: 'white',
+        borderRadius: 16,
+        padding: 20,
+        width: '90%',
+        maxWidth: 320,
+        elevation: 10,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+    },
+    modalDiaHeader: {
+        alignItems: 'center',
+        marginBottom: 15,
+    },
+    modalDiaTitulo: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#003d88',
+        marginTop: 10,
+    },
+    modalDiaSubtitulo: {
+        fontSize: 12,
+        color: '#666',
+        marginTop: 3,
+    },
+    modalDiaBotones: {
+        gap: 8,
+    },
+    modalDiaBoton: {
+        backgroundColor: '#f0f8ff',
+        padding: 12,
+        borderRadius: 10,
+        borderWidth: 1.5,
+        borderColor: '#003d88',
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    modalDiaBotonHoy: {
+        backgroundColor: '#003d88',
+    },
+    modalDiaBotonTexto: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#003d88',
+    },
+    modalDiaBotonTextoHoy: {
+        color: 'white',
+    },
+    modalDiaHoyLabel: {
+        backgroundColor: '#00ad53',
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 10,
+        marginLeft: 10,
+    },
+    // 🆕 Estilos botón Volver
+    modalDiaBotonVolver: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 16,
+        padding: 12,
+        borderRadius: 8,
+        backgroundColor: '#f0f0f0',
+    },
+    modalDiaVolverTexto: {
+        fontSize: 14,
+        color: '#666',
+        marginLeft: 8,
+    },
+    // Estilos Modal Cerrar Turno
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    modalCerrarTurno: {
+        backgroundColor: 'white',
+        borderRadius: 16,
+        padding: 20,
+        width: '90%',
+        maxWidth: 400,
+    },
+    modalCerrarHeader: {
+        alignItems: 'center',
+        marginBottom: 20,
+    },
+    modalCerrarTitulo: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#dc3545',
+        marginTop: 10,
+        textAlign: 'center',
+    },
+    modalCerrarBody: {
+        marginBottom: 20,
+    },
+    modalCerrarText: {
+        fontSize: 16,
+        color: '#333',
+        textAlign: 'center',
+        marginBottom: 8,
+    },
+    modalCerrarSubtext: {
+        fontSize: 13,
+        color: '#666',
+        textAlign: 'center',
+        marginBottom: 15,
+    },
+    modalCerrarResumen: {
+        backgroundColor: '#f8f9fa',
+        padding: 15,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#dee2e6',
+    },
+    modalCerrarFila: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginVertical: 5,
+    },
+    modalCerrarLabel: {
+        fontSize: 14,
+        color: '#666',
+    },
+    modalCerrarValor: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#333',
+    },
+    modalCerrarBotones: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    modalCerrarBtn: {
+        flex: 1,
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 15,
+        borderRadius: 8,
+        gap: 6,
+    },
+    modalCancelarBtn: {
+        backgroundColor: '#6c757d',
+    },
+    modalCancelarTexto: {
+        color: 'white',
+        fontSize: 15,
+        fontWeight: 'bold',
+    },
+    modalConfirmarBtn: {
+        backgroundColor: '#dc3545',
+    },
+    modalConfirmarTexto: {
+        color: 'white',
+        fontSize: 15,
+        fontWeight: 'bold',
+    },
+    // 🆕 Estilos para indicador de turno
+    turnoIndicador: {
+        backgroundColor: '#ecfdf5',
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        borderBottomWidth: 1,
+        borderBottomColor: '#d1fae5',
+    },
+    turnoCerrado: {
+        backgroundColor: '#f3f4f6',
+        borderBottomColor: '#e5e7eb',
+    },
+    turnoIndicadorContent: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    puntoVerde: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '#22c55e',
+    },
+    puntoGris: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#9ca3af',
+    },
+    turnoTexto: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#166534',
+    },
+    turnoHora: {
+        fontSize: 12,
+        color: '#16a34a',
+    },
+    turnoDia: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: '#059669',
+        flexShrink: 1, // Evitar desbordamiento
+    },
+    // 🆕 Estilos para pantalla de carga
+    cargandoOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000,
+    },
+    cargandoContainer: {
+        backgroundColor: 'white',
+        padding: 30,
+        borderRadius: 16,
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    cargandoTexto: {
+        marginTop: 12,
+        fontSize: 16,
+        color: '#003d88',
+        fontWeight: '500',
+    },
+    // 🆕 Estilos para botones de turno
+    btnCambiarDia: {
+        padding: 6,
+        backgroundColor: '#e0f2fe',
+        borderRadius: 6,
+    },
+    btnAbrirTurno: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        backgroundColor: '#003d88',
+        borderRadius: 6,
+    },
+    btnAbrirTurnoTexto: {
+        color: 'white',
+        fontSize: 12,
+        fontWeight: '600',
+    },
+    btnAbrirTurnoTexto: {
+        color: 'white',
+        fontSize: 12,
+        fontWeight: '600',
+    },
+    // 🆕 Estilos Botón Nota
+    btnNotaCliente: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 8,
+        marginLeft: 8,
+        backgroundColor: '#e6f7ff',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#91d5ff',
+        position: 'relative'
+    },
+    btnNotaClienteTexto: {
+        fontSize: 12,
+        color: '#003d88',
+        fontWeight: 'bold',
+        marginLeft: 4
+    },
+    puntoNotificacion: {
+        position: 'absolute',
+        top: -4,
+        right: -4,
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#ff4d4f',
+        borderWidth: 1,
+        borderColor: 'white'
+    },
+    // 🆕 Estilos Icono Nota
+    btnNotaIcono: {
+        width: 44,
+        height: 44,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginLeft: 8,
+        backgroundColor: '#fffbe6', // Amarillo suave
+        borderRadius: 22, // Circular
+        borderWidth: 1,
+        borderColor: '#ffe58f',
+        position: 'relative'
+    },
+    puntoNotificacionIcono: {
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        backgroundColor: '#ff4d4f',
+        borderWidth: 2,
+        borderColor: 'white'
+    },
+    // 🆕 Estilos Botón Interno
+    btnNotaInterno: {
+        padding: 5,
+        marginHorizontal: 5,
+        justifyContent: 'center',
+        alignItems: 'center',
+        position: 'relative'
+    },
+    puntoNotificacionInterno: {
+        position: 'absolute',
+        top: 2,
+        right: 2,
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#ff4d4f',
+        borderWidth: 1.5,
+        borderColor: '#f0f8ff' // Mismo que fondo card
+    }
+});
+
+export default VentasScreen;

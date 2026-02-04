@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ScrollView, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, View, FlatList } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Product from './Product';
@@ -86,13 +86,12 @@ const ProductList = ({ selectedDay, userId }) => {
     return map;
   }, [productos]);
 
-  // 🚀 OPTIMIZACIÓN: useCallback para evitar recrear función en cada render
-  const handleQuantityChange = useCallback((productName, quantity) => {
+  const handleQuantityChange = (productName, quantity) => {
     setQuantities((prevQuantities) => ({
       ...prevQuantities,
       [productName]: quantity,
     }));
-  }, []);
+  };
 
   const handleSendPress = () => {
     if (!loading && selectedDay) {
@@ -195,14 +194,13 @@ const ProductList = ({ selectedDay, userId }) => {
     }
   };
 
-  // 🚀 OPTIMIZACIÓN: useCallback para evitar recrear función en cada render
-  const renderProduct = useCallback(({ item }) => (
+  const renderProduct = ({ item }) => (
     <Product
       product={item}
       onQuantityChange={handleQuantityChange}
       quantity={quantities[item.name] || ''}
     />
-  ), [handleQuantityChange, quantities]);
+  );
 
 
 
@@ -217,11 +215,12 @@ const ProductList = ({ selectedDay, userId }) => {
         <FlatList
           data={productos}
           renderItem={renderProduct}
-          keyExtractor={(item) => item.id.toString()}
+          keyExtractor={(item) => item.name}
           contentContainerStyle={styles.scrollContainer}
           initialNumToRender={10}
           maxToRenderPerBatch={10}
           windowSize={5}
+          removeClippedSubviews={true}
           getItemLayout={(data, index) => ({
             length: 150, // altura aproximada de cada item
             offset: 150 * index,
