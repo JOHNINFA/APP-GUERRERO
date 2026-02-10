@@ -7,7 +7,8 @@ import {
     TouchableOpacity,
     ScrollView,
     TextInput,
-    Linking
+    Linking,
+    ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -31,6 +32,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
     const [enviarCorreo, setEnviarCorreo] = useState(false);
     const [correoDestino, setCorreoDestino] = useState('');
     const [nota, setNota] = useState(''); // 🆕 Estado para nota
+    const [enviando, setEnviando] = useState(false); // 🆕 Estado para deshabilitar botón
 
     // Resetear valores cuando se abre el modal
     useEffect(() => {
@@ -44,6 +46,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
             setEnviarCorreo(false);
             setCorreoDestino('');
             setNota(''); // 🆕 Limpiar nota
+            setEnviando(false); // 🆕 Resetear estado
         }
     }, [visible]);
 
@@ -79,11 +82,16 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
 
     // Confirmar con la fecha y método de pago seleccionados
     const handleConfirmar = () => {
+        if (enviando) return; // Evitar doble clic
+        
+        setEnviando(true);
         const opcionesEnvio = {
             whatsapp: enviarWhatsApp ? numeroWhatsApp : null,
             correo: enviarCorreo ? correoDestino : null
         };
         onConfirmar(fechaVenta, metodoPago, opcionesEnvio, nota); // 🆕 Pasar nota
+        
+        // Nota: setEnviando(false) se hará cuando se cierre el modal
     };
 
     return (
@@ -110,6 +118,8 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                             <TouchableOpacity
                                 style={styles.selectorFecha}
                                 onPress={() => setMostrarDatePicker(true)}
+                                activeOpacity={0.6}
+                                delayPressIn={0}
                             >
                                 <Text style={styles.fechaTexto}>{formatearFecha(fechaVenta)}</Text>
                                 <Ionicons name="calendar-outline" size={20} color="#003d88" />
@@ -305,11 +315,23 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                            style={styles.btnConfirmar}
+                            style={[
+                                styles.btnConfirmar,
+                                enviando && { backgroundColor: '#ccc' }
+                            ]}
                             onPress={handleConfirmar}
+                            disabled={enviando}
+                            activeOpacity={0.6}
+                            delayPressIn={0}
                         >
-                            <Ionicons name="checkmark-circle" size={20} color="white" />
-                            <Text style={styles.btnConfirmarTexto}>Confirmar</Text>
+                            {enviando ? (
+                                <ActivityIndicator size="small" color="white" />
+                            ) : (
+                                <Ionicons name="checkmark-circle" size={20} color="white" />
+                            )}
+                            <Text style={styles.btnConfirmarTexto}>
+                                {enviando ? 'Enviando...' : 'Confirmar'}
+                            </Text>
                         </TouchableOpacity>
                     </View>
                 </View>

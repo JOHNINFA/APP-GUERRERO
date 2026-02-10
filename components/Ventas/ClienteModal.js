@@ -34,6 +34,7 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
     const [rutas, setRutas] = useState([]);
     const [cargandoRutas, setCargandoRutas] = useState(false);
     const [mostrarSelectorRuta, setMostrarSelectorRuta] = useState(false);
+    const [guardando, setGuardando] = useState(false); // 🆕 Estado para deshabilitar botón
 
     // Cargar rutas al abrir el modal
     useEffect(() => {
@@ -61,6 +62,11 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
     };
 
     const handleChange = (campo, valor) => {
+        // Convertir a mayúsculas los campos de texto
+        if (['nombre', 'negocio', 'direccion', 'tipoNegocio'].includes(campo)) {
+            valor = valor.toUpperCase();
+        }
+        
         setFormData({
             ...formData,
             [campo]: valor
@@ -115,27 +121,68 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
 
     const handleGuardar = async () => {
         if (!validarFormulario()) return;
+        if (guardando) return; // Evitar doble clic
 
         try {
-            const nuevoCliente = await guardarCliente(formData);
+            setGuardando(true); // Deshabilitar botón
+            
+            // 🚀 OPTIMISTIC UPDATE - Crear cliente temporal inmediatamente
+            const clienteTemporal = {
+                id: `TEMP-${Date.now()}`,
+                nombre: formData.nombre,
+                negocio: formData.negocio,
+                celular: formData.celular,
+                direccion: formData.direccion,
+                tipoNegocio: formData.tipoNegocio,
+                diasVisita: formData.diasVisita,
+                rutaId: formData.rutaId,
+                activo: true,
+                guardando: true // Flag para mostrar que está guardando
+            };
 
-            Alert.alert(
-                'Cliente Guardado',
-                `${nuevoCliente.nombre} ha sido registrado exitosamente`,
-                [
-                    {
-                        text: 'OK',
-                        onPress: () => {
-                            onClienteGuardado(nuevoCliente);
-                            limpiarFormulario();
-                            onClose();
-                        }
+            // ✅ Mostrar cliente inmediatamente (sin esperar al servidor)
+            onClienteGuardado(clienteTemporal);
+            limpiarFormulario();
+            onClose();
+
+            // 🔄 Guardar en servidor en segundo plano
+            guardarCliente(formData)
+                .then(nuevoCliente => {
+                    console.log('✅ Cliente guardado en servidor:', nuevoCliente.id);
+                    // Actualizar con el ID real del servidor
+                    onClienteGuardado({ ...nuevoCliente, guardando: false });
+                })
+                .catch(async (error) => {
+                    console.error('❌ Error guardando en servidor:', error);
+                    
+                    // 🆕 Guardar en cola de sincronización pendiente
+                    try {
+                        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+                        const pendientes = JSON.parse(await AsyncStorage.getItem('clientes_pendientes') || '[]');
+                        pendientes.push({
+                            ...formData,
+                            timestamp: Date.now(),
+                            intentos: 0
+                        });
+                        await AsyncStorage.setItem('clientes_pendientes', JSON.stringify(pendientes));
+                        console.log('📝 Cliente agregado a cola de sincronización');
+                    } catch (queueError) {
+                        console.error('Error guardando en cola:', queueError);
                     }
-                ]
-            );
+                    
+                    // Notificar error pero no bloquear la UI
+                    Alert.alert(
+                        'Sin Conexión',
+                        'El cliente se guardó localmente. Se sincronizará automáticamente cuando haya internet.',
+                        [{ text: 'OK' }]
+                    );
+                });
+
         } catch (error) {
-            Alert.alert('Error', 'No se pudo guardar el cliente');
+            Alert.alert('Error', error.message || 'No se pudo guardar el cliente');
             console.error(error);
+        } finally {
+            setGuardando(false); // Rehabilitar botón
         }
     };
 
@@ -190,10 +237,10 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
                             </Text>
                             <TextInput
                                 style={styles.input}
-                                placeholder="Ej: Juan Pérez"
+                                placeholder="Ej: JUAN PÉREZ"
                                 value={formData.nombre}
                                 onChangeText={(valor) => handleChange('nombre', valor)}
-                                autoCapitalize="words"
+                                autoCapitalize="characters"
                                 autoFocus
                             />
                         </View>
@@ -205,10 +252,10 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
                             </Text>
                             <TextInput
                                 style={styles.input}
-                                placeholder="Ej: Tienda El Sol"
+                                placeholder="Ej: TIENDA EL SOL"
                                 value={formData.negocio}
                                 onChangeText={(valor) => handleChange('negocio', valor)}
-                                autoCapitalize="words"
+                                autoCapitalize="characters"
                             />
                         </View>
 
@@ -230,12 +277,13 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
                             <Text style={styles.label}>Dirección</Text>
                             <TextInput
                                 style={[styles.input, styles.inputTextarea]}
-                                placeholder="Ej: Calle 123 #45-67"
+                                placeholder="Ej: CALLE 123 #45-67"
                                 value={formData.direccion}
                                 onChangeText={(valor) => handleChange('direccion', valor)}
                                 multiline
                                 numberOfLines={3}
                                 textAlignVertical="top"
+                                autoCapitalize="characters"
                             />
                         </View>
 
@@ -244,10 +292,10 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
                             <Text style={styles.label}>Tipo de Negocio</Text>
                             <TextInput
                                 style={styles.input}
-                                placeholder="Ej: Supermercado, Carnicería, Panadería"
+                                placeholder="Ej: SUPERMERCADO, CARNICERÍA, PANADERÍA"
                                 value={formData.tipoNegocio}
                                 onChangeText={(valor) => handleChange('tipoNegocio', valor)}
-                                autoCapitalize="words"
+                                autoCapitalize="characters"
                             />
                         </View>
 
@@ -354,11 +402,18 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                        style={styles.btnGuardar}
+                        style={[styles.btnGuardar, guardando && styles.btnGuardarDeshabilitado]}
                         onPress={handleGuardar}
+                        disabled={guardando}
                     >
-                        <Ionicons name="checkmark-circle" size={20} color="white" />
-                        <Text style={styles.btnGuardarTexto}>Guardar Cliente</Text>
+                        {guardando ? (
+                            <ActivityIndicator size="small" color="white" />
+                        ) : (
+                            <Ionicons name="checkmark-circle" size={20} color="white" />
+                        )}
+                        <Text style={styles.btnGuardarTexto}>
+                            {guardando ? 'Guardando...' : 'Guardar Cliente'}
+                        </Text>
                     </TouchableOpacity>
                 </View>
             </KeyboardAvoidingView>
@@ -469,6 +524,9 @@ const styles = StyleSheet.create({
         backgroundColor: '#00ad53',
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    btnGuardarDeshabilitado: {
+        backgroundColor: '#a5d6a7',
     },
     btnGuardarTexto: {
         fontSize: 16,

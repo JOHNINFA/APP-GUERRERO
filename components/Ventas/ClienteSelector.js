@@ -53,6 +53,9 @@ const ClienteSelector = ({
     const [mostrarTodos, setMostrarTodos] = useState(false);
     const [diaActual, setDiaActual] = useState('');
     const [actualizandoEnFondo, setActualizandoEnFondo] = useState(false);
+    // 🆕 Flag para evitar actualización automática después de mover clientes
+    const [ultimoMovimiento, setUltimoMovimiento] = useState(null);
+    
     // 🆕 Estados para Drag & Drop
     const [modoOrdenar, setModoOrdenar] = useState(false);
     const [guardandoOrden, setGuardandoOrden] = useState(false);
@@ -65,7 +68,7 @@ const ClienteSelector = ({
         modoOrdenarRef.current = modoOrdenar;
     }, [modoOrdenar]);
 
-    // 🆕 Obtener rutaId del vendedor
+    // 🆕 Obtener rutaId del vendedor (ya no es necesario para guardar orden)
     const obtenerRutaId = async () => {
         try {
             const response = await fetch(`${API_URL}/api/rutas/?vendedor_id=${userId}`);
@@ -78,48 +81,46 @@ const ClienteSelector = ({
                 }
             }
         } catch (error) {
-            console.error('Error obteniendo rutaId:', error);
+            console.log('⚠️ No se pudo obtener rutaId (no crítico):', error.message);
         }
         return null;
     };
 
     // 🆕 Guardar orden de clientes después de drag & drop
     const guardarOrdenClientes = async (nuevoOrden) => {
-        if (!rutaId || !diaActual) {
-            console.log('⚠️ No se puede guardar: falta rutaId o día');
+        if (!diaActual) {
+            console.log('⚠️ No se puede guardar: falta día');
             return;
         }
 
-        setGuardandoOrden(true);
+        // 🔥 Marcar que acabamos de mover un cliente (evitar actualización automática)
+        setUltimoMovimiento(Date.now());
+
+        // 🚀 NO mostrar spinner - guardado optimista en segundo plano
         try {
             const clientesIds = nuevoOrden.map(c => parseInt(c.id));
-            console.log('💾 Guardando orden para día:', diaActual, 'IDs:', clientesIds);
+            console.log('💾 Guardando orden en segundo plano para día:', diaActual);
 
-            const response = await fetch(`${API_URL}/api/ruta-orden/`, {
+            // Guardar en segundo plano sin bloquear UI
+            fetch(`${API_URL}/api/ruta-orden/guardar_orden_vendedor/`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    ruta_id: rutaId,
+                    vendedor_id: userId,
                     dia: diaActual,
                     clientes_ids: clientesIds
                 })
+            }).then(response => {
+                if (response.ok) {
+                    console.log('✅ Orden guardado exitosamente');
+                } else {
+                    console.error('❌ Error al guardar orden:', response.status);
+                }
+            }).catch(error => {
+                console.error('❌ Error guardando orden:', error);
             });
-
-            if (response.ok) {
-                console.log('✅ Orden guardado exitosamente');
-
-                // 🆕 Actualizar caché localmente para evitar reversiones
-                const cacheKey = `${CACHE_KEY_CLIENTES}${userId}`;
-                // Necesitamos actualizar todo el caché, pero solo tenemos el orden de HOY.
-                // Es complejo actualizar solo una parte. 
-                // Mejor estrategia: No hacer nada complejo aquí, confiar en el estado local.
-            } else {
-                console.error('❌ Error al guardar orden:', response.status);
-            }
         } catch (error) {
-            console.error('❌ Error guardando orden:', error);
-        } finally {
-            setGuardandoOrden(false);
+            console.error('❌ Error preparando guardado:', error);
         }
     };
 
@@ -251,10 +252,8 @@ const ClienteSelector = ({
 
     // 🆕 Cargar clientes primero del cache, luego actualizar desde servidor
     const cargarClientesConCache = async (dia) => {
-        setLoading(true);
-
         try {
-            // 1. Intentar cargar del cache primero (INSTANTÁNEO)
+            // 1. Intentar cargar del cache primero (INSTANTÁNEO, SIN SPINNER)
             const cacheKey = `${CACHE_KEY_CLIENTES}${userId}`;
             const cachedData = await AsyncStorage.getItem(cacheKey);
 
@@ -263,7 +262,7 @@ const ClienteSelector = ({
                 const esValido = (Date.now() - timestamp) < CACHE_EXPIRY;
 
                 if (clientes && clientes.length > 0) {
-                    console.log('📦 Clientes cargados del cache:', clientes.length);
+                    console.log('⚡ Carga INSTANTÁNEA del cache:', clientes.length);
 
                     // Filtrar clientes del día
                     const clientesHoy = clientes.filter(c =>
@@ -272,27 +271,35 @@ const ClienteSelector = ({
 
                     setClientesDelDia(clientesHoy);
                     setTodosLosClientes(clientes);
-                    setLoading(false);
+                    // ✅ NO mostrar loading si hay caché (carga instantánea)
 
-                    // Si el cache es válido, actualizar en segundo plano
-                    if (esValido) {
-                        actualizarClientesEnFondo(dia, cacheKey);
-                        return;
-                    }
+                    // 🔥 SIEMPRE actualizar desde servidor para obtener el orden correcto
+                    // (sin importar si el caché es válido o no)
+                    actualizarClientesEnFondo(dia, cacheKey);
+                    return;
                 }
             }
 
-            // 2. Si no hay cache o expiró, cargar del servidor
+            // 2. Solo si NO hay cache, mostrar loading y cargar del servidor
+            console.log('🔄 No hay caché, cargando desde servidor...');
+            setLoading(true);
             await cargarClientesDelServidor(dia);
 
         } catch (error) {
             console.error('Error con cache:', error);
+            setLoading(true);
             await cargarClientesDelServidor(dia);
         }
     };
 
     // 🆕 Actualizar clientes en segundo plano sin bloquear UI
     const actualizarClientesEnFondo = async (dia, cacheKey) => {
+        // 🔥 NO actualizar si el usuario acaba de mover un cliente (últimos 3 segundos)
+        if (ultimoMovimiento && (Date.now() - ultimoMovimiento) < 3000) {
+            console.log('⛔ Omitiendo actualización automática (usuario movió cliente recientemente)');
+            return;
+        }
+        
         setActualizandoEnFondo(true);
         try {
             // 🆕 Incluir día en la petición para que el servidor ordene correctamente
@@ -317,6 +324,7 @@ const ClienteSelector = ({
                     dia_visita: c.dia_visita,
                     nota: c.nota,
                     tipo_negocio: c.tipo_negocio,
+                    lista_precio_nombre: c.lista_precio_nombre || c.tipo_lista_precio, // 🆕 AGREGAR lista de precios
                     orden: index + 1, // 🆕 El orden viene del servidor
                     esDeRuta: true
                 }));
@@ -344,6 +352,7 @@ const ClienteSelector = ({
                         dia_visita: c.dia_visita,
                         nota: c.nota,
                         tipo_negocio: c.tipo_negocio,
+                        lista_precio_nombre: c.lista_precio_nombre || c.tipo_lista_precio, // 🆕 AGREGAR lista de precios
                         esDeRuta: true
                     })));
                 }
@@ -380,6 +389,7 @@ const ClienteSelector = ({
                         dia_visita: c.dia_visita,
                         nota: c.nota,
                         tipo_negocio: c.tipo_negocio,
+                        lista_precio_nombre: c.lista_precio_nombre || c.tipo_lista_precio, // 🆕 AGREGAR lista de precios
                         orden: index + 1, // 🆕 El orden viene del servidor
                         esDeRuta: true
                     }));
@@ -402,6 +412,7 @@ const ClienteSelector = ({
                             dia_visita: c.dia_visita,
                             nota: c.nota,
                             tipo_negocio: c.tipo_negocio,
+                            lista_precio_nombre: c.lista_precio_nombre || c.tipo_lista_precio, // 🆕 AGREGAR lista de precios
                             esDeRuta: true
                         }));
 
@@ -447,10 +458,15 @@ const ClienteSelector = ({
     }, [clientesDelDia, todosLosClientes, busqueda, mostrarTodos]);
 
     const handleSelectCliente = (cliente) => {
-        onSelectCliente(cliente);
+        // ✅ OPTIMIZACIÓN: Cerrar modal PRIMERO para dar sensación de rapidez
+        onClose();
         setBusqueda('');
         setMostrarTodos(false);
-        onClose();
+
+        // Ejecutar callback en el siguiente tick para no bloquear el cierre del modal
+        setTimeout(() => {
+            onSelectCliente(cliente);
+        }, 0);
     };
 
     const handleNuevoCliente = () => {
@@ -876,6 +892,8 @@ const ClienteSelector = ({
                     styles.clienteItem
                 ]}
                 onPress={() => handleSelectCliente(item)}
+                activeOpacity={0.6}
+                delayPressIn={0}
             >
                 {/* 🆕 Columna de Flechas de Ordenamiento (Izquierda) */}
                 {mostrarFlechas && (
@@ -1022,7 +1040,6 @@ const ClienteSelector = ({
                         style={[styles.tab, !mostrarTodos && styles.tabActivo]}
                         onPress={() => setMostrarTodos(false)}
                     >
-                        <Ionicons name="today" size={18} color={!mostrarTodos ? 'white' : '#003d88'} />
                         <Text style={[styles.tabTexto, !mostrarTodos && styles.tabTextoActivo]}>
                             Hoy ({diaActual})
                         </Text>
@@ -1066,14 +1083,35 @@ const ClienteSelector = ({
                     )}
                 </View>
 
-                {/* Botón Nuevo Cliente */}
+                {/* Botones de Acción */}
                 <View style={styles.botonesAccion}>
+                    {/* 🆕 Botón Actualizar Lista */}
                     <TouchableOpacity
-                        style={styles.btnNuevoCliente}
+                        style={[styles.btnAccion, { backgroundColor: actualizandoEnFondo ? '#ccc' : '#003d88' }]}
+                        onPress={async () => {
+                            if (actualizandoEnFondo) return;
+                            const cacheKey = `${CACHE_KEY_CLIENTES}${userId}`;
+                            await actualizarClientesEnFondo(diaActual, cacheKey);
+                        }}
+                        disabled={actualizandoEnFondo}
+                    >
+                        <Ionicons
+                            name={actualizandoEnFondo ? "sync" : "refresh"}
+                            size={20}
+                            color="white"
+                        />
+                        <Text style={styles.btnAccionTexto}>
+                            {actualizandoEnFondo ? 'Actualizando...' : 'Actualizar'}
+                        </Text>
+                    </TouchableOpacity>
+
+                    {/* Botón Nuevo Cliente */}
+                    <TouchableOpacity
+                        style={[styles.btnAccion, { backgroundColor: '#00ad53' }]}
                         onPress={handleNuevoCliente}
                     >
-                        <Ionicons name="add-circle" size={24} color="white" />
-                        <Text style={styles.btnNuevoClienteTexto}>Nuevo Cliente</Text>
+                        <Ionicons name="add-circle" size={20} color="white" />
+                        <Text style={styles.btnAccionTexto}>Nuevo Cliente</Text>
                     </TouchableOpacity>
                 </View>
 
@@ -1214,6 +1252,26 @@ const styles = StyleSheet.create({
         flex: 1,
         fontSize: 16,
         padding: 8,
+    },
+    botonesAccion: {
+        flexDirection: 'row', // 🆕 Botones en fila
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        gap: 10, // Espacio entre botones
+    },
+    btnAccion: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 10,
+        borderRadius: 8,
+        gap: 6,
+    },
+    btnAccionTexto: {
+        color: 'white',
+        fontSize: 14,
+        fontWeight: 'bold',
     },
     btnNuevoCliente: {
         flex: 1,

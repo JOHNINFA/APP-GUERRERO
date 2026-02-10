@@ -331,8 +331,13 @@ export const inicializarProductos = async () => {
  */
 export const sincronizarProductos = async () => {
     try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 segundos
 
-        const response = await fetch(`${API_BASE}/productos/`);
+        const response = await fetch(`${API_BASE}/productos/`, {
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
 
         if (response.ok) {
             const data = await response.json();
@@ -463,30 +468,17 @@ export const guardarCliente = async (cliente) => {
             activo: true
         };
 
-        // 🆕 Enviar al backend (ahora siempre porque validamos rutaId arriba)
-        // Primero consultamos cuántos clientes tiene la ruta para asignar orden consecutivo
-        let ordenCliente = 999; // Valor por defecto
-        try {
-            const responseRuta = await fetch(`${API_BASE}/clientes-ruta/?ruta=${cliente.rutaId}`);
-            if (responseRuta.ok) {
-                const clientesRuta = await responseRuta.json();
-                ordenCliente = clientesRuta.length + 1; // Siguiente número consecutivo
-                console.log(`📊 Ruta tiene ${clientesRuta.length} clientes, nuevo orden: ${ordenCliente}`);
-            }
-        } catch (error) {
-            console.warn('⚠️ No se pudo obtener orden, usando 999:', error.message);
-        }
-
+        // 🆕 Enviar al backend (el backend calculará el orden automáticamente)
         const clienteRutaData = {
             ruta: cliente.rutaId,
             nombre_negocio: cliente.negocio || cliente.nombre,
             nombre_contacto: cliente.nombre,
             telefono: cliente.celular || '',
             direccion: cliente.direccion || '',
-            tipo_negocio: cliente.tipoNegocio || '',  // 🆕 Tipo de negocio
+            tipo_negocio: cliente.tipoNegocio || '',
             dia_visita: (cliente.diasVisita || []).join(','), // LUNES,MIERCOLES,VIERNES
-            activo: true,
-            orden: ordenCliente // 🆕 Orden consecutivo calculado
+            activo: true
+            // ⚡ Quitamos 'orden' - el backend lo calculará automáticamente
         };
 
         console.log('📤 Enviando cliente al backend:', JSON.stringify(clienteRutaData));
@@ -584,6 +576,23 @@ export const guardarVenta = async (venta) => {
             estado: 'completada',
             sincronizada: false // Nuevo campo para tracking
         };
+
+        // 🆕 LÓGICA DE CONSECUTIVO LOCAL
+        try {
+            const ultimoConsecutivoStr = await AsyncStorage.getItem('ultimo_consecutivo') || '0';
+            const nuevoConsecutivo = parseInt(ultimoConsecutivoStr) + 1;
+
+            // Guardar en la venta
+            nuevaVenta.consecutivo = nuevoConsecutivo;
+
+            // Actualizar último consecutivo
+            await AsyncStorage.setItem('ultimo_consecutivo', nuevoConsecutivo.toString());
+            console.log('✅ Consecutivo generado:', nuevoConsecutivo);
+        } catch (e) {
+            console.error('Error generando consecutivo:', e);
+            // Fallback: usar timestamp corto
+            nuevaVenta.consecutivo = Date.now().toString().slice(-6);
+        }
 
         ventas.push(nuevaVenta);
         await AsyncStorage.setItem('ventas', JSON.stringify(ventas));

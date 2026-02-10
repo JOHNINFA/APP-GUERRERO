@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { ScrollView, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, View, FlatList } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { useNavigation } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import Product from './Product';
 import { ENDPOINTS } from '../config';
 import { obtenerProductos, sincronizarProductos } from '../services/ventasService';
@@ -8,14 +10,27 @@ import productosConImagenes from './Productos'; // Importar mapeo de imágenes l
 
 const API_URL = ENDPOINTS.GUARDAR_SUGERIDO;
 
-const ProductList = ({ selectedDay, userId }) => {
+const ProductList = ({ selectedDay, userId, searchText }) => {
+  const navigation = useNavigation();
   const [quantities, setQuantities] = useState({});
   const [loading, setLoading] = useState(false);
   const [date, setDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
-  
+
   // 🆕 Estado para productos dinámicos desde el servidor
   const [productos, setProductos] = useState([]);
+
+  // 🔍 Filtrar productos según búsqueda
+  const productosFiltrados = useMemo(() => {
+    if (!searchText || searchText.trim() === '') {
+      return productos;
+    }
+
+    const busqueda = searchText.toLowerCase().trim();
+    return productos.filter(p =>
+      p.name.toLowerCase().includes(busqueda)
+    );
+  }, [productos, searchText]);
 
   // 🆕 Cargar productos al montar el componente (con sincronización automática)
   useEffect(() => {
@@ -45,30 +60,30 @@ const ProductList = ({ selectedDay, userId }) => {
     try {
       console.log('📦 Cargando productos para Sugeridos...');
       const productosData = obtenerProductos();
-      
+
       // Función para buscar imagen por ID (más confiable que por nombre)
       const buscarImagenPorId = (idProducto) => {
         const producto = productosConImagenes.find(p => p.id === idProducto);
         return producto ? producto.image : null;
       };
-      
+
       // Filtrar y convertir al formato esperado (con name e image desde assets locales)
       const productosFormateados = productosData
         .filter(p => p.disponible_app_sugeridos !== false) // Filtrar por disponible_app_sugeridos
         .map(p => {
           const imagen = buscarImagenPorId(p.id);
-          
+
           if (!imagen) {
             console.log(`⚠️ Sin imagen para ID ${p.id}: "${p.nombre}"`);
           }
-          
+
           return {
             name: p.nombre,
             id: p.id,
             image: imagen
           };
         });
-      
+
       console.log(`✅ ${productosFormateados.length} productos cargados para Sugeridos (filtrados por disponible_app_sugeridos)`);
       setProductos(productosFormateados);
     } catch (error) {
@@ -126,10 +141,10 @@ const ProductList = ({ selectedDay, userId }) => {
     // ✅ VALIDACIÓN: Verificar que el día seleccionado coincida con la fecha
     const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     const diaDeLaFecha = diasSemana[currentDate.getDay()];
-    
 
 
-    
+
+
     if (diaDeLaFecha.toUpperCase() !== selectedDay.toUpperCase()) {
       Alert.alert(
         'Error de Fecha',
@@ -159,15 +174,23 @@ const ProductList = ({ selectedDay, userId }) => {
         productos: productosAEnviar
       };
 
+      // 🆕 Log informativo
+      console.log(`📤 Enviando ${productosAEnviar.length} productos al servidor...`);
 
+      // 🆕 Timeout de 60 segundos para evitar espera infinita (aumentado para muchos productos)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
 
       const response = await fetch(API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       const result = await response.json();
 
@@ -189,7 +212,21 @@ const ProductList = ({ selectedDay, userId }) => {
 
     } catch (error) {
       console.error('Error enviando sugerido:', error);
-      Alert.alert('Error de Conexión', 'No se pudo conectar con el CRM. Verifica tu conexión a internet.');
+
+      // 🆕 Distinguir entre timeout y error de conexión
+      if (error.name === 'AbortError') {
+        Alert.alert(
+          '⏱️ Tiempo Agotado',
+          'La conexión está muy lenta. El servidor no respondió a tiempo.\n\nVerifica tu conexión a internet e intenta de nuevo.',
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert(
+          '❌ Error de Conexión',
+          'No se pudo conectar con el CRM. Verifica tu conexión a internet.',
+          [{ text: 'OK' }]
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -213,15 +250,23 @@ const ProductList = ({ selectedDay, userId }) => {
           <ActivityIndicator size="large" color="#00ad53" />
           <Text style={styles.loadingText}>Cargando productos...</Text>
         </View>
+      ) : productosFiltrados.length === 0 ? (
+        <View style={styles.loadingContainer}>
+          <Ionicons name="search-outline" size={60} color="#ccc" />
+          <Text style={styles.noResultsText}>No se encontraron productos</Text>
+          <Text style={styles.noResultsSubtext}>Intenta con otro término de búsqueda</Text>
+        </View>
       ) : (
         <FlatList
-          data={productos}
+          data={productosFiltrados}
           renderItem={renderProduct}
           keyExtractor={(item) => item.id.toString()}
           contentContainerStyle={styles.scrollContainer}
           initialNumToRender={10}
           maxToRenderPerBatch={10}
           windowSize={5}
+          removeClippedSubviews={true}
+          updateCellsBatchingPeriod={50}
           getItemLayout={(data, index) => ({
             length: 150, // altura aproximada de cada item
             offset: 150 * index,
@@ -272,6 +317,17 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 10,
     color: '#666',
+    fontSize: 14,
+  },
+  noResultsText: {
+    marginTop: 15,
+    color: '#666',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  noResultsSubtext: {
+    marginTop: 5,
+    color: '#999',
     fontSize: 14,
   },
   sendButton: {

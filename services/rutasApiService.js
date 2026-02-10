@@ -88,7 +88,7 @@ export const enviarVentaRuta = async (ventaData) => {
             }
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 45000);
+            const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 segundos (backend necesita optimización)
 
             try {
                 const response = await fetch(`${API_BASE}/ventas-ruta/`, {
@@ -136,12 +136,18 @@ export const enviarVentaRuta = async (ventaData) => {
             }
         } else {
             // 🆕 Sin fotos: usar JSON (más rápido)
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 segundos (backend necesita optimización)
+            
             try {
                 const response = await fetch(`${API_BASE}/ventas-ruta/`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(ventaData)
+                    body: JSON.stringify(ventaData),
+                    signal: controller.signal
                 });
+
+                clearTimeout(timeoutId);
 
                 if (response.status === 201) {
                     const data = await response.json();
@@ -162,7 +168,12 @@ export const enviarVentaRuta = async (ventaData) => {
                 const errorText = await response.text();
                 return { success: false, error: `HTTP ${response.status}: ${errorText}` };
             } catch (jsonError) {
-                return { success: false, error: jsonError.message };
+                let msj = jsonError.message;
+                if (jsonError.name === 'AbortError') {
+                    msj = 'Timeout: El servidor tardó demasiado';
+                }
+                console.warn('⚠️ Error fetch JSON (se manejará offline):', msj);
+                return { success: false, error: msj };
             }
         }
     } catch (error) {
@@ -204,11 +215,17 @@ export const obtenerConfiguracionImpresion = async () => {
 export const actualizarPedido = async (pedidoId, datos) => {
     try {
         console.log('📝 Actualizando pedido:', pedidoId, datos);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 segundos
+        
         const response = await fetch(`${API_BASE}/pedidos/${pedidoId}/`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(datos)
+            body: JSON.stringify(datos),
+            signal: controller.signal
         });
+
+        clearTimeout(timeoutId);
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -220,6 +237,10 @@ export const actualizarPedido = async (pedidoId, datos) => {
         console.log('✅ Pedido actualizado correctamente');
         return result;
     } catch (error) {
+        if (error.name === 'AbortError') {
+            console.error('⏱️ Timeout actualizando pedido');
+            throw new Error('El servidor tardó demasiado en responder');
+        }
         console.error('Error enviando actualización de pedido:', error);
         throw error;
     }

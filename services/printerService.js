@@ -218,10 +218,9 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
         <div class="ticket-divider">................................................</div>
         
         <div class="ticket-info">
-          <b>Ticket:</b> #${id.split('-').pop()}<br>
+          <b>Factura:</b> #${venta.consecutivo ? venta.consecutivo.toString().padStart(4, '0') : id.split('-').pop()}<br>
           <b>Fecha:</b> ${fechaFormateada}<br>
-          <b>Cliente:</b> ${cliente_nombre}<br>
-          ${cliente_negocio ? `<b>Negocio:</b> ${cliente_negocio}<br>` : ''}
+          <b>Cliente:</b> ${cliente_negocio || cliente_nombre}<br>
           <b>Vendedor:</b> ${vendedor}
         </div>
 

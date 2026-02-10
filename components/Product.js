@@ -59,7 +59,12 @@ const Product = memo(({ product, quantity, onQuantityChange }) => {
   return (
     <View style={styles.container}>
       {imageSource ? (
-        <Image source={imageSource} style={styles.image} resizeMode="cover" />
+        <Image
+          source={imageSource}
+          style={styles.image}
+          resizeMode="cover"
+          fadeDuration={0}
+        />
       ) : (
         <View style={[styles.imagePlaceholder, styles.image]} />
       )}
@@ -78,6 +83,8 @@ const Product = memo(({ product, quantity, onQuantityChange }) => {
             onChangeText={handleQuantityChange}
             onFocus={handleInputFocus}
             onBlur={handleInputBlur}
+            autoComplete="off"
+            textContentType="none"
           />
           <TouchableOpacity onPress={incrementQuantity} style={styles.button}>
             <Text style={[styles.buttonText, { fontWeight: 'bold' }]}>+</Text>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Vibration, ActivityIndicator, Alert, TextInput, Animated, Platform } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Vibration, ActivityIndicator, Alert, TextInput, Platform } from 'react-native';
 import Checkbox from 'expo-checkbox';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -22,7 +22,6 @@ const Cargue = ({ userId }) => {
   const [quantities, setQuantities] = useState({});
   const [checkedItems, setCheckedItems] = useState({});
   const [loading, setLoading] = useState(false);
-  const scaleAnims = useRef({}).current;
 
   // 🆕 Estado para productos dinámicos desde el servidor
   const [productos, setProductos] = useState([]);
@@ -53,7 +52,10 @@ const Cargue = ({ userId }) => {
     try {
       const diaServidor = diasParaServidor[dia] || dia.toUpperCase().replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U');
       const url = `${ENDPOINTS.VERIFICAR_ESTADO_DIA}?vendedor_id=${userId}&dia=${diaServidor}&fecha=${fecha}`;
-      const response = await fetch(url);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
       const data = await response.json();
 
       if (data.success) {
@@ -75,27 +77,56 @@ const Cargue = ({ userId }) => {
   const fetchData = async () => {
     setLoading(true);
 
-    // 🔄 PASO 1: Sincronizar productos desde el servidor
+    // 🔄 PASO 1: Sincronizar productos desde el servidor (con timeout)
     console.log('🔄 Sincronizando productos antes de recargar cargue...');
     try {
-      await sincronizarProductos();
+      // Timeout de 5 segundos para sincronización
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout')), 5000)
+      );
+      
+      await Promise.race([
+        sincronizarProductos(),
+        timeoutPromise
+      ]);
+      
       await cargarProductos(); // Recargar la lista actualizada
       console.log('✅ Productos sincronizados correctamente');
     } catch (error) {
       console.warn('⚠️ No se pudieron sincronizar productos:', error.message);
-      // Continuar aunque falle la sincronización
+      // Continuar con productos en caché aunque falle la sincronización
+      await cargarProductos();
     }
 
-    // Verificar estado del día
-    await verificarEstadoDia(selectedDay, selectedDate);
+    // Verificar estado del día (con timeout)
+    try {
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout')), 5000)
+      );
+      
+      await Promise.race([
+        verificarEstadoDia(selectedDay, selectedDate),
+        timeoutPromise
+      ]);
+    } catch (error) {
+      console.warn('⚠️ No se pudo verificar estado del día:', error.message);
+      // Continuar sin estado
+    }
 
-    // 🔄 PASO 2: Obtener cantidades del cargue
+    // 🔄 PASO 2: Obtener cantidades del cargue (con timeout)
     try {
       const diaServidor = diasParaServidor[selectedDay] || selectedDay.toUpperCase();
       const url = `${ENDPOINTS.OBTENER_CARGUE}?vendedor_id=${userId}&dia=${diaServidor}&fecha=${selectedDate}`;
 
       console.log(`📥 Obteniendo cargue desde: ${url}`);
-      const response = await fetch(url);
+      
+      // Timeout de 10 segundos
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
       const data = await response.json();
 
       if (response.ok) {
@@ -104,19 +135,14 @@ const Cargue = ({ userId }) => {
 
         productos.forEach(prod => {
           if (data[prod]) {
-            newQuantities[prod] = data[prod].quantity;
+            // Para cargue: mostrar TOTAL (stock disponible = total - vendidas)
+            newQuantities[prod] = data[prod].total || data[prod].quantity || '0';
             newCheckedItems[prod] = {
               V: data[prod].v || false,
               D: data[prod].d || false
             };
-            // Debug: mostrar checks recibidos
-            if (data[prod].d) {
-              console.log(`✅ ${prod}: D=${data[prod].d}, V=${data[prod].v}`);
-            }
-            // 🆕 Debug cantidades
-            if (prod === 'CANASTILLA') {
-              console.log(`🔍 CANASTILLA quantity recibido:`, data[prod].quantity, typeof data[prod].quantity);
-            }
+            // Debug: mostrar datos recibidos
+            console.log(`📦 ${prod}: Total=${data[prod].total}, V=${data[prod].v}, D=${data[prod].d}`);
           } else {
             newQuantities[prod] = '0';
             newCheckedItems[prod] = { V: false, D: false };
@@ -124,8 +150,6 @@ const Cargue = ({ userId }) => {
         });
 
         console.log('📊 Cantidades finales:', newQuantities);
-
-
 
         setQuantities(newQuantities);
         setCheckedItems(newCheckedItems);
@@ -136,8 +160,15 @@ const Cargue = ({ userId }) => {
       }
 
     } catch (error) {
-      console.error('Error fetching cargue:', error);
-      Alert.alert('Error', 'Error de conexión con el CRM');
+      const esTimeout = error.name === 'AbortError';
+      console.error('Error fetching cargue:', esTimeout ? 'Timeout' : error.message);
+      
+      Alert.alert(
+        '⚠️ Error de Conexión',
+        esTimeout 
+          ? 'El servidor tardó demasiado en responder.\n\nVerifica tu conexión e intenta de nuevo.'
+          : 'No se pudo conectar con el servidor.\n\nVerifica tu conexión a internet.'
+      );
     } finally {
       setLoading(false);
     }
@@ -158,7 +189,10 @@ const Cargue = ({ userId }) => {
   const sincronizarProductosAutomatico = async () => {
     try {
       console.log('🔄 Sincronizando productos en segundo plano...');
-      await sincronizarProductos();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout')), 5000)
+      );
+      await Promise.race([sincronizarProductos(), timeoutPromise]);
       await cargarProductos();
       console.log('✅ Productos sincronizados automáticamente');
     } catch (error) {
@@ -175,7 +209,7 @@ const Cargue = ({ userId }) => {
 
 
   // 🚀 OPTIMIZACIÓN: useCallback para evitar recrear función en cada render
-  const handleCheckChange = useCallback(async (productName, type) => {
+  const handleCheckChange = useCallback((productName, type) => {
     // Solo permitir cambiar V (Vendedor), D viene del CRM
     if (type === 'D') {
       Alert.alert('No Permitido', 'El check de Despachador solo se puede marcar desde el CRM.');
@@ -205,7 +239,7 @@ const Cargue = ({ userId }) => {
       }
     }
 
-    // Optimistic update - actualizar UI inmediatamente
+    // ⚡ Optimistic update - actualizar UI INMEDIATAMENTE
     setCheckedItems(prev => ({
       ...prev,
       [productName]: {
@@ -215,37 +249,35 @@ const Cargue = ({ userId }) => {
     }));
     Vibration.vibrate(30);
 
-    // Actualizar en el servidor en background
-    try {
-      const response = await fetch(ENDPOINTS.ACTUALIZAR_CHECK_VENDEDOR, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          vendedor_id: userId,
-          dia: diasParaServidor[selectedDay] || selectedDay.toUpperCase(),
-          fecha: selectedDate,
-          producto: productName,
-          v: nuevoValorV
-        })
-      });
+    // 🔄 Actualizar en el servidor en segundo plano (con timeout)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 segundos
 
-      const result = await response.json();
-
-      if (response.ok) {
-        console.log(`✅ Check V actualizado: ${productName} = ${nuevoValorV}`);
-      } else {
-        // Revertir si hay error
-        setCheckedItems(prev => ({
-          ...prev,
-          [productName]: {
-            ...prev[productName],
-            V: !nuevoValorV
-          }
-        }));
-        Alert.alert('Error', result.message || 'No se pudo actualizar el check');
-      }
-    } catch (error) {
-      // Revertir si hay error de conexión
+    fetch(ENDPOINTS.ACTUALIZAR_CHECK_VENDEDOR, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        vendedor_id: userId,
+        dia: diasParaServidor[selectedDay] || selectedDay.toUpperCase(),
+        fecha: selectedDate,
+        producto: productName,
+        v: nuevoValorV
+      }),
+      signal: controller.signal
+    })
+    .then(response => {
+      clearTimeout(timeoutId);
+      return response.json();
+    })
+    .then(result => {
+      console.log(`✅ Check V actualizado: ${productName} = ${nuevoValorV}`);
+    })
+    .catch(error => {
+      clearTimeout(timeoutId);
+      const esTimeout = error.name === 'AbortError';
+      
+      // Revertir si hay error
+      console.error('Error actualizando check:', esTimeout ? 'Timeout' : error.message);
       setCheckedItems(prev => ({
         ...prev,
         [productName]: {
@@ -253,9 +285,14 @@ const Cargue = ({ userId }) => {
           V: !nuevoValorV
         }
       }));
-      console.error('Error actualizando check:', error);
-      Alert.alert('Error', 'Error de conexión con el CRM');
-    }
+      
+      Alert.alert(
+        'Error', 
+        esTimeout 
+          ? 'El servidor tardó demasiado. El check se revirtió.'
+          : 'No se pudo actualizar el check. Se revirtió el cambio.'
+      );
+    });
   }, [checkedItems, quantities, userId, selectedDay, selectedDate]);
 
   const dias = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
@@ -295,7 +332,6 @@ const Cargue = ({ userId }) => {
 
   // 🚀 OPTIMIZACIÓN: useCallback para evitar recrear función en cada render
   const renderProduct = useCallback(({ item }) => {
-    const scale = scaleAnims[item] || new Animated.Value(1);
     const cantidad = quantities[item] || '0';
 
     return (
@@ -332,7 +368,7 @@ const Cargue = ({ userId }) => {
         </View>
       </View>
     );
-  }, [checkedItems, quantities, handleCheckChange, scaleAnims]);
+  }, [checkedItems, quantities, handleCheckChange]);
 
   return (
     <View style={styles.container}>
@@ -370,10 +406,10 @@ const Cargue = ({ userId }) => {
         <Text style={styles.infoDateText}>📅 {formatDateForDisplay(selectedDate)}</Text>
         {diaEstado?.tiene_datos && (
           <View style={[styles.miniBadge, {
-            backgroundColor: diaEstado.completado ? '#dc3545' : '#007bff'
+            backgroundColor: diaEstado.completado ? '#dc3545' : '#00ad53'
           }]}>
             <Text style={styles.miniBadgeText}>
-              {diaEstado.completado ? '⚠️ DÍA FINALIZADO' : 'SUGERIDO'}
+              {diaEstado.completado ? '⚠️ DÍA FINALIZADO' : 'CARGUE'}
             </Text>
           </View>
         )}
@@ -407,7 +443,7 @@ const Cargue = ({ userId }) => {
         disabled={loading}
       >
         <Text style={styles.reloadButtonText}>
-          {loading ? 'Cargando...' : 'Recargar Cargue'}
+          {loading ? 'Cargando...' : 'Recargar'}
         </Text>
       </TouchableOpacity>
     </View>
@@ -417,12 +453,12 @@ const Cargue = ({ userId }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 5, // Reducido para dar más ancho a los productos
+    padding: 5,
     paddingTop: 5,
     backgroundColor: '#f5f5f5',
   },
   navbar: {
-    marginBottom: 2, // Reducido para acercar a títulos
+    marginBottom: 2,
   },
   daysContainer: {
     flexDirection: 'row',

@@ -15,6 +15,7 @@ import SeleccionarDia from './components/rutas/SeleccionarDia';
 import ListaClientes from './components/rutas/ListaClientes';
 import 'react-native-gesture-handler';
 import { inicializarProductos } from './services/ventasService';
+import { precargarImagenes } from './components/Productos';
 import { API_URL } from './config';
 
 
@@ -61,15 +62,35 @@ const App = () => {
   const [vendedorNombre, setVendedorNombre] = useState(null);
 
   useEffect(() => {
-    // 🚀 Sincronizar productos y clientes al iniciar la app (en paralelo)
+    // 🚀 Sincronizar productos, clientes e imágenes al iniciar la app (en paralelo)
     const precargarDatos = async () => {
       await Promise.all([
         inicializarProductos(),
-        precargarClientes()
+        precargarClientes(),
+        precargarImagenes()
       ]);
+      
+      // 🆕 Sincronizar pendientes en segundo plano
+      sincronizarPendientesEnFondo();
     };
     precargarDatos();
   }, []);
+
+  // 🆕 Sincronizar clientes y ventas pendientes
+  const sincronizarPendientesEnFondo = async () => {
+    try {
+      const { sincronizarTodo } = await import('./services/syncService');
+      const resultado = await sincronizarTodo();
+      
+      const totalSincronizados = (resultado.clientes?.sincronizados || 0) + (resultado.ventas?.sincronizados || 0);
+      
+      if (totalSincronizados > 0) {
+        console.log(`✅ Sincronizados: ${totalSincronizados} registros`);
+      }
+    } catch (error) {
+      console.log('⚠️ No se pudo sincronizar pendientes:', error.message);
+    }
+  };
 
   const handleLogin = (loggedIn, username, nombre) => {
     setIsLoggedIn(loggedIn);

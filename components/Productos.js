@@ -40,4 +40,22 @@ const productos = [
   { id: 56, name: 'ENVUELTOS DE MAIZ X 5 UND', image: require('../images/envueltos.jpeg') },
 ];
 
+// 🚀 Función para precargar todas las imágenes
+export const precargarImagenes = async () => {
+  const { Image } = require('react-native');
+  
+  console.log('🖼️ Precargando imágenes de productos...');
+  
+  const promesas = productos.map(producto => {
+    return Image.prefetch(Image.resolveAssetSource(producto.image).uri);
+  });
+  
+  try {
+    await Promise.all(promesas);
+    console.log('✅ Todas las imágenes precargadas');
+  } catch (error) {
+    console.warn('⚠️ Error precargando imágenes:', error);
+  }
+};
+
 export default productos;
