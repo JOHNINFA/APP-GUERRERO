@@ -28,7 +28,9 @@ const DIAS_SEMANA = {
 };
 
 // Keys para cache
-const CACHE_KEY_CLIENTES = 'clientes_cache_';
+const CACHE_KEY_CLIENTES_TODOS = 'clientes_cache_todos_';
+const CACHE_KEY_CLIENTES_DIA = 'clientes_cache_dia_';
+const CACHE_KEY_CLIENTES_LEGACY = 'clientes_cache_'; // Compatibilidad con caché anterior
 const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 horas
 
 const ClienteSelector = ({
@@ -39,12 +41,15 @@ const ClienteSelector = ({
     userId,
     diaSeleccionado,
     ventasDelDia = [],
+    fechaSeleccionada = null, // 🆕 Fecha del turno para consultar backend
     pedidosPendientes = [], // 🆕 Lista de pedidos pendientes
     pedidosEntregadosHoy = [], // 🆕 Lista de pedidos entregados hoy
     pedidosNoEntregadosHoy = [], // 🆕 Lista de pedidos no entregados hoy
     onCargarPedido, // 🆕 Función para cargar pedido en carrito
     onMarcarEntregado, // 🆕 Función para marcar pedido como entregado
-    onMarcarNoEntregado // 🆕 Función para marcar pedido como no entregado
+    onMarcarNoEntregado, // 🆕 Función para marcar pedido como no entregado
+    onClientesDiaActualizados, // 🆕 Reportar orden del día al padre para auto-siguiente cliente
+    onActualizarPedidos // 🆕 Refrescar pedidos pendientes desde el padre
 }) => {
     const [clientesDelDia, setClientesDelDia] = useState([]);
     const [todosLosClientes, setTodosLosClientes] = useState([]);
@@ -55,10 +60,16 @@ const ClienteSelector = ({
     const [actualizandoEnFondo, setActualizandoEnFondo] = useState(false);
     // 🆕 Flag para evitar actualización automática después de mover clientes
     const [ultimoMovimiento, setUltimoMovimiento] = useState(null);
-    
+    const [actualizandoManual, setActualizandoManual] = useState(false); // 🆕 Solo mostrar spinner si es manual
+    // 🆕 Ventas obtenidas del backend (para badge "Vendido" que sobrevive borrar caché)
+    const [ventasBackend, setVentasBackend] = useState([]);
+
     // 🆕 Estados para Drag & Drop
     const [modoOrdenar, setModoOrdenar] = useState(false);
     const [guardandoOrden, setGuardandoOrden] = useState(false);
+
+    const normalizarTexto = (texto) => (texto ? texto.toString().toLowerCase().trim() : '');
+    const ITEM_HEIGHT_ESTIMADO = 96;
     const [rutaId, setRutaId] = useState(null);
 
     // 🆕 Ref para acceder al estado actual en funciones asíncronas
@@ -67,6 +78,25 @@ const ClienteSelector = ({
     useEffect(() => {
         modoOrdenarRef.current = modoOrdenar;
     }, [modoOrdenar]);
+
+    const formatearCliente = (c, index, incluirOrden = false) => ({
+        id: c.id.toString(),
+        nombre: c.nombre_contacto || c.nombre_negocio,
+        negocio: c.nombre_negocio,
+        celular: c.telefono || '',
+        direccion: c.direccion || '',
+        dia_visita: c.dia_visita,
+        nota: c.nota,
+        tipo_negocio: c.tipo_negocio,
+        lista_precio_nombre: c.lista_precio_nombre || c.tipo_lista_precio,
+        ...(incluirOrden ? { orden: index + 1 } : {}),
+        esDeRuta: true
+    });
+
+    const construirCacheKeys = (dia) => ({
+        cacheKeyTodos: `${CACHE_KEY_CLIENTES_TODOS}${userId}`,
+        cacheKeyDia: `${CACHE_KEY_CLIENTES_DIA}${userId}_${dia}`
+    });
 
     // 🆕 Obtener rutaId del vendedor (ya no es necesario para guardar orden)
     const obtenerRutaId = async () => {
@@ -100,6 +130,22 @@ const ClienteSelector = ({
         try {
             const clientesIds = nuevoOrden.map(c => parseInt(c.id));
             console.log('💾 Guardando orden en segundo plano para día:', diaActual);
+
+            // ⚡ Anti-rebote: actualizar caché local del día inmediatamente
+            try {
+                const { cacheKeyDia } = construirCacheKeys(diaActual);
+                const ordenConPosicion = nuevoOrden.map((c, idx) => ({
+                    ...c,
+                    orden: idx + 1
+                }));
+                await AsyncStorage.setItem(cacheKeyDia, JSON.stringify({
+                    clientes: ordenConPosicion,
+                    timestamp: Date.now()
+                }));
+                console.log('✅ Caché local de orden actualizada (anti-rebote)');
+            } catch (cacheError) {
+                console.log('⚠️ No se pudo actualizar caché local de orden:', cacheError.message);
+            }
 
             // Guardar en segundo plano sin bloquear UI
             fetch(`${API_URL}/api/ruta-orden/guardar_orden_vendedor/`, {
@@ -239,6 +285,32 @@ const ClienteSelector = ({
         });
     };
 
+    // 🆕 Consultar ventas del backend en segundo plano (para badge "Vendido" tras borrar caché)
+    const cargarVentasBackend = useCallback(async () => {
+        try {
+            if (!userId || !fechaSeleccionada) return;
+            const fechaStr = fechaSeleccionada instanceof Date
+                ? fechaSeleccionada.toISOString().split('T')[0]
+                : String(fechaSeleccionada).split('T')[0];
+            const vendedorIdVentas = String(userId).toUpperCase().startsWith('ID')
+                ? String(userId).toUpperCase()
+                : `ID${userId}`;
+            const resp = await fetch(`${API_URL}/api/ventas-ruta/?vendedor_id=${vendedorIdVentas}&fecha=${fechaStr}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                if (Array.isArray(data)) {
+                    setVentasBackend(data); // Siempre actualizar (incluye ANULADAS)
+                    const anuladas = data.filter(v => v.estado === 'ANULADA').length;
+                    console.log(`✅ Ventas backend cargadas: ${data.length} total, ${anuladas} anuladas`);
+                }
+            }
+        } catch (e) {
+            // Silencioso: offline o error, badges usarán sólo datos locales
+            console.log('ℹ️ Ventas backend no disponibles, badges sólo locales');
+        }
+    }, [userId, fechaSeleccionada]);
+
+
     useEffect(() => {
         if (visible) {
             // Usar el día seleccionado o el día actual
@@ -247,6 +319,7 @@ const ClienteSelector = ({
             cargarClientesConCache(dia);
             obtenerRutaId();
             setModoOrdenar(false); // Resetear modo ordenar al abrir
+            cargarVentasBackend();  // 🆕 Cargar ventas reales para badges
         }
     }, [visible, diaSeleccionado]);
 
@@ -254,30 +327,57 @@ const ClienteSelector = ({
     const cargarClientesConCache = async (dia) => {
         try {
             // 1. Intentar cargar del cache primero (INSTANTÁNEO, SIN SPINNER)
-            const cacheKey = `${CACHE_KEY_CLIENTES}${userId}`;
-            const cachedData = await AsyncStorage.getItem(cacheKey);
+            const { cacheKeyTodos, cacheKeyDia } = construirCacheKeys(dia);
+            const legacyKey = `${CACHE_KEY_CLIENTES_LEGACY}${userId}`;
 
-            if (cachedData) {
-                const { clientes, timestamp } = JSON.parse(cachedData);
-                const esValido = (Date.now() - timestamp) < CACHE_EXPIRY;
+            const [cachedTodosRaw, cachedDiaRaw, cachedLegacyRaw] = await Promise.all([
+                AsyncStorage.getItem(cacheKeyTodos),
+                AsyncStorage.getItem(cacheKeyDia),
+                AsyncStorage.getItem(legacyKey)
+            ]);
 
-                if (clientes && clientes.length > 0) {
-                    console.log('⚡ Carga INSTANTÁNEA del cache:', clientes.length);
+            let todosCache = null;
+            let diaCache = null;
 
-                    // Filtrar clientes del día
-                    const clientesHoy = clientes.filter(c =>
-                        c.dia_visita?.toUpperCase().includes(dia)
-                    );
-
-                    setClientesDelDia(clientesHoy);
-                    setTodosLosClientes(clientes);
-                    // ✅ NO mostrar loading si hay caché (carga instantánea)
-
-                    // 🔥 SIEMPRE actualizar desde servidor para obtener el orden correcto
-                    // (sin importar si el caché es válido o no)
-                    actualizarClientesEnFondo(dia, cacheKey);
-                    return;
+            if (cachedTodosRaw) {
+                const parsed = JSON.parse(cachedTodosRaw);
+                if (parsed?.clientes?.length && (Date.now() - parsed.timestamp) < CACHE_EXPIRY) {
+                    todosCache = parsed.clientes;
                 }
+            }
+
+            if (cachedDiaRaw) {
+                const parsed = JSON.parse(cachedDiaRaw);
+                if (parsed?.clientes?.length && (Date.now() - parsed.timestamp) < CACHE_EXPIRY) {
+                    diaCache = parsed.clientes;
+                }
+            }
+
+            // Compatibilidad: si existe cache legacy y no existe cache nuevo, usarlo
+            if (!todosCache && cachedLegacyRaw) {
+                const parsedLegacy = JSON.parse(cachedLegacyRaw);
+                if (parsedLegacy?.clientes?.length) {
+                    todosCache = parsedLegacy.clientes;
+                }
+            }
+
+            if (todosCache || diaCache) {
+                const clientesTodos = todosCache || [];
+                const clientesDia = diaCache || clientesTodos.filter(c =>
+                    c.dia_visita?.toUpperCase().includes(dia)
+                );
+
+                console.log('⚡ Carga INSTANTÁNEA del cache:', {
+                    dia: clientesDia.length,
+                    todos: clientesTodos.length
+                });
+
+                setClientesDelDia(clientesDia);
+                setTodosLosClientes(clientesTodos);
+
+                // 🔥 SIEMPRE actualizar desde servidor para obtener datos nuevos sin bloquear UI
+                actualizarClientesEnFondo(dia);
+                return;
             }
 
             // 2. Solo si NO hay cache, mostrar loading y cargar del servidor
@@ -293,21 +393,36 @@ const ClienteSelector = ({
     };
 
     // 🆕 Actualizar clientes en segundo plano sin bloquear UI
-    const actualizarClientesEnFondo = async (dia, cacheKey) => {
+    const actualizarClientesEnFondo = async (dia, manual = false) => {
         // 🔥 NO actualizar si el usuario acaba de mover un cliente (últimos 3 segundos)
-        if (ultimoMovimiento && (Date.now() - ultimoMovimiento) < 3000) {
+        if (!manual && ultimoMovimiento && (Date.now() - ultimoMovimiento) < 3000) {
             console.log('⛔ Omitiendo actualización automática (usuario movió cliente recientemente)');
             return;
         }
-        
-        setActualizandoEnFondo(true);
+
+        if (manual) {
+            setActualizandoManual(true);
+        } else {
+            setActualizandoEnFondo(true);
+        }
+
         try {
             // 🆕 Incluir día en la petición para que el servidor ordene correctamente
-            const urlTodos = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}&dia=${dia}`;
-            const response = await fetch(urlTodos);
+            const urlDia = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}&dia=${dia}`;
+            const urlTodosSinFiltro = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
+            const [responseDia, responseTodos] = await Promise.allSettled([
+                fetch(urlDia),
+                fetch(urlTodosSinFiltro)
+            ]);
 
-            if (response.ok) {
-                const data = await response.json();
+            if (responseDia.status === 'fulfilled' && responseDia.value.ok) {
+                const dataDia = await responseDia.value.json();
+                let clientesTodosFormateados = null;
+
+                if (responseTodos.status === 'fulfilled' && responseTodos.value.ok) {
+                    const dataTodos = await responseTodos.value.json();
+                    clientesTodosFormateados = dataTodos.map((c, index) => formatearCliente(c, index, false));
+                }
 
                 // 🛑 Si el usuario activó el modo ordenar mientras cargábamos, NO sobrescribir
                 if (modoOrdenarRef.current) {
@@ -315,46 +430,25 @@ const ClienteSelector = ({
                     return;
                 }
 
-                const clientesFormateados = data.map((c, index) => ({
-                    id: c.id.toString(),
-                    nombre: c.nombre_contacto || c.nombre_negocio,
-                    negocio: c.nombre_negocio,
-                    celular: c.telefono || '',
-                    direccion: c.direccion || '',
-                    dia_visita: c.dia_visita,
-                    nota: c.nota,
-                    tipo_negocio: c.tipo_negocio,
-                    lista_precio_nombre: c.lista_precio_nombre || c.tipo_lista_precio, // 🆕 AGREGAR lista de precios
-                    orden: index + 1, // 🆕 El orden viene del servidor
-                    esDeRuta: true
-                }));
+                const clientesDiaFormateados = dataDia.map((c, index) => formatearCliente(c, index, true));
+                const { cacheKeyTodos, cacheKeyDia } = construirCacheKeys(dia);
 
-                // Guardar en cache
-                await AsyncStorage.setItem(cacheKey, JSON.stringify({
-                    clientes: clientesFormateados,
+                await AsyncStorage.setItem(cacheKeyDia, JSON.stringify({
+                    clientes: clientesDiaFormateados,
                     timestamp: Date.now()
                 }));
 
-                // 🆕 Los clientes ya vienen filtrados y ordenados por día del servidor
-                setClientesDelDia(clientesFormateados);
+                if (clientesTodosFormateados) {
+                    await AsyncStorage.setItem(cacheKeyTodos, JSON.stringify({
+                        clientes: clientesTodosFormateados,
+                        timestamp: Date.now()
+                    }));
+                }
 
-                // También cargar todos sin filtro de día
-                const urlTodosSinFiltro = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
-                const responseTodos = await fetch(urlTodosSinFiltro);
-                if (responseTodos.ok) {
-                    const dataTodos = await responseTodos.json();
-                    setTodosLosClientes(dataTodos.map(c => ({
-                        id: c.id.toString(),
-                        nombre: c.nombre_contacto || c.nombre_negocio,
-                        negocio: c.nombre_negocio,
-                        celular: c.telefono || '',
-                        direccion: c.direccion || '',
-                        dia_visita: c.dia_visita,
-                        nota: c.nota,
-                        tipo_negocio: c.tipo_negocio,
-                        lista_precio_nombre: c.lista_precio_nombre || c.tipo_lista_precio, // 🆕 AGREGAR lista de precios
-                        esDeRuta: true
-                    })));
+                // 🆕 Los clientes ya vienen filtrados y ordenados por día del servidor
+                setClientesDelDia(clientesDiaFormateados);
+                if (clientesTodosFormateados) {
+                    setTodosLosClientes(clientesTodosFormateados);
                 }
 
                 console.log('✅ Clientes actualizados en segundo plano. Orden del día:', dia);
@@ -362,7 +456,11 @@ const ClienteSelector = ({
         } catch (error) {
             console.log('⚠️ Error actualizando en fondo:', error.message);
         } finally {
-            setActualizandoEnFondo(false);
+            if (manual) {
+                setActualizandoManual(false);
+            } else {
+                setActualizandoEnFondo(false);
+            }
         }
     };
 
@@ -373,54 +471,41 @@ const ClienteSelector = ({
             const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 segundos
 
             try {
-                // 🆕 Cargar clientes del día actual (ya ordenados por el servidor)
+                // 🆕 Cargar día + todos en paralelo
                 const urlDia = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}&dia=${dia}`;
-                const response = await fetch(urlDia, { signal: controller.signal });
+                const urlTodos = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
+                const [responseDia, responseTodos] = await Promise.allSettled([
+                    fetch(urlDia, { signal: controller.signal }),
+                    fetch(urlTodos, { signal: controller.signal })
+                ]);
                 clearTimeout(timeoutId);
 
-                if (response.ok) {
-                    const data = await response.json();
-                    const clientesDelDiaFormateados = data.map((c, index) => ({
-                        id: c.id.toString(),
-                        nombre: c.nombre_contacto || c.nombre_negocio,
-                        negocio: c.nombre_negocio,
-                        celular: c.telefono || '',
-                        direccion: c.direccion || '',
-                        dia_visita: c.dia_visita,
-                        nota: c.nota,
-                        tipo_negocio: c.tipo_negocio,
-                        lista_precio_nombre: c.lista_precio_nombre || c.tipo_lista_precio, // 🆕 AGREGAR lista de precios
-                        orden: index + 1, // 🆕 El orden viene del servidor
-                        esDeRuta: true
-                    }));
+                if (responseDia.status === 'fulfilled' && responseDia.value.ok) {
+                    const dataDia = await responseDia.value.json();
+                    let todosFormateados = null;
+                    if (responseTodos.status === 'fulfilled' && responseTodos.value.ok) {
+                        const dataTodos = await responseTodos.value.json();
+                        todosFormateados = dataTodos.map((c, index) => formatearCliente(c, index, false));
+                    }
+
+                    const clientesDelDiaFormateados = dataDia.map((c, index) => formatearCliente(c, index, true));
 
                     // 🆕 El servidor ya devuelve solo los clientes del día, ordenados
                     setClientesDelDia(clientesDelDiaFormateados);
+                    if (todosFormateados) {
+                        setTodosLosClientes(todosFormateados);
+                    }
                     console.log(`📥 Clientes del ${dia} cargados y ordenados:`, clientesDelDiaFormateados.length);
 
-                    // Cargar también todos para la vista "Todos"
-                    const urlTodos = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
-                    const responseTodos = await fetch(urlTodos);
-                    if (responseTodos.ok) {
-                        const dataTodos = await responseTodos.json();
-                        const todosFormateados = dataTodos.map(c => ({
-                            id: c.id.toString(),
-                            nombre: c.nombre_contacto || c.nombre_negocio,
-                            negocio: c.nombre_negocio,
-                            celular: c.telefono || '',
-                            direccion: c.direccion || '',
-                            dia_visita: c.dia_visita,
-                            nota: c.nota,
-                            tipo_negocio: c.tipo_negocio,
-                            lista_precio_nombre: c.lista_precio_nombre || c.tipo_lista_precio, // 🆕 AGREGAR lista de precios
-                            esDeRuta: true
-                        }));
+                    // Guardar en cache separado por tipo
+                    const { cacheKeyTodos, cacheKeyDia } = construirCacheKeys(dia);
+                    await AsyncStorage.setItem(cacheKeyDia, JSON.stringify({
+                        clientes: clientesDelDiaFormateados,
+                        timestamp: Date.now()
+                    }));
 
-                        setTodosLosClientes(todosFormateados);
-
-                        // Guardar en cache
-                        const cacheKey = `${CACHE_KEY_CLIENTES}${userId}`;
-                        await AsyncStorage.setItem(cacheKey, JSON.stringify({
+                    if (todosFormateados) {
+                        await AsyncStorage.setItem(cacheKeyTodos, JSON.stringify({
                             clientes: todosFormateados,
                             timestamp: Date.now()
                         }));
@@ -429,21 +514,171 @@ const ClienteSelector = ({
             } catch (fetchError) {
                 clearTimeout(timeoutId);
                 if (fetchError.name === 'AbortError') {
-                    console.error('⏱️ Timeout cargando clientes del servidor');
+                    console.log('⏱️ Timeout cargando clientes del servidor');
                 } else {
                     throw fetchError;
                 }
             }
         } catch (error) {
-            console.error('❌ Error cargando clientes:', error);
+            console.log('❌ Error cargando clientes:', error?.message || error);
         } finally {
             setLoading(false);
         }
     };
 
+    const clientesDelDiaConPedidos = useMemo(() => {
+        const baseDia = Array.isArray(clientesDelDia) ? clientesDelDia : [];
+        const listaTodos = Array.isArray(todosLosClientes) ? todosLosClientes : [];
+        const pedidos = Array.isArray(pedidosPendientes) ? pedidosPendientes : [];
+
+        if (pedidos.length === 0) {
+            return baseDia;
+        }
+
+        const norm = (txt) => (txt || '').toString().trim().toUpperCase();
+        const coincideClientePedido = (cliente, pedido) => {
+            const destinatario = norm(pedido?.destinatario);
+            if (!destinatario) return false;
+            return destinatario === norm(cliente?.negocio) || destinatario === norm(cliente?.nombre);
+        };
+
+        const idsEnBase = new Set(baseDia.map((c) => String(c.id)));
+        const extras = [];
+
+        pedidos.forEach((pedido) => {
+            const yaEstaEnDia = baseDia.some((cliente) => coincideClientePedido(cliente, pedido));
+            if (yaEstaEnDia) return;
+
+            const candidato = listaTodos.find((cliente) => coincideClientePedido(cliente, pedido));
+            if (!candidato) return;
+
+            const candidatoId = String(candidato.id);
+            if (idsEnBase.has(candidatoId)) return;
+
+            idsEnBase.add(candidatoId);
+            extras.push(candidato);
+        });
+
+        if (extras.length === 0) {
+            return baseDia;
+        }
+
+        // Primero mostramos los que tienen pedido pendiente, luego el orden normal del día.
+        return [...extras, ...baseDia];
+    }, [clientesDelDia, todosLosClientes, pedidosPendientes]);
+
+    const clientesVistaHoy = useMemo(() => {
+        const baseHoy = Array.isArray(clientesDelDiaConPedidos) ? clientesDelDiaConPedidos : [];
+        const pedidos = Array.isArray(pedidosPendientes) ? pedidosPendientes : [];
+        const entregados = Array.isArray(pedidosEntregadosHoy) ? pedidosEntregadosHoy : [];
+        const noEntregados = Array.isArray(pedidosNoEntregadosHoy) ? pedidosNoEntregadosHoy : [];
+        const listaTodos = Array.isArray(todosLosClientes) ? todosLosClientes : [];
+
+        const norm = (txt) => (txt || '').toString().trim().toUpperCase();
+        const coincide = (cliente, pedido) => {
+            const destinatario = norm(pedido?.destinatario);
+            return destinatario && (destinatario === norm(cliente?.negocio) || destinatario === norm(cliente?.nombre));
+        };
+
+        // Si hay eventos (entregado/no entregado/pendiente) de un cliente fuera del día,
+        // lo inyectamos desde "Todos" para que no desaparezca del selector.
+        const idsBase = new Set(baseHoy.map((c) => String(c?.id || '')));
+        const baseConEventos = [...baseHoy];
+        const eventos = [...pedidos, ...entregados, ...noEntregados];
+
+        eventos.forEach((evento) => {
+            const yaEsta = baseConEventos.some((cliente) => coincide(cliente, evento));
+            if (yaEsta) return;
+
+            const candidato = listaTodos.find((cliente) => coincide(cliente, evento));
+            if (!candidato) return;
+
+            const id = String(candidato?.id || '');
+            if (idsBase.has(id)) return;
+            idsBase.add(id);
+            baseConEventos.push(candidato);
+        });
+
+        const obtenerPuntajePedido = (pedido) => {
+            const estado = (pedido?.estado || '').toString().toUpperCase();
+            const prioridadEstado = estado === 'ANULADA' ? 0 : 1;
+            const numeroPedido = parseInt(String(pedido?.numero_pedido || '').replace(/\D/g, ''), 10);
+            const numeroNormalizado = Number.isFinite(numeroPedido) ? numeroPedido : 0;
+            const fecha = new Date(pedido?.fecha_actualizacion || pedido?.fecha || 0).getTime() || 0;
+            const id = Number(pedido?.id) || 0;
+            return { prioridadEstado, numeroNormalizado, fecha, id };
+        };
+
+        return baseConEventos.flatMap((cliente) => {
+            const ordenarPedidosDesc = (lista) =>
+                lista.slice().sort((a, b) => {
+                    const pa = obtenerPuntajePedido(a);
+                    const pb = obtenerPuntajePedido(b);
+                    if (pb.prioridadEstado !== pa.prioridadEstado) return pb.prioridadEstado - pa.prioridadEstado;
+                    if (pb.numeroNormalizado !== pa.numeroNormalizado) return pb.numeroNormalizado - pa.numeroNormalizado;
+                    if (pb.fecha !== pa.fecha) return pb.fecha - pa.fecha;
+                    return pb.id - pa.id;
+                });
+
+            const pedidosCliente = pedidos.filter((p) => coincide(cliente, p));
+            const pendientesReales = ordenarPedidosDesc(
+                pedidosCliente.filter((p) => (p?.estado || '').toString().toUpperCase() !== 'ANULADA')
+            );
+            const entregadosCliente = ordenarPedidosDesc(entregados.filter((p) => coincide(cliente, p)));
+            const noEntregadosCliente = ordenarPedidosDesc(noEntregados.filter((p) => coincide(cliente, p)));
+
+            const idBase = String(cliente?.id || '');
+            const filas = [];
+
+            // Mostrar todos los entregados (ej: #47 y #48) para trazabilidad visual.
+            entregadosCliente.forEach((pedidoEntregado, idx) => {
+                const clavePedido = String(pedidoEntregado?.id || pedidoEntregado?.numero_pedido || idx);
+                filas.push({
+                    ...cliente,
+                    __vistaTipo: 'ENTREGADO',
+                    __pedidoVista: pedidoEntregado,
+                    __vistaKey: `${idBase}-ENTREGADO-${clavePedido}`,
+                });
+            });
+
+            if (pendientesReales.length > 0) {
+                filas.push({
+                    ...cliente,
+                    __vistaTipo: 'PENDIENTE',
+                    __pedidoVista: pendientesReales[0],
+                    __cantidadPendientes: pendientesReales.length,
+                    __vistaKey: `${idBase}-PENDIENTE`,
+                });
+                return filas;
+            }
+
+            if (noEntregadosCliente.length > 0) {
+                const pedidoNoEntregado = noEntregadosCliente[0];
+                const clavePedido = String(pedidoNoEntregado?.id || pedidoNoEntregado?.numero_pedido || '1');
+                filas.push({
+                    ...cliente,
+                    __vistaTipo: 'NO_ENTREGADO',
+                    __pedidoVista: pedidoNoEntregado,
+                    __vistaKey: `${idBase}-NO_ENTREGADO-${clavePedido}`,
+                });
+                return filas;
+            }
+
+            if (filas.length > 0) {
+                return filas;
+            }
+
+            return [{
+                ...cliente,
+                __vistaTipo: 'NORMAL',
+                __vistaKey: `${idBase}-NORMAL`,
+            }];
+        });
+    }, [clientesDelDiaConPedidos, todosLosClientes, pedidosPendientes, pedidosEntregadosHoy, pedidosNoEntregadosHoy]);
+
     // 🚀 OPTIMIZACIÓN: useMemo para evitar recalcular filtro en cada render
     const clientesFiltrados = useMemo(() => {
-        const listaBase = mostrarTodos ? todosLosClientes : clientesDelDia;
+        const listaBase = mostrarTodos ? todosLosClientes : clientesVistaHoy;
 
         if (busqueda.trim() === '') {
             return listaBase;
@@ -455,7 +690,113 @@ const ClienteSelector = ({
             c.negocio?.toLowerCase().includes(queryLower) ||
             c.direccion?.toLowerCase().includes(queryLower)
         );
-    }, [clientesDelDia, todosLosClientes, busqueda, mostrarTodos]);
+    }, [clientesVistaHoy, todosLosClientes, busqueda, mostrarTodos]);
+
+    // 🚀 Índice O(1) para evitar findIndex por cada card
+    const indiceClientesDiaMap = useMemo(() => {
+        const mapa = new Map();
+        (Array.isArray(clientesDelDia) ? clientesDelDia : []).forEach((cliente, idx) => {
+            mapa.set(String(cliente?.id), idx);
+        });
+        return mapa;
+    }, [clientesDelDia]);
+
+    // 🚀 Pre-indexar ventas para evitar filtros pesados por item
+    const ventasPorCliente = useMemo(() => {
+        const mapa = new Map();
+        const anuladas = new Set();
+
+        const registrarClave = (setObj, negocio, nombre) => {
+            if (negocio) setObj.add(`neg:${negocio}`);
+            if (nombre) setObj.add(`nom:${nombre}`);
+        };
+
+        const registrarVenta = (negocio, nombre, total) => {
+            const venta = { total };
+            if (negocio && !mapa.has(`neg:${negocio}`)) mapa.set(`neg:${negocio}`, venta);
+            if (nombre && !mapa.has(`nom:${nombre}`)) mapa.set(`nom:${nombre}`, venta);
+        };
+
+        (Array.isArray(ventasBackend) ? ventasBackend : []).forEach((venta) => {
+            if ((venta?.estado || '').toString().toUpperCase() !== 'ANULADA') return;
+            registrarClave(
+                anuladas,
+                normalizarTexto(venta?.nombre_negocio || venta?.cliente_negocio),
+                normalizarTexto(venta?.cliente_nombre)
+            );
+        });
+
+        (Array.isArray(ventasDelDia) ? ventasDelDia : []).forEach((venta) => {
+            if ((venta?.estado || '').toString().toUpperCase() === 'ANULADA') return;
+            const negocio = normalizarTexto(venta?.cliente_negocio || venta?.nombre_negocio);
+            const nombre = normalizarTexto(venta?.cliente_nombre);
+            const estaAnulada = (negocio && anuladas.has(`neg:${negocio}`)) || (nombre && anuladas.has(`nom:${nombre}`));
+            if (estaAnulada) return;
+            registrarVenta(negocio, nombre, venta?.total);
+        });
+
+        (Array.isArray(ventasBackend) ? ventasBackend : []).forEach((venta) => {
+            if ((venta?.estado || '').toString().toUpperCase() === 'ANULADA') return;
+            const negocio = normalizarTexto(venta?.nombre_negocio || venta?.cliente_negocio);
+            const nombre = normalizarTexto(venta?.cliente_nombre);
+            registrarVenta(negocio, nombre, venta?.total);
+        });
+
+        return mapa;
+    }, [ventasDelDia, ventasBackend]);
+
+    // 🚀 Pre-indexar pedidos para evitar filter/find en cada render de card
+    const pedidosPorCliente = useMemo(() => {
+        const pendientes = new Map();
+        const entregados = new Map();
+        const noEntregados = new Map();
+
+        const puntajePedido = (pedido) => {
+            const estado = (pedido?.estado || '').toString().toUpperCase();
+            const prioridadEstado = estado === 'ANULADA' ? 0 : 1;
+            const numeroPedido = parseInt(String(pedido?.numero_pedido || '').replace(/\D/g, ''), 10);
+            const numeroNormalizado = Number.isFinite(numeroPedido) ? numeroPedido : 0;
+            const fecha = new Date(pedido?.fecha_actualizacion || pedido?.fecha || 0).getTime() || 0;
+            const id = Number(pedido?.id) || 0;
+            return { prioridadEstado, numeroNormalizado, fecha, id };
+        };
+
+        const comparar = (a, b) => {
+            const pa = puntajePedido(a);
+            const pb = puntajePedido(b);
+            if (pb.prioridadEstado !== pa.prioridadEstado) return pb.prioridadEstado - pa.prioridadEstado;
+            if (pb.numeroNormalizado !== pa.numeroNormalizado) return pb.numeroNormalizado - pa.numeroNormalizado;
+            if (pb.fecha !== pa.fecha) return pb.fecha - pa.fecha;
+            return pb.id - pa.id;
+        };
+
+        const agregar = (mapa, pedido) => {
+            const destinatario = normalizarTexto(pedido?.destinatario);
+            if (!destinatario) return;
+            if (!mapa.has(destinatario)) mapa.set(destinatario, []);
+            mapa.get(destinatario).push(pedido);
+        };
+
+        (Array.isArray(pedidosPendientes) ? pedidosPendientes : []).forEach((pedido) => {
+            if ((pedido?.estado || '').toString().toUpperCase() === 'ANULADA') return;
+            agregar(pendientes, pedido);
+        });
+
+        (Array.isArray(pedidosEntregadosHoy) ? pedidosEntregadosHoy : []).forEach((pedido) => agregar(entregados, pedido));
+        (Array.isArray(pedidosNoEntregadosHoy) ? pedidosNoEntregadosHoy : []).forEach((pedido) => agregar(noEntregados, pedido));
+
+        pendientes.forEach((lista) => lista.sort(comparar));
+        entregados.forEach((lista) => lista.sort(comparar));
+        noEntregados.forEach((lista) => lista.sort(comparar));
+
+        return { pendientes, entregados, noEntregados };
+    }, [pedidosPendientes, pedidosEntregadosHoy, pedidosNoEntregadosHoy]);
+
+    useEffect(() => {
+        if (typeof onClientesDiaActualizados === 'function') {
+            onClientesDiaActualizados(clientesDelDia);
+        }
+    }, [clientesDelDia, onClientesDiaActualizados]);
 
     const handleSelectCliente = (cliente) => {
         // ✅ OPTIMIZACIÓN: Cerrar modal PRIMERO para dar sensación de rapidez
@@ -487,67 +828,86 @@ const ClienteSelector = ({
     };
 
     const renderCliente = ({ item, index }) => {
-        // 🆕 Verificar si ya le vendieron hoy
-        const norm = (t) => t ? t.toString().toLowerCase().trim() : '';
-        let ventaRealizada = null;
-
-        if (ventasDelDia && Array.isArray(ventasDelDia) && ventasDelDia.length > 0) {
-            ventaRealizada = ventasDelDia.find(venta => {
-                const vNegocio = norm(venta.cliente_negocio);
-                const vNombre = norm(venta.cliente_nombre);
-                const cNegocio = norm(item.negocio);
-                const cNombre = norm(item.nombre);
-
-                return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
-            });
-        }
+        const negocioNorm = normalizarTexto(item?.negocio);
+        const nombreNorm = normalizarTexto(item?.nombre);
+        const ventaRealizada =
+            ventasPorCliente.get(`neg:${negocioNorm}`) ||
+            ventasPorCliente.get(`nom:${nombreNorm}`) ||
+            null;
 
         const yaVendido = !!ventaRealizada;
 
-        // 🆕 Verificar si tiene pedidos pendientes
-        const pedidosCliente = pedidosPendientes.filter(p => {
-            const pDestinatario = norm(p.destinatario);
-            const cNegocio = norm(item.negocio);
-            const cNombre = norm(item.nombre);
-            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
-        });
+        const pedidosPendientesReales =
+            pedidosPorCliente.pendientes.get(negocioNorm) ||
+            pedidosPorCliente.pendientes.get(nombreNorm) ||
+            [];
 
-        const tienePedidos = pedidosCliente.length > 0;
-        const pedido = tienePedidos ? pedidosCliente[0] : null; // Por ahora tomar el primero
+        let tienePedidosPendientes = pedidosPendientesReales.length > 0;
+        let pedido = tienePedidosPendientes ? pedidosPendientesReales[0] : null;
+        let cantidadPendientes = pedidosPendientesReales.length;
 
         // 🆕 Verificar si tiene pedidos entregados
-        const pedidoEntregado = pedidosEntregadosHoy.find(p => {
-            const pDestinatario = norm(p.destinatario);
-            const cNegocio = norm(item.negocio);
-            const cNombre = norm(item.nombre);
-            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
-        });
+        const entregadosCliente =
+            pedidosPorCliente.entregados.get(negocioNorm) ||
+            pedidosPorCliente.entregados.get(nombreNorm) ||
+            [];
+        let pedidoEntregado = entregadosCliente[0] || null;
 
         // 🆕 Verificar si tiene pedidos NO entregados
-        const pedidoNoEntregado = pedidosNoEntregadosHoy.find(p => {
-            const pDestinatario = norm(p.destinatario);
-            const cNegocio = norm(item.negocio);
-            const cNombre = norm(item.nombre);
-            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
-        });
+        const noEntregadosCliente =
+            pedidosPorCliente.noEntregados.get(negocioNorm) ||
+            pedidosPorCliente.noEntregados.get(nombreNorm) ||
+            [];
+        let pedidoNoEntregado = noEntregadosCliente[0] || null;
 
+        const vistaTipo = (item?.__vistaTipo || '').toString().toUpperCase();
+        if (!mostrarTodos && vistaTipo) {
+            if (vistaTipo === 'PENDIENTE') {
+                tienePedidosPendientes = true;
+                pedido = item?.__pedidoVista || pedido;
+                cantidadPendientes = item?.__cantidadPendientes || cantidadPendientes || 1;
+                pedidoEntregado = null;
+                pedidoNoEntregado = null;
+            } else if (vistaTipo === 'ENTREGADO') {
+                tienePedidosPendientes = false;
+                pedido = null;
+                cantidadPendientes = 0;
+                pedidoEntregado = item?.__pedidoVista || pedidoEntregado;
+                pedidoNoEntregado = null;
+            } else if (vistaTipo === 'NO_ENTREGADO') {
+                tienePedidosPendientes = false;
+                pedido = null;
+                cantidadPendientes = 0;
+                pedidoEntregado = null;
+                pedidoNoEntregado = item?.__pedidoVista || pedidoNoEntregado;
+            } else if (vistaTipo === 'NORMAL') {
+                tienePedidosPendientes = false;
+                pedido = null;
+                cantidadPendientes = 0;
+                pedidoEntregado = null;
+                pedidoNoEntregado = null;
+            }
+        }
+
+        const indiceOrdenBase = indiceClientesDiaMap.get(String(item?.id)) ?? -1;
+        const puedeOrdenar = indiceOrdenBase >= 0;
         // 🆕 Variables para ordenamiento (solo si estamos en Hoy y sin búsqueda)
-        const mostrarFlechas = !mostrarTodos && busqueda.trim() === '';
+        const mostrarFlechas = !mostrarTodos && busqueda.trim() === '' && puedeOrdenar;
 
         // 🆕 Variables para Movimiento Rápido
-        const isDragging = dragTarget && dragTarget.original === index;
-        const currentDisplayIndex = isDragging ? dragTarget.destino : index;
+        const isDragging = dragTarget && dragTarget.original === indiceOrdenBase;
+        const currentDisplayIndex = isDragging ? dragTarget.destino : indiceOrdenBase;
 
-        const esPrimero = currentDisplayIndex === 0;
-        const esUltimo = currentDisplayIndex === clientesDelDia.length - 1;
+        const esPrimero = currentDisplayIndex <= 0;
+        const esUltimo = currentDisplayIndex >= (clientesDelDia.length - 1);
 
-        // Si tiene pedidos entregados, mostrar card verde
-        if (pedidoEntregado) {
+        // Si tiene pedidos pendientes reales, siempre priorizar card pendiente
+        if (tienePedidosPendientes && pedido) {
             return (
                 <TouchableOpacity
                     style={[
                         styles.clienteItem,
-                        styles.clienteItemEntregado, // 🆕 Fondo verde transparente
+                        styles.clienteItemConPedido, // Fondo naranja para pendiente
                     ]}
                     onPress={() => handleSelectCliente(item)}
                     activeOpacity={0.9}
@@ -556,27 +916,27 @@ const ClienteSelector = ({
                     {mostrarFlechas && (
                         <View
                             style={styles.columnaFlechas}
-                            onStartShouldSetResponder={() => true} // 🛑 Bloquea toques al padre
+                            onStartShouldSetResponder={() => true}
                         >
                             <TouchableOpacity
                                 style={[styles.btnFlechaMini, esPrimero && styles.btnFlechaDeshabilitado]}
-                                onPressIn={() => startRapidMove(index, -1)} // 🚀 Inicio Hold
-                                onPressOut={() => stopRapidMove(index, -1)} // 🚀 Fin Hold
+                                onPressIn={() => startRapidMove(indiceOrdenBase, -1)} // 🚀 Inicio Hold
+                                onPressOut={() => stopRapidMove(indiceOrdenBase, -1)} // 🚀 Fin Hold
                                 disabled={esPrimero}
                             >
-                                <Ionicons name="chevron-up" size={24} color={esPrimero ? "#eee" : "#22c55e"} />
+                                <Ionicons name="chevron-up" size={24} color={esPrimero ? "#eee" : "#ff9800"} />
                             </TouchableOpacity>
                             <Text style={[
                                 styles.indiceMini,
-                                { color: '#22c55e' },
+                                { color: '#003d88' },
                                 isDragging && {
                                     position: 'absolute',
                                     left: 200,
-                                    backgroundColor: 'rgba(255,255,255,0.9)', // 🆕 Fondo sutil sin borde
-                                    paddingHorizontal: 8, // Un poco de aire
+                                    backgroundColor: 'rgba(255,255,255,0.9)',
+                                    paddingHorizontal: 8,
                                     paddingVertical: 4,
                                     borderRadius: 8,
-                                    fontSize: 20, // 🆕 Más pequeño (antes 24)
+                                    fontSize: 20,
                                     fontWeight: 'bold',
                                     elevation: 50,
                                     zIndex: 9999,
@@ -588,18 +948,18 @@ const ClienteSelector = ({
                             </Text>
                             <TouchableOpacity
                                 style={[styles.btnFlechaMini, esUltimo && styles.btnFlechaDeshabilitado]}
-                                onPressIn={() => startRapidMove(index, 1)} // 🚀 Inicio Hold
-                                onPressOut={() => stopRapidMove(index, 1)} // 🚀 Fin Hold
+                                onPressIn={() => startRapidMove(indiceOrdenBase, 1)} // 🚀 Inicio Hold
+                                onPressOut={() => stopRapidMove(indiceOrdenBase, 1)} // 🚀 Fin Hold
                                 disabled={esUltimo}
                             >
-                                <Ionicons name="chevron-down" size={24} color={esUltimo ? "#eee" : "#22c55e"} />
+                                <Ionicons name="chevron-down" size={24} color={esUltimo ? "#eee" : "#ff9800"} />
                             </TouchableOpacity>
                         </View>
                     )}
 
                     {/* Icono del cliente */}
                     <View style={styles.clienteIcono}>
-                        <Ionicons name="cube" size={24} color="#22c55e" />
+                        <Ionicons name="cube" size={24} color="#ff9800" />
                     </View>
 
                     {/* Información del cliente */}
@@ -609,10 +969,10 @@ const ClienteSelector = ({
                             <Text style={styles.clienteContacto}>👤 {item.nombre}</Text>
                         )}
                         <Text style={styles.clienteDetalle}>
-                            📦 Pedido #{pedidoEntregado.numero_pedido}
+                            📦 Pedido #{pedido.numero_pedido}{cantidadPendientes > 1 ? ` (+${cantidadPendientes - 1})` : ''}
                         </Text>
-                        {item.celular || (pedidoEntregado && pedidoEntregado.telefono_contacto) ? (
-                            <Text style={styles.clienteDetalle}>📞 {item.celular || (pedidoEntregado && pedidoEntregado.telefono_contacto)}</Text>
+                        {item.celular || pedido.telefono_contacto ? (
+                            <Text style={styles.clienteDetalle}>📞 {item.celular || pedido.telefono_contacto}</Text>
                         ) : null}
                         {item.direccion && (
                             <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
@@ -620,11 +980,11 @@ const ClienteSelector = ({
                     </View>
 
                     {/* Flecha indicadora */}
-                    <Ionicons name="chevron-forward" size={20} color="#22c55e" />
+                    <Ionicons name="chevron-forward" size={20} color="#ff9800" />
 
-                    {/* 🆕 Badge "Entregado" en esquina superior derecha */}
-                    <View style={styles.badgeEntregadoCliente}>
-                        <Text style={styles.badgeEntregadoTexto}>Entregado</Text>
+                    {/* 🆕 Badge "Pendiente" en esquina superior derecha */}
+                    <View style={styles.badgePendienteCliente}>
+                        <Text style={styles.badgePendienteTexto}>Pendiente</Text>
                     </View>
 
                     {/* 🆕 Acciones Verticales */}
@@ -653,7 +1013,7 @@ const ClienteSelector = ({
             );
         }
 
-        // 🆕 Si tiene pedido NO entregado, mostrar card roja
+        // 🆕 Si tiene pedido NO entregado y no hay pendiente real, mostrar card roja
         if (pedidoNoEntregado) {
             return (
                 <TouchableOpacity
@@ -672,15 +1032,15 @@ const ClienteSelector = ({
                         >
                             <TouchableOpacity
                                 style={[styles.btnFlechaMini, esPrimero && styles.btnFlechaDeshabilitado]}
-                                onPressIn={() => startRapidMove(index, -1)} // 🚀 Inicio Hold
-                                onPressOut={() => stopRapidMove(index, -1)} // 🚀 Fin Hold
+                                onPressIn={() => startRapidMove(indiceOrdenBase, -1)} // 🚀 Inicio Hold
+                                onPressOut={() => stopRapidMove(indiceOrdenBase, -1)} // 🚀 Fin Hold
                                 disabled={esPrimero}
                             >
                                 <Ionicons name="chevron-up" size={24} color={esPrimero ? "#eee" : "#dc3545"} />
                             </TouchableOpacity>
                             <Text style={[
                                 styles.indiceMini,
-                                { color: '#dc3545' },
+                                { color: '#003d88' },
                                 isDragging && {
                                     position: 'absolute',
                                     left: 200,
@@ -700,8 +1060,8 @@ const ClienteSelector = ({
                             </Text>
                             <TouchableOpacity
                                 style={[styles.btnFlechaMini, esUltimo && styles.btnFlechaDeshabilitado]}
-                                onPressIn={() => startRapidMove(index, 1)} // 🚀 Inicio Hold
-                                onPressOut={() => stopRapidMove(index, 1)} // 🚀 Fin Hold
+                                onPressIn={() => startRapidMove(indiceOrdenBase, 1)} // 🚀 Inicio Hold
+                                onPressOut={() => stopRapidMove(indiceOrdenBase, 1)} // 🚀 Fin Hold
                                 disabled={esUltimo}
                             >
                                 <Ionicons name="chevron-down" size={24} color={esUltimo ? "#eee" : "#dc3545"} />
@@ -765,13 +1125,13 @@ const ClienteSelector = ({
             );
         }
 
-        // Si tiene pedidos, mostrar card especial
-        if (tienePedidos && pedido) {
+        // Si solo tiene entregados, mostrar card verde
+        if (pedidoEntregado) {
             return (
                 <TouchableOpacity
                     style={[
                         styles.clienteItem,
-                        styles.clienteItemConPedido, // Fondo rojo transparente
+                        styles.clienteItemEntregado, // 🆕 Fondo verde transparente
                     ]}
                     onPress={() => handleSelectCliente(item)}
                     activeOpacity={0.9}
@@ -780,27 +1140,27 @@ const ClienteSelector = ({
                     {mostrarFlechas && (
                         <View
                             style={styles.columnaFlechas}
-                            onStartShouldSetResponder={() => true}
+                            onStartShouldSetResponder={() => true} // 🛑 Bloquea toques al padre
                         >
                             <TouchableOpacity
                                 style={[styles.btnFlechaMini, esPrimero && styles.btnFlechaDeshabilitado]}
-                                onPressIn={() => startRapidMove(index, -1)} // 🚀 Inicio Hold
-                                onPressOut={() => stopRapidMove(index, -1)} // 🚀 Fin Hold
+                                onPressIn={() => startRapidMove(indiceOrdenBase, -1)} // 🚀 Inicio Hold
+                                onPressOut={() => stopRapidMove(indiceOrdenBase, -1)} // 🚀 Fin Hold
                                 disabled={esPrimero}
                             >
-                                <Ionicons name="chevron-up" size={24} color={esPrimero ? "#eee" : "#ff9800"} />
+                                <Ionicons name="chevron-up" size={24} color={esPrimero ? "#eee" : "#22c55e"} />
                             </TouchableOpacity>
                             <Text style={[
                                 styles.indiceMini,
-                                { color: '#ff9800' },
+                                { color: '#003d88' },
                                 isDragging && {
                                     position: 'absolute',
                                     left: 200,
-                                    backgroundColor: 'rgba(255,255,255,0.9)',
-                                    paddingHorizontal: 8,
+                                    backgroundColor: 'rgba(255,255,255,0.9)', // 🆕 Fondo sutil sin borde
+                                    paddingHorizontal: 8, // Un poco de aire
                                     paddingVertical: 4,
                                     borderRadius: 8,
-                                    fontSize: 20,
+                                    fontSize: 20, // 🆕 Más pequeño (antes 24)
                                     fontWeight: 'bold',
                                     elevation: 50,
                                     zIndex: 9999,
@@ -812,18 +1172,18 @@ const ClienteSelector = ({
                             </Text>
                             <TouchableOpacity
                                 style={[styles.btnFlechaMini, esUltimo && styles.btnFlechaDeshabilitado]}
-                                onPressIn={() => startRapidMove(index, 1)} // 🚀 Inicio Hold
-                                onPressOut={() => stopRapidMove(index, 1)} // 🚀 Fin Hold
+                                onPressIn={() => startRapidMove(indiceOrdenBase, 1)} // 🚀 Inicio Hold
+                                onPressOut={() => stopRapidMove(indiceOrdenBase, 1)} // 🚀 Fin Hold
                                 disabled={esUltimo}
                             >
-                                <Ionicons name="chevron-down" size={24} color={esUltimo ? "#eee" : "#ff9800"} />
+                                <Ionicons name="chevron-down" size={24} color={esUltimo ? "#eee" : "#22c55e"} />
                             </TouchableOpacity>
                         </View>
                     )}
 
                     {/* Icono del cliente */}
                     <View style={styles.clienteIcono}>
-                        <Ionicons name="cube" size={24} color="#ff9800" />
+                        <Ionicons name="cube" size={24} color="#22c55e" />
                     </View>
 
                     {/* Información del cliente */}
@@ -833,10 +1193,10 @@ const ClienteSelector = ({
                             <Text style={styles.clienteContacto}>👤 {item.nombre}</Text>
                         )}
                         <Text style={styles.clienteDetalle}>
-                            📦 Pedido #{pedido.numero_pedido}
+                            📦 Pedido #{pedidoEntregado.numero_pedido}
                         </Text>
-                        {item.celular || pedido.telefono_contacto ? (
-                            <Text style={styles.clienteDetalle}>📞 {item.celular || pedido.telefono_contacto}</Text>
+                        {item.celular || (pedidoEntregado && pedidoEntregado.telefono_contacto) ? (
+                            <Text style={styles.clienteDetalle}>📞 {item.celular || (pedidoEntregado && pedidoEntregado.telefono_contacto)}</Text>
                         ) : null}
                         {item.direccion && (
                             <Text style={styles.clienteDetalle}>📍 {item.direccion}</Text>
@@ -844,11 +1204,11 @@ const ClienteSelector = ({
                     </View>
 
                     {/* Flecha indicadora */}
-                    <Ionicons name="chevron-forward" size={20} color="#ff9800" />
+                    <Ionicons name="chevron-forward" size={20} color="#22c55e" />
 
-                    {/* 🆕 Badge "Pendiente" en esquina superior derecha */}
-                    <View style={styles.badgePendienteCliente}>
-                        <Text style={styles.badgePendienteTexto}>Pendiente</Text>
+                    {/* 🆕 Badge "Entregado" en esquina superior derecha */}
+                    <View style={styles.badgeEntregadoCliente}>
+                        <Text style={styles.badgeEntregadoTexto}>Entregado</Text>
                     </View>
 
                     {/* 🆕 Acciones Verticales */}
@@ -903,8 +1263,8 @@ const ClienteSelector = ({
                     >
                         <TouchableOpacity
                             style={[styles.btnFlechaMini, esPrimero && styles.btnFlechaDeshabilitado]}
-                            onPressIn={() => startRapidMove(index, -1)} // 🚀 Inicio Hold
-                            onPressOut={() => stopRapidMove(index, -1)} // 🚀 Fin Hold
+                                onPressIn={() => startRapidMove(indiceOrdenBase, -1)} // 🚀 Inicio Hold
+                                onPressOut={() => stopRapidMove(indiceOrdenBase, -1)} // 🚀 Fin Hold
                             disabled={esPrimero}
                         >
                             <Ionicons name="chevron-up" size={24} color={esPrimero ? "#eee" : "#003d88"} />
@@ -913,7 +1273,7 @@ const ClienteSelector = ({
                         {/* Número índice pequeño (opcional, ayuda visual) */}
                         <Text style={[
                             styles.indiceMini,
-                            { color: '#ccc' },
+                            { color: '#003d88' },
                             isDragging && {
                                 position: 'absolute',
                                 left: 200,
@@ -934,8 +1294,8 @@ const ClienteSelector = ({
 
                         <TouchableOpacity
                             style={[styles.btnFlechaMini, esUltimo && styles.btnFlechaDeshabilitado]}
-                            onPressIn={() => startRapidMove(index, 1)} // 🚀 Inicio Hold
-                            onPressOut={() => stopRapidMove(index, 1)} // 🚀 Fin Hold
+                                onPressIn={() => startRapidMove(indiceOrdenBase, 1)} // 🚀 Inicio Hold
+                                onPressOut={() => stopRapidMove(indiceOrdenBase, 1)} // 🚀 Fin Hold
                             disabled={esUltimo}
                         >
                             <Ionicons name="chevron-down" size={24} color={esUltimo ? "#eee" : "#003d88"} />
@@ -1020,7 +1380,7 @@ const ClienteSelector = ({
     return (
         <Modal
             visible={visible}
-            animationType="slide"
+            animationType="none"
             transparent={false}
             onRequestClose={onClose}
         >
@@ -1045,7 +1405,7 @@ const ClienteSelector = ({
                         </Text>
                         <View style={[styles.badge, !mostrarTodos && styles.badgeActivo]}>
                             <Text style={[styles.badgeTexto, !mostrarTodos && styles.badgeTextoActivo]}>
-                                {clientesDelDia.length}
+                                {clientesVistaHoy.length}
                             </Text>
                         </View>
                     </TouchableOpacity>
@@ -1087,21 +1447,23 @@ const ClienteSelector = ({
                 <View style={styles.botonesAccion}>
                     {/* 🆕 Botón Actualizar Lista */}
                     <TouchableOpacity
-                        style={[styles.btnAccion, { backgroundColor: actualizandoEnFondo ? '#ccc' : '#003d88' }]}
+                        style={[styles.btnAccion, { backgroundColor: actualizandoManual ? '#ccc' : '#003d88' }]}
                         onPress={async () => {
-                            if (actualizandoEnFondo) return;
-                            const cacheKey = `${CACHE_KEY_CLIENTES}${userId}`;
-                            await actualizarClientesEnFondo(diaActual, cacheKey);
+                            if (actualizandoManual || actualizandoEnFondo) return;
+                            await actualizarClientesEnFondo(diaActual, true); // true = accion manual
+                            if (typeof onActualizarPedidos === 'function') {
+                                await onActualizarPedidos();
+                            }
                         }}
-                        disabled={actualizandoEnFondo}
+                        disabled={actualizandoManual}
                     >
                         <Ionicons
-                            name={actualizandoEnFondo ? "sync" : "refresh"}
+                            name={actualizandoManual ? "sync" : "refresh"}
                             size={20}
                             color="white"
                         />
                         <Text style={styles.btnAccionTexto}>
-                            {actualizandoEnFondo ? 'Actualizando...' : 'Actualizar'}
+                            {actualizandoManual ? 'Actualizando...' : 'Actualizar'}
                         </Text>
                     </TouchableOpacity>
 
@@ -1136,10 +1498,21 @@ const ClienteSelector = ({
                     <FlatList
                         data={clientesFiltrados}
                         renderItem={renderCliente}
-                        keyExtractor={(item) => item.id}
+                        keyExtractor={(item) => item.__vistaKey || item.id}
                         style={styles.lista}
                         contentContainerStyle={styles.listaContent}
                         extraData={clientesDelDia} // Para actualizar ordenamiento
+                        initialNumToRender={8}
+                        maxToRenderPerBatch={8}
+                        windowSize={5}
+                        updateCellsBatchingPeriod={40}
+                        removeClippedSubviews={true}
+                        keyboardShouldPersistTaps="handled"
+                        getItemLayout={(data, index) => ({
+                            length: ITEM_HEIGHT_ESTIMADO,
+                            offset: ITEM_HEIGHT_ESTIMADO * index,
+                            index,
+                        })}
                         ListEmptyComponent={
                             <View style={styles.emptyContainer}>
                                 <Ionicons name="people-outline" size={48} color="#ccc" />
@@ -1655,9 +2028,9 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     indiceMini: {
-        fontSize: 12,
-        fontWeight: 'bold',
-        color: '#ccc',
+        fontSize: 16,
+        fontWeight: '800',
+        color: '#003d88',
         marginVertical: 0, // El espacio lo da el space-between
     },
     btnFlechaDeshabilitado: {

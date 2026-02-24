@@ -10,14 +10,14 @@ import { API_URL } from '../config';
 export const sincronizarClientesPendientes = async () => {
     try {
         const pendientes = JSON.parse(await AsyncStorage.getItem('clientes_pendientes') || '[]');
-        
+
         if (pendientes.length === 0) {
             console.log('✅ No hay clientes pendientes de sincronizar');
             return { success: true, sincronizados: 0 };
         }
 
         console.log(`🔄 Sincronizando ${pendientes.length} clientes pendientes...`);
-        
+
         const sincronizados = [];
         const fallidos = [];
 
@@ -76,14 +76,14 @@ export const sincronizarClientesPendientes = async () => {
 export const sincronizarVentasPendientes = async () => {
     try {
         const pendientes = JSON.parse(await AsyncStorage.getItem('ventas_pendientes') || '[]');
-        
+
         if (pendientes.length === 0) {
             console.log('✅ No hay ventas pendientes de sincronizar');
             return { success: true, sincronizados: 0 };
         }
 
         console.log(`🔄 Sincronizando ${pendientes.length} ventas pendientes...`);
-        
+
         const sincronizados = [];
         const fallidos = [];
 
@@ -127,16 +127,89 @@ export const sincronizarVentasPendientes = async () => {
     }
 };
 
-// Sincronizar todo (clientes + ventas)
+// Sincronizar acciones de pedidos pendientes
+export const sincronizarPedidosAccionesPendientes = async () => {
+    try {
+        const pendientes = JSON.parse(await AsyncStorage.getItem('pedidos_acciones_pendientes') || '[]');
+
+        if (pendientes.length === 0) {
+            console.log('✅ No hay acciones de pedidos pendientes de sincronizar');
+            return { success: true, sincronizados: 0 };
+        }
+
+        console.log(`🔄 Sincronizando ${pendientes.length} acciones de pedidos pendientes...`);
+        const token = await AsyncStorage.getItem('auth_token');
+        const headersBase = { 'Content-Type': 'application/json' };
+        if (token) {
+            headersBase.Authorization = `Bearer ${token}`;
+        }
+
+        const sincronizados = [];
+        const fallidos = [];
+
+        for (const accion of pendientes) {
+            try {
+                let url = '';
+                let body = {};
+
+                if (accion.tipo === 'ENTREGADO') {
+                    url = `${API_URL}/api/pedidos/${accion.id}/marcar_entregado/`;
+                    body = { metodo_pago: accion.metodo_pago || 'EFECTIVO' };
+                } else if (accion.tipo === 'NO_ENTREGADO') {
+                    url = `${API_URL}/api/pedidos/${accion.id}/marcar_no_entregado/`;
+                    body = { motivo: accion.motivo || 'Sin motivo especificado' };
+                }
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: headersBase,
+                    body: JSON.stringify(body)
+                });
+
+                if (response.ok) {
+                    sincronizados.push(accion);
+                    console.log(`✅ Acción de pedido sincronizada: ${accion.tipo} - ${accion.id}`);
+                } else {
+                    accion.intentos = (accion.intentos || 0) + 1;
+                    fallidos.push(accion);
+                    console.log(`❌ Fallo al sincronizar acción de pedido: ${accion.id}`);
+                }
+            } catch (error) {
+                accion.intentos = (accion.intentos || 0) + 1;
+                fallidos.push(accion);
+                console.error(`❌ Error sincronizando acción de pedido:`, error);
+            }
+        }
+
+        // Actualizar lista de pendientes (solo los que fallaron)
+        await AsyncStorage.setItem('pedidos_acciones_pendientes', JSON.stringify(fallidos));
+
+        console.log(`✅ Sincronización completada: ${sincronizados.length} exitosos, ${fallidos.length} fallidos`);
+
+        return {
+            success: true,
+            sincronizados: sincronizados.length,
+            fallidos: fallidos.length
+        };
+
+    } catch (error) {
+        console.error('❌ Error en sincronización de acciones de pedidos:', error);
+        return { success: false, error: error.message };
+    }
+};
+
+// Sincronizar todo (clientes + ventas + pedidos)
 export const sincronizarTodo = async () => {
     console.log('🔄 Iniciando sincronización completa...');
-    
+
     const resultadoClientes = await sincronizarClientesPendientes();
     const resultadoVentas = await sincronizarVentasPendientes();
+    const resultadoPedidos = await sincronizarPedidosAccionesPendientes();
 
     return {
         clientes: resultadoClientes,
-        ventas: resultadoVentas
+        ventas: resultadoVentas,
+        pedidos: resultadoPedidos
     };
 };
 
@@ -145,11 +218,13 @@ export const obtenerCantidadPendientes = async () => {
     try {
         const clientes = JSON.parse(await AsyncStorage.getItem('clientes_pendientes') || '[]');
         const ventas = JSON.parse(await AsyncStorage.getItem('ventas_pendientes') || '[]');
+        const pedidos = JSON.parse(await AsyncStorage.getItem('pedidos_acciones_pendientes') || '[]');
 
         return {
             clientes: clientes.length,
             ventas: ventas.length,
-            total: clientes.length + ventas.length
+            pedidos: pedidos.length,
+            total: clientes.length + ventas.length + pedidos.length
         };
     } catch (error) {
         console.error('Error obteniendo pendientes:', error);

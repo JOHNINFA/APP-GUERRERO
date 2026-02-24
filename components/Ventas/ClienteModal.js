@@ -13,11 +13,13 @@ import {
     ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { guardarCliente } from '../../services/ventasService';
 import { API_URL } from '../../config';
 
 // Días de la semana
 const DIAS_SEMANA = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO'];
+const CACHE_KEY_RUTAS = 'rutas_cache_';
 
 const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
     const [formData, setFormData] = useState({
@@ -35,6 +37,8 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
     const [cargandoRutas, setCargandoRutas] = useState(false);
     const [mostrarSelectorRuta, setMostrarSelectorRuta] = useState(false);
     const [guardando, setGuardando] = useState(false); // 🆕 Estado para deshabilitar botón
+    const [sinConexionRutas, setSinConexionRutas] = useState(false);
+    const [usandoRutasCache, setUsandoRutasCache] = useState(false);
 
     // Cargar rutas al abrir el modal
     useEffect(() => {
@@ -44,19 +48,60 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
     }, [visible]);
 
     const cargarRutas = async () => {
+        let cacheRutas = [];
+        let timeoutId = null;
         try {
             setCargandoRutas(true);
+            setSinConexionRutas(false);
+            setUsandoRutasCache(false);
+
+            const cacheKey = `${CACHE_KEY_RUTAS}${vendedorId || 'global'}`;
+
+            // 1) Cargar caché primero para no bloquear UX offline
+            const cacheRaw = await AsyncStorage.getItem(cacheKey);
+            if (cacheRaw) {
+                const parsed = JSON.parse(cacheRaw);
+                if (Array.isArray(parsed?.rutas) && parsed.rutas.length > 0) {
+                    cacheRutas = parsed.rutas;
+                setRutas(parsed.rutas);
+                setUsandoRutasCache(true);
+            }
+            }
+
             // Filtrar por vendedor si está disponible
             const url = vendedorId
                 ? `${API_URL}/api/rutas/?vendedor=${vendedorId}`
                 : `${API_URL}/api/rutas/`;
 
-            const response = await fetch(url);
+            const controller = new AbortController();
+            timeoutId = setTimeout(() => controller.abort(), 10000);
+            const response = await fetch(url, { signal: controller.signal });
+            clearTimeout(timeoutId);
+            timeoutId = null;
             const data = await response.json();
             setRutas(data);
+            setUsandoRutasCache(false);
+
+            // Guardar caché actualizado
+            await AsyncStorage.setItem(
+                cacheKey,
+                JSON.stringify({ rutas: data, timestamp: Date.now() })
+            );
         } catch (error) {
-            console.error('Error cargando rutas:', error);
+            // No bloquear la app: usar caché si existe
+            if (cacheRutas.length > 0) {
+                setSinConexionRutas(true);
+                setUsandoRutasCache(true);
+                console.log('⚠️ Sin internet para rutas, usando caché local');
+            } else {
+                setSinConexionRutas(true);
+                setUsandoRutasCache(false);
+                console.log('⚠️ No se pudieron cargar rutas (sin caché)');
+            }
         } finally {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
             setCargandoRutas(false);
         }
     };
@@ -106,18 +151,36 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
     };
 
     const validarFormulario = () => {
-        if (!formData.nombre.trim()) {
-            Alert.alert('Error', 'El nombre del cliente es obligatorio');
-            return false;
+        const faltantes = [];
+
+        if (!formData.nombre.trim()) faltantes.push('Nombre del cliente');
+        if (!formData.negocio.trim()) faltantes.push('Nombre del negocio');
+        if (!formData.rutaId) faltantes.push('Ruta');
+        if (!Array.isArray(formData.diasVisita) || formData.diasVisita.length === 0) {
+            faltantes.push('Al menos 1 día de visita');
         }
 
-        if (!formData.negocio.trim()) {
-            Alert.alert('Error', 'El nombre del negocio es obligatorio');
+        if (faltantes.length > 0) {
+            const extraSinRuta = (!formData.rutaId && rutas.length === 0 && sinConexionRutas)
+                ? '\n\nSin internet no se pudieron cargar rutas. Puedes seguir vendiendo normalmente.'
+                : '';
+            Alert.alert(
+                'Campos obligatorios',
+                `Faltan estos campos:\n• ${faltantes.join('\n• ')}${extraSinRuta}`
+            );
             return false;
         }
 
         return true;
     };
+
+    const formularioCompleto = (
+        formData.nombre.trim().length > 0 &&
+        formData.negocio.trim().length > 0 &&
+        !!formData.rutaId &&
+        Array.isArray(formData.diasVisita) &&
+        formData.diasVisita.length > 0
+    );
 
     const handleGuardar = async () => {
         if (!validarFormulario()) return;
@@ -151,13 +214,17 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
                     console.log('✅ Cliente guardado en servidor:', nuevoCliente.id);
                     // Actualizar con el ID real del servidor
                     onClienteGuardado({ ...nuevoCliente, guardando: false });
+
+                    Alert.alert(
+                        'Cliente creado',
+                        'Cliente creado y guardado en servidor correctamente.'
+                    );
                 })
                 .catch(async (error) => {
-                    console.error('❌ Error guardando en servidor:', error);
+                    console.log('⚠️ No se pudo guardar cliente en servidor (modo offline):', error?.message || error);
                     
                     // 🆕 Guardar en cola de sincronización pendiente
                     try {
-                        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
                         const pendientes = JSON.parse(await AsyncStorage.getItem('clientes_pendientes') || '[]');
                         pendientes.push({
                             ...formData,
@@ -167,13 +234,13 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
                         await AsyncStorage.setItem('clientes_pendientes', JSON.stringify(pendientes));
                         console.log('📝 Cliente agregado a cola de sincronización');
                     } catch (queueError) {
-                        console.error('Error guardando en cola:', queueError);
+                        console.log('⚠️ Error guardando cliente en cola local:', queueError?.message || queueError);
                     }
                     
                     // Notificar error pero no bloquear la UI
                     Alert.alert(
-                        'Sin Conexión',
-                        'El cliente se guardó localmente. Se sincronizará automáticamente cuando haya internet.',
+                        'Cliente creado (modo local)',
+                        'Se guardó localmente y se sincronizará automáticamente cuando vuelva el internet.',
                         [{ text: 'OK' }]
                     );
                 });
@@ -301,7 +368,9 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
 
                         {/* 🆕 Días de Visita */}
                         <View style={styles.campo}>
-                            <Text style={styles.label}>Días de Visita</Text>
+                            <Text style={styles.label}>
+                                Días de Visita <Text style={styles.obligatorio}>*</Text>
+                            </Text>
                             <View style={styles.diasContainer}>
                                 {DIAS_SEMANA.map((dia) => (
                                     <TouchableOpacity
@@ -325,7 +394,9 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
 
                         {/* 🆕 Selector de Ruta */}
                         <View style={styles.campo}>
-                            <Text style={styles.label}>Ruta</Text>
+                            <Text style={styles.label}>
+                                Ruta <Text style={styles.obligatorio}>*</Text>
+                            </Text>
                             <TouchableOpacity
                                 style={styles.selectorRuta}
                                 onPress={() => setMostrarSelectorRuta(!mostrarSelectorRuta)}
@@ -380,6 +451,17 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
                                     )}
                                 </View>
                             )}
+
+                            {sinConexionRutas && (
+                                <View style={styles.avisoOfflineRutas}>
+                                    <Ionicons name="cloud-offline-outline" size={16} color="#8a6d3b" />
+                                    <Text style={styles.avisoOfflineRutasTexto}>
+                                        {usandoRutasCache
+                                            ? 'Sin internet: usando rutas locales guardadas.'
+                                            : 'Sin internet: no hay rutas locales. Puedes seguir vendiendo.'}
+                                    </Text>
+                                </View>
+                            )}
                         </View>
 
                         {/* Nota informativa */}
@@ -402,7 +484,10 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                        style={[styles.btnGuardar, guardando && styles.btnGuardarDeshabilitado]}
+                        style={[
+                            styles.btnGuardar,
+                            (!formularioCompleto || guardando) && styles.btnGuardarDeshabilitado
+                        ]}
                         onPress={handleGuardar}
                         disabled={guardando}
                     >
@@ -431,9 +516,9 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         alignItems: 'center',
         backgroundColor: 'white',
-        paddingTop: 50,
+        paddingTop: Platform.OS === 'android' ? 30 : 36,
         paddingHorizontal: 15,
-        paddingBottom: 15,
+        paddingBottom: 10,
         borderBottomWidth: 1,
         borderBottomColor: '#e0e0e0',
     },
@@ -441,7 +526,7 @@ const styles = StyleSheet.create({
         padding: 5,
     },
     titulo: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: 'bold',
         color: '#333',
     },
@@ -449,16 +534,16 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     scrollContent: {
-        padding: 20,
+        padding: 14,
     },
     formulario: {
         backgroundColor: 'white',
         borderRadius: 10,
-        padding: 20,
+        padding: 16,
         elevation: 2,
     },
     campo: {
-        marginBottom: 20,
+        marginBottom: 16,
     },
     label: {
         fontSize: 14,
@@ -622,6 +707,23 @@ const styles = StyleSheet.create({
     rutaItemTextoActivo: {
         fontWeight: '600',
         color: '#003d88',
+    },
+    avisoOfflineRutas: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 8,
+        backgroundColor: '#fff7e6',
+        borderWidth: 1,
+        borderColor: '#ffe0b2',
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+    },
+    avisoOfflineRutasTexto: {
+        marginLeft: 6,
+        color: '#8a6d3b',
+        fontSize: 12,
+        flex: 1,
     },
 });
 

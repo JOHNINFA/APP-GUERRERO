@@ -1,6 +1,22 @@
 import { API_URL } from '../config';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE = `${API_URL}/api`;
+
+export const obtenerAuthHeaders = async (headersBase = {}) => {
+    try {
+        const token = await AsyncStorage.getItem('auth_token');
+        if (token) {
+            return {
+                ...headersBase,
+                Authorization: `Bearer ${token}`,
+            };
+        }
+    } catch (error) {
+        console.warn('⚠️ No se pudo leer token de autenticación:', error.message);
+    }
+    return headersBase;
+};
 
 export const obtenerRutasPorUsuario = async (userId) => {
     try {
@@ -48,10 +64,15 @@ export const enviarVentaRuta = async (ventaData) => {
         console.log('   id_local:', ventaData.id_local);
         console.log('   dispositivo_id:', ventaData.dispositivo_id);
 
-        // 🆕 Si hay fotos, usar FormData; si no, usar JSON
+        // Usar FormData solo si existen archivos reales (uri file/content/http).
+        // Si solo hay base64, enviar JSON: es más estable y evita errores de parseo multipart en backend.
         const hayFotos = ventaData.foto_vencidos && typeof ventaData.foto_vencidos === 'object' && Object.keys(ventaData.foto_vencidos).length > 0;
+        const hayFotosArchivo = hayFotos && Object.values(ventaData.foto_vencidos).some((fotosProducto) =>
+            Array.isArray(fotosProducto) &&
+            fotosProducto.some((foto) => typeof foto === 'string' && !foto.startsWith('data:'))
+        );
 
-        if (hayFotos) {
+        if (hayFotosArchivo) {
             // Usar FormData para fotos
             const formData = new FormData();
 
@@ -78,6 +99,10 @@ export const enviarVentaRuta = async (ventaData) => {
                 const fotosProducto = ventaData.foto_vencidos[productoId];
                 if (Array.isArray(fotosProducto)) {
                     fotosProducto.forEach((fotoUri, index) => {
+                        if (fotoUri.startsWith('data:')) {
+                            // Si es base64, lo pusimos en JSON, no lo adjuntamos como archivo aquí
+                            return;
+                        }
                         formData.append(`evidencia_${productoId}_${index}`, {
                             uri: fotoUri,
                             type: 'image/jpeg',
@@ -87,12 +112,19 @@ export const enviarVentaRuta = async (ventaData) => {
                 }
             }
 
+            // 🆕 Enviar fotos base64 en su propio campo
+            if (ventaData.foto_vencidos) {
+                formData.append('foto_vencidos', JSON.stringify(ventaData.foto_vencidos));
+            }
+
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 segundos (backend necesita optimización)
 
             try {
+                const headersAuth = await obtenerAuthHeaders();
                 const response = await fetch(`${API_BASE}/ventas-ruta/`, {
                     method: 'POST',
+                    headers: headersAuth,
                     body: formData,
                     signal: controller.signal
                 });
@@ -138,11 +170,12 @@ export const enviarVentaRuta = async (ventaData) => {
             // 🆕 Sin fotos: usar JSON (más rápido)
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 segundos (backend necesita optimización)
-            
+
             try {
+                const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
                 const response = await fetch(`${API_BASE}/ventas-ruta/`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers,
                     body: JSON.stringify(ventaData),
                     signal: controller.signal
                 });
@@ -166,8 +199,10 @@ export const enviarVentaRuta = async (ventaData) => {
                 }
 
                 const errorText = await response.text();
+                console.warn('⚠️ HTTP rechazada:', response.status, errorText);
                 return { success: false, error: `HTTP ${response.status}: ${errorText}` };
             } catch (jsonError) {
+                clearTimeout(timeoutId);
                 let msj = jsonError.message;
                 if (jsonError.name === 'AbortError') {
                     msj = 'Timeout: El servidor tardó demasiado';
@@ -193,23 +228,21 @@ export const limpiarTodasLasVisitas = async (ruta) => {
 };
 
 export const obtenerConfiguracionImpresion = async () => {
-    try {
-        const response = await fetch(`${API_BASE}/configuracion-impresion/`);
-        if (response.ok) {
-            const data = await response.json();
-            // El backend devuelve una lista, tomamos el primero activo o el primero
-            if (Array.isArray(data) && data.length > 0) {
-                return data.find(c => c.activo) || data[0];
-            } else if (data && data.id) {
-                // Si devuelve un solo objeto
-                return data;
-            }
+    // ⚠️ Esta función debe lanzar el error (no capturarlo) para que
+    // obtenerConfigImpresionConCache() en printerService.js pueda
+    // leer del caché local cuando no hay internet.
+    const response = await fetch(`${API_BASE}/configuracion-impresion/`);
+    if (response.ok) {
+        const data = await response.json();
+        // El backend devuelve una lista, tomamos el primero activo o el primero
+        if (Array.isArray(data) && data.length > 0) {
+            return data.find(c => c.activo) || data[0];
+        } else if (data && data.id) {
+            // Si devuelve un solo objeto
+            return data;
         }
-        return null;
-    } catch (error) {
-        console.error('Error obteniendo configuración de impresión:', error);
-        return null;
     }
+    return null;
 };
 
 export const actualizarPedido = async (pedidoId, datos) => {
@@ -217,10 +250,11 @@ export const actualizarPedido = async (pedidoId, datos) => {
         console.log('📝 Actualizando pedido:', pedidoId, datos);
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 segundos
-        
-        const response = await fetch(`${API_BASE}/pedidos/${pedidoId}/`, {
+
+        const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
+        const response = await fetch(`${API_BASE}/pedidos/${pedidoId}/actualizar_app/`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify(datos),
             signal: controller.signal
         });
@@ -246,6 +280,28 @@ export const actualizarPedido = async (pedidoId, datos) => {
     }
 };
 
+/**
+ * 🆕 Editar una venta de ruta existente (PATCH)
+ * Revierte stock en CargueIDx y aplica los nuevos valores.
+ * @param {number|string} ventaId - ID de la venta en el backend
+ * @param {object} datosActualizados - { detalles, total, metodo_pago, ... }
+ */
+export const editarVentaRuta = async (ventaId, datosActualizados) => {
+    const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
+    const response = await fetch(`${API_BASE}/ventas-ruta/${ventaId}/editar/`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(datosActualizados),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error al editar venta: ${response.status} - ${errorText}`);
+    }
+
+    return await response.json();
+};
+
 export default {
     obtenerRutasPorUsuario,
     obtenerClientesPorRutaYDia,
@@ -253,5 +309,6 @@ export default {
     marcarClienteVisitado,
     limpiarTodasLasVisitas,
     obtenerConfiguracionImpresion,
-    actualizarPedido
+    actualizarPedido,
+    editarVentaRuta,
 };

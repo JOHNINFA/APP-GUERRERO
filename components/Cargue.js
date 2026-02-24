@@ -23,6 +23,9 @@ const Cargue = ({ userId }) => {
   const [checkedItems, setCheckedItems] = useState({});
   const [loading, setLoading] = useState(false);
 
+  // 🆕 Ref para cancelar requests de checks rápidos POR PRODUCTO
+  const checkControllersRef = useRef({});
+
   // 🆕 Estado para productos dinámicos desde el servidor
   const [productos, setProductos] = useState([]);
 
@@ -81,15 +84,15 @@ const Cargue = ({ userId }) => {
     console.log('🔄 Sincronizando productos antes de recargar cargue...');
     try {
       // Timeout de 5 segundos para sincronización
-      const timeoutPromise = new Promise((_, reject) => 
+      const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Timeout')), 5000)
       );
-      
+
       await Promise.race([
         sincronizarProductos(),
         timeoutPromise
       ]);
-      
+
       await cargarProductos(); // Recargar la lista actualizada
       console.log('✅ Productos sincronizados correctamente');
     } catch (error) {
@@ -100,10 +103,10 @@ const Cargue = ({ userId }) => {
 
     // Verificar estado del día (con timeout)
     try {
-      const timeoutPromise = new Promise((_, reject) => 
+      const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Timeout')), 5000)
       );
-      
+
       await Promise.race([
         verificarEstadoDia(selectedDay, selectedDate),
         timeoutPromise
@@ -119,14 +122,14 @@ const Cargue = ({ userId }) => {
       const url = `${ENDPOINTS.OBTENER_CARGUE}?vendedor_id=${userId}&dia=${diaServidor}&fecha=${selectedDate}`;
 
       console.log(`📥 Obteniendo cargue desde: ${url}`);
-      
+
       // Timeout de 10 segundos
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
 
       const response = await fetch(url, { signal: controller.signal });
       clearTimeout(timeoutId);
-      
+
       const data = await response.json();
 
       if (response.ok) {
@@ -162,10 +165,10 @@ const Cargue = ({ userId }) => {
     } catch (error) {
       const esTimeout = error.name === 'AbortError';
       console.error('Error fetching cargue:', esTimeout ? 'Timeout' : error.message);
-      
+
       Alert.alert(
         '⚠️ Error de Conexión',
-        esTimeout 
+        esTimeout
           ? 'El servidor tardó demasiado en responder.\n\nVerifica tu conexión e intenta de nuevo.'
           : 'No se pudo conectar con el servidor.\n\nVerifica tu conexión a internet.'
       );
@@ -189,7 +192,7 @@ const Cargue = ({ userId }) => {
   const sincronizarProductosAutomatico = async () => {
     try {
       console.log('🔄 Sincronizando productos en segundo plano...');
-      const timeoutPromise = new Promise((_, reject) => 
+      const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Timeout')), 5000)
       );
       await Promise.race([sincronizarProductos(), timeoutPromise]);
@@ -250,8 +253,13 @@ const Cargue = ({ userId }) => {
     Vibration.vibrate(30);
 
     // 🔄 Actualizar en el servidor en segundo plano (con timeout)
+    // Cancelar request anterior DEL MISMO PRODUCTO si existe
+    if (checkControllersRef.current[productName]) {
+      checkControllersRef.current[productName].abort();
+    }
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 segundos
+    checkControllersRef.current[productName] = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 segundos
 
     fetch(ENDPOINTS.ACTUALIZAR_CHECK_VENDEDOR, {
       method: 'POST',
@@ -265,34 +273,48 @@ const Cargue = ({ userId }) => {
       }),
       signal: controller.signal
     })
-    .then(response => {
-      clearTimeout(timeoutId);
-      return response.json();
-    })
-    .then(result => {
-      console.log(`✅ Check V actualizado: ${productName} = ${nuevoValorV}`);
-    })
-    .catch(error => {
-      clearTimeout(timeoutId);
-      const esTimeout = error.name === 'AbortError';
-      
-      // Revertir si hay error
-      console.error('Error actualizando check:', esTimeout ? 'Timeout' : error.message);
-      setCheckedItems(prev => ({
-        ...prev,
-        [productName]: {
-          ...prev[productName],
-          V: !nuevoValorV
+      .then(response => {
+        clearTimeout(timeoutId);
+        // Limpiar referencia si fue exitoso
+        if (checkControllersRef.current[productName] === controller) {
+          delete checkControllersRef.current[productName];
         }
-      }));
-      
-      Alert.alert(
-        'Error', 
-        esTimeout 
-          ? 'El servidor tardó demasiado. El check se revirtió.'
-          : 'No se pudo actualizar el check. Se revirtió el cambio.'
-      );
-    });
+        return response.json();
+      })
+      .then(result => {
+        console.log(`✅ Check V actualizado: ${productName} = ${nuevoValorV}`);
+      })
+      .catch(error => {
+        clearTimeout(timeoutId);
+        const esTimeout = error.name === 'AbortError';
+
+        // Si fue cancelado por otro check rápido en el MISMO producto, NO revertir
+        if (esTimeout && controller !== checkControllersRef.current[productName]) {
+          console.log(`⏭️ Check ${productName} cancelado por nuevo click, no revertir`);
+          return;
+        }
+
+        // Solo revertir si fue timeout real o error de red
+        if (controller === checkControllersRef.current[productName] || (!esTimeout && !controller.signal.aborted)) {
+          console.error('Error actualizando check:', esTimeout ? 'Timeout' : error.message);
+          setCheckedItems(prev => ({
+            ...prev,
+            [productName]: {
+              ...prev[productName],
+              V: !nuevoValorV
+            }
+          }));
+
+          delete checkControllersRef.current[productName];
+
+          Alert.alert(
+            'Error',
+            esTimeout
+              ? 'El servidor tardó demasiado. El check se revirtió.'
+              : 'No se pudo actualizar el check. Se revirtió el cambio.'
+          );
+        }
+      });
   }, [checkedItems, quantities, userId, selectedDay, selectedDate]);
 
   const dias = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];

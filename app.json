@@ -22,7 +22,7 @@
       "package": "com.johni1981.reactnativecourse",
       "versionCode": 3,
       "minSdkVersion": 21,
-      "softwareKeyboardLayoutMode": "pan",
+      "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",

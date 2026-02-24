@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 
 import { ImageBackground, StyleSheet, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 import LoginScreen from './LoginScreen';
 import MainScreen from './MainScreen';
 import OptionsScreen from './components/OptionsScreen';
@@ -20,12 +21,13 @@ import { API_URL } from './config';
 
 
 const Stack = createStackNavigator();
+const DIAS_SEMANA = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO', 'DOMINGO'];
 
 // 🆕 Función para precargar clientes de todos los vendedores
-const precargarClientes = async () => {
+const precargarClientes = async (targetUserId = null) => {
   try {
     // Intentar obtener el último userId del AsyncStorage
-    const lastUserId = await AsyncStorage.getItem('last_user_id');
+    const lastUserId = targetUserId || await AsyncStorage.getItem('last_user_id');
     if (!lastUserId) return;
 
     console.log('🚀 Precargando clientes para', lastUserId);
@@ -43,11 +45,31 @@ const precargarClientes = async () => {
         esDeRuta: true
       }));
 
-      // Guardar en cache
-      await AsyncStorage.setItem(`clientes_cache_${lastUserId}`, JSON.stringify({
+      const payloadTodos = JSON.stringify({
         clientes: clientesFormateados,
         timestamp: Date.now()
-      }));
+      });
+
+      // Guardar en cache (legacy + nuevo)
+      const operacionesCache = [
+        AsyncStorage.setItem(`clientes_cache_${lastUserId}`, payloadTodos),
+        AsyncStorage.setItem(`clientes_cache_todos_${lastUserId}`, payloadTodos)
+      ];
+
+      // Guardar también cache por día para mejorar funcionamiento offline
+      DIAS_SEMANA.forEach((dia) => {
+        const clientesDia = clientesFormateados.filter((c) =>
+          c.dia_visita?.toUpperCase().includes(dia)
+        );
+        operacionesCache.push(
+          AsyncStorage.setItem(
+            `clientes_cache_dia_${lastUserId}_${dia}`,
+            JSON.stringify({ clientes: clientesDia, timestamp: Date.now() })
+          )
+        );
+      });
+
+      await Promise.all(operacionesCache);
 
       console.log('✅ Clientes precargados:', clientesFormateados.length);
     }
@@ -56,10 +78,32 @@ const precargarClientes = async () => {
   }
 };
 
+// 🆕 Precargar rutas para permitir crear cliente sin depender de internet en ese momento
+const precargarRutas = async (targetUserId = null) => {
+  try {
+    const lastUserId = targetUserId || await AsyncStorage.getItem('last_user_id');
+    if (!lastUserId) return;
+
+    const response = await fetch(`${API_URL}/api/rutas/?vendedor=${lastUserId}`);
+    if (!response.ok) return;
+
+    const rutas = await response.json();
+    await AsyncStorage.setItem(
+      `rutas_cache_${lastUserId}`,
+      JSON.stringify({ rutas, timestamp: Date.now() })
+    );
+    console.log('✅ Rutas precargadas:', rutas.length);
+  } catch (error) {
+    console.log('⚠️ Error precargando rutas:', error.message);
+  }
+};
+
 const App = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userId, setUserId] = useState(null);
   const [vendedorNombre, setVendedorNombre] = useState(null);
+  const syncingRef = useRef(false);
+  const onlineRef = useRef(null);
 
   useEffect(() => {
     // 🚀 Sincronizar productos, clientes e imágenes al iniciar la app (en paralelo)
@@ -67,6 +111,7 @@ const App = () => {
       await Promise.all([
         inicializarProductos(),
         precargarClientes(),
+        precargarRutas(),
         precargarImagenes()
       ]);
       
@@ -78,6 +123,8 @@ const App = () => {
 
   // 🆕 Sincronizar clientes y ventas pendientes
   const sincronizarPendientesEnFondo = async () => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
     try {
       const { sincronizarTodo } = await import('./services/syncService');
       const resultado = await sincronizarTodo();
@@ -89,10 +136,37 @@ const App = () => {
       }
     } catch (error) {
       console.log('⚠️ No se pudo sincronizar pendientes:', error.message);
+    } finally {
+      syncingRef.current = false;
     }
   };
 
-  const handleLogin = (loggedIn, username, nombre) => {
+  // 🆕 Al recuperar internet, sincronizar pendientes y refrescar caché offline
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(async (state) => {
+      const online = !!state.isConnected && state.isInternetReachable !== false;
+
+      if (onlineRef.current === null) {
+        onlineRef.current = online;
+        return;
+      }
+
+      if (online && !onlineRef.current) {
+        console.log('🌐 Internet recuperado: sincronizando pendientes y actualizando caché...');
+        await sincronizarPendientesEnFondo();
+        await Promise.allSettled([
+          precargarClientes(userId),
+          precargarRutas(userId)
+        ]);
+      }
+
+      onlineRef.current = online;
+    });
+
+    return () => unsubscribe();
+  }, [userId]);
+
+  const handleLogin = (loggedIn, username, nombre, token = null) => {
     setIsLoggedIn(loggedIn);
     setUserId(username);
     setVendedorNombre(nombre);
@@ -100,8 +174,15 @@ const App = () => {
     // 🆕 Guardar userId para precarga futura
     if (username) {
       AsyncStorage.setItem('last_user_id', username);
-      // Precargar clientes inmediatamente después del login
-      precargarClientes();
+      if (token) {
+        AsyncStorage.setItem('auth_token', token);
+      }
+      // Precargar datos offline inmediatamente después del login
+      Promise.allSettled([
+        precargarClientes(username),
+        precargarRutas(username)
+      ]);
+      sincronizarPendientesEnFondo();
     }
   };
 
@@ -110,7 +191,10 @@ const App = () => {
       {isLoggedIn ? (
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen name="Options">
-            {(props) => <OptionsScreen {...props} userId={userId} onLogout={() => setIsLoggedIn(false)} />}
+            {(props) => <OptionsScreen {...props} userId={userId} onLogout={() => {
+              AsyncStorage.removeItem('auth_token');
+              setIsLoggedIn(false);
+            }} />}
           </Stack.Screen>
           <Stack.Screen name="Main">
             {(props) => <MainScreen {...props} userId={userId} />}

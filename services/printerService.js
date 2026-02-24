@@ -1,7 +1,61 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { formatearMoneda } from './ventasService';
 import { obtenerConfiguracionImpresion } from './rutasApiService';
+import { API_URL } from '../config';
+
+const IMPRESION_CONFIG_CACHE_KEY = 'impresion_config_cache_v1';
+
+const obtenerConfigImpresionConCache = async () => {
+  let config = null;
+
+  // 1. Intentar cargar desde caché local PRIMERO (muy rápido)
+  try {
+    const cacheRaw = await AsyncStorage.getItem(IMPRESION_CONFIG_CACHE_KEY);
+    if (cacheRaw) {
+      const cache = JSON.parse(cacheRaw);
+      if (cache?.config) {
+        config = cache.config;
+      }
+    }
+  } catch (cacheError) {
+    // Silencioso
+  }
+
+  // 2. Si no hay cache disponible, o bajamos del backend Bloqueando (1ra vez)
+  if (!config) {
+    try {
+      config = await obtenerConfiguracionImpresion();
+      if (config) {
+        await AsyncStorage.setItem(
+          IMPRESION_CONFIG_CACHE_KEY,
+          JSON.stringify({ config, timestamp: Date.now() })
+        );
+      }
+    } catch (error) {
+      console.log('Error cargando config de impresión inicial:', error);
+    }
+  } else {
+    // 3. Si YA tenemos cache, disparamos una petición al servidor SIN BLOQUEAR la impresión
+    // para que la próxima vez tenga los datos más frescos (Fire-and-forget)
+    obtenerConfiguracionImpresion().then(async (nuevaConfig) => {
+      if (nuevaConfig) {
+        await AsyncStorage.setItem(
+          IMPRESION_CONFIG_CACHE_KEY,
+          JSON.stringify({ config: nuevaConfig, timestamp: Date.now() })
+        );
+      }
+    }).catch(() => { });
+  }
+
+  let logoBase64 = null;
+  if (config?.logo_base64 && config?.mostrar_logo !== false) {
+    logoBase64 = config.logo_base64;
+  }
+
+  return { config, logoBase64 };
+};
 
 export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
   const {
@@ -18,6 +72,42 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
     vencidas
   } = venta;
 
+  // Compatibilidad: algunas ventas guardan items como "productos" y otras como "detalles"
+  const rawItems = Array.isArray(productos) && productos.length > 0
+    ? productos
+    : (Array.isArray(venta?.detalles) ? venta.detalles : []);
+
+  const esNumeroValido = (valor) => Number.isFinite(parseFloat(valor));
+
+  const lineItems = rawItems.map((item) => {
+    const cantidad = parseInt(item?.cantidad || 0, 10) || 0;
+    const precioUnitarioRaw = parseFloat(item?.precio_unitario ?? item?.precio ?? 0) || 0;
+    const subtotalItemRaw = parseFloat(item?.subtotal ?? (cantidad * precioUnitarioRaw)) || 0;
+
+    // Ticket comercial sin decimales (mismo comportamiento esperado de venta normal)
+    const precioUnitario = Math.round(precioUnitarioRaw);
+    const subtotalItem = Math.round(subtotalItemRaw);
+
+    return {
+      nombre: item?.nombre || item?.producto_nombre || item?.producto || 'PRODUCTO',
+      cantidad,
+      precio_unitario: precioUnitario,
+      subtotal: subtotalItem
+    };
+  });
+
+  // Fallbacks para reimpresión: backend puede no enviar subtotal/descuento explícitos
+  const subtotalCalculado = lineItems.reduce((sum, item) => sum + (item.subtotal || 0), 0);
+  const subtotalBase = esNumeroValido(subtotal) ? parseFloat(subtotal) : subtotalCalculado;
+  const totalBase = esNumeroValido(total) ? parseFloat(total) : subtotalBase;
+  const descuentoBase = esNumeroValido(descuento)
+    ? parseFloat(descuento)
+    : Math.max(0, subtotalBase - totalBase);
+
+  const subtotalFinal = Math.round(subtotalBase || 0);
+  const descuentoFinal = Math.round(descuentoBase || 0);
+  const totalFinal = Math.round((esNumeroValido(total) ? parseFloat(total) : (subtotalFinal - descuentoFinal)) || 0);
+
   // 🆕 Configuración completa con estilos visuales
   const nombreNegocio = config?.nombre_negocio || 'AREPAS EL GUERRERO';
   const nitNegocio = config?.nit_negocio || '';
@@ -29,7 +119,7 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
   const piePagina = config?.pie_pagina_ticket || 'Software: App Guerrero';
   const mensajeGracias = config?.mensaje_agradecimiento || '¡Gracias por su compra!';
   const mostrarLogo = config?.mostrar_logo !== false;
-  const logoSrc = logoBase64 || (config?.logo ? `${SERVER_URL}${config.logo}` : null);
+  const logoSrc = logoBase64 || (config?.logo ? `${API_URL}${config.logo}` : null);
 
   // 🆕 Estilos visuales configurables
   const fuenteTicket = config?.fuente_ticket || 'Lucida Console, Monaco, Consolas';
@@ -42,8 +132,10 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
   const letraSpaciadoDivider = config?.letter_spacing_divider || -0.8;
 
   const fechaFormateada = new Date(fecha).toLocaleString('es-CO');
+  const idSeguro = (typeof id === 'string' || typeof id === 'number') ? String(id) : '';
+  const consecutivoFallback = idSeguro.includes('-') ? idSeguro.split('-').pop() : idSeguro;
 
-  let productosHTML = productos.map(p => {
+  let productosHTML = lineItems.map(p => {
     // Calcular unitario si no existe y evitar división por cero
     const unitario = p.precio_unitario || (p.cantidad > 0 ? p.subtotal / p.cantidad : 0);
     return `
@@ -218,7 +310,7 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
         <div class="ticket-divider">................................................</div>
         
         <div class="ticket-info">
-          <b>Factura:</b> #${venta.consecutivo ? venta.consecutivo.toString().padStart(4, '0') : id.split('-').pop()}<br>
+          <b>Factura:</b> #${venta.consecutivo ? venta.consecutivo.toString().padStart(4, '0') : consecutivoFallback}<br>
           <b>Fecha:</b> ${fechaFormateada}<br>
           <b>Cliente:</b> ${cliente_negocio || cliente_nombre}<br>
           <b>Vendedor:</b> ${vendedor}
@@ -247,23 +339,23 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
         <div class="ticket-totals">
           <div class="total-row">
             <span>Art</span>
-            <span>${productos.length}</span>
+            <span>${lineItems.length}</span>
           </div>
           <div class="total-row">
             <span>Cant.Art</span>
-            <span>${productos.reduce((sum, p) => sum + p.cantidad, 0)}</span>
+            <span>${lineItems.reduce((sum, p) => sum + p.cantidad, 0)}</span>
           </div>
           <div class="total-row">
             <span>Subtotal:</span>
-            <span>${formatearMoneda(subtotal)}</span>
+            <span>${formatearMoneda(subtotalFinal)}</span>
           </div>
           <div class="total-row">
             <span>Descuento:</span>
-            <span>${formatearMoneda(descuento)}</span>
+            <span>${formatearMoneda(descuentoFinal)}</span>
           </div>
           <div class="total-row total-final">
             <span>TOTAL:</span>
-            <span>${formatearMoneda(total)}</span>
+            <span>${formatearMoneda(totalFinal)}</span>
           </div>
         </div>
 
@@ -280,22 +372,7 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
 
 export const imprimirTicket = async (venta) => {
   try {
-    // Intentar obtener configuración del servidor, usar null si falla (offline)
-    let config = null;
-    let logoBase64 = null;
-
-    try {
-      config = await obtenerConfiguracionImpresion();
-
-      // 🆕 Usar logo_base64 directamente del backend (ya viene en base64)
-      if (config?.logo_base64 && config?.mostrar_logo !== false) {
-        logoBase64 = config.logo_base64;
-        console.log('✅ Logo cargado desde backend (base64)');
-      }
-    } catch (configError) {
-      console.log('⚠️ Error obteniendo configuración, usando valores por defecto');
-      // Continúa con config = null, usará valores por defecto
-    }
+    const { config, logoBase64 } = await obtenerConfigImpresionConCache();
 
     const html = generarTicketHTML(venta, config, logoBase64);
 
@@ -311,20 +388,7 @@ export const imprimirTicket = async (venta) => {
 // Generar solo el PDF del ticket (para compartir por WhatsApp)
 export const generarTicketPDF = async (venta) => {
   try {
-    // Intentar obtener configuración del servidor
-    let config = null;
-    let logoBase64 = null;
-
-    try {
-      config = await obtenerConfiguracionImpresion();
-
-      // 🆕 Usar logo_base64 directamente del backend
-      if (config?.logo_base64 && config?.mostrar_logo !== false) {
-        logoBase64 = config.logo_base64;
-      }
-    } catch (configError) {
-      // Continúa con valores por defecto
-    }
+    const { config, logoBase64 } = await obtenerConfigImpresionConCache();
 
     const html = generarTicketHTML(venta, config, logoBase64);
     const { uri } = await Print.printToFileAsync({ html });

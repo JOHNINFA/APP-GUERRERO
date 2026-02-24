@@ -97,8 +97,9 @@ _No hay tareas críticas pendientes en este momento_ ✅
 Posibles mejoras futuras (no urgentes):
 1. Monitoreo continuo del sistema en producción
 2. Mejoras adicionales de rendimiento si se detectan cuellos de botella
-3. Nuevas funcionalidades según necesidades del negocio
-4. Mantenimiento y actualizaciones de seguridad
+3. **UX Checkboxes (AP GUERRERO)**: Mejorar la experiencia de usuario al marcar los checkboxes en la plantilla/lista de la app móvil. Actualmente, si se marcan muy rápido, el sistema se bloquea o no registra los siguientes toques inmediatamente (requiere revisión de de-bounce, useMemo o estado optimista).
+4. Nuevas funcionalidades según necesidades del negocio
+5. Mantenimiento y actualizaciones de seguridad
 
 ---
 
