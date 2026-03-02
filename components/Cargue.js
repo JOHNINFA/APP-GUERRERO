@@ -25,6 +25,8 @@ const Cargue = ({ userId }) => {
 
   // 🆕 Ref para cancelar requests de checks rápidos POR PRODUCTO
   const checkControllersRef = useRef({});
+  const checkedItemsRef = useRef({});
+  const quantitiesRef = useRef({});
 
   // 🆕 Estado para productos dinámicos desde el servidor
   const [productos, setProductos] = useState([]);
@@ -210,6 +212,14 @@ const Cargue = ({ userId }) => {
     }
   }, [selectedDay, selectedDate, userId]); // ✅ Quitamos 'productos' para evitar bucle
 
+  useEffect(() => {
+    checkedItemsRef.current = checkedItems;
+  }, [checkedItems]);
+
+  useEffect(() => {
+    quantitiesRef.current = quantities;
+  }, [quantities]);
+
 
   // 🚀 OPTIMIZACIÓN: useCallback para evitar recrear función en cada render
   const handleCheckChange = useCallback((productName, type) => {
@@ -219,9 +229,10 @@ const Cargue = ({ userId }) => {
       return;
     }
 
-    const nuevoValorV = !checkedItems[productName]?.V;
-    const cantidad = parseInt(quantities[productName] || '0');
-    const checkD = checkedItems[productName]?.D || false;
+    const estadoActual = checkedItemsRef.current[productName] || { V: false, D: false };
+    const nuevoValorV = !estadoActual.V;
+    const cantidad = parseInt(quantitiesRef.current[productName] || '0');
+    const checkD = estadoActual.D || false;
 
     // Validaciones antes de marcar V
     if (nuevoValorV) {
@@ -294,9 +305,16 @@ const Cargue = ({ userId }) => {
           return;
         }
 
-        // Solo revertir si fue timeout real o error de red
+        // Si hubo timeout real, conservar el valor local para no bloquear marcaciones rápidas.
+        if (esTimeout && controller === checkControllersRef.current[productName]) {
+          delete checkControllersRef.current[productName];
+          console.warn(`⏱️ Timeout actualizando check ${productName}. Se mantiene cambio local.`);
+          return;
+        }
+
+        // En errores reales de red/servidor, sí revertimos para no desalinear el estado.
         if (controller === checkControllersRef.current[productName] || (!esTimeout && !controller.signal.aborted)) {
-          console.error('Error actualizando check:', esTimeout ? 'Timeout' : error.message);
+          console.error('Error actualizando check:', error.message);
           setCheckedItems(prev => ({
             ...prev,
             [productName]: {
@@ -304,18 +322,11 @@ const Cargue = ({ userId }) => {
               V: !nuevoValorV
             }
           }));
-
           delete checkControllersRef.current[productName];
-
-          Alert.alert(
-            'Error',
-            esTimeout
-              ? 'El servidor tardó demasiado. El check se revirtió.'
-              : 'No se pudo actualizar el check. Se revirtió el cambio.'
-          );
+          console.warn(`❌ Error actualizando check ${productName}: ${error.message}`);
         }
       });
-  }, [checkedItems, quantities, userId, selectedDay, selectedDate]);
+  }, [userId, selectedDay, selectedDate]);
 
   const dias = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
 

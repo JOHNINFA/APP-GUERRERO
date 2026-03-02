@@ -39,6 +39,7 @@ const DIAS_MAP = {
     5: 'VIERNES',
     6: 'SABADO'
 };
+const METODOS_PAGO_VALIDOS_EDICION = ['EFECTIVO', 'NEQUI', 'DAVIPLATA'];
 
 const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre }) => {
     // userId puede venir de route.params o como prop directa
@@ -78,6 +79,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [clientesOrdenDia, setClientesOrdenDia] = useState([]); // 🆕 Orden del día para auto-avance
     const [clienteSeleccionadoEsPedido, setClienteSeleccionadoEsPedido] = useState(false);
     const [tecladoAbierto, setTecladoAbierto] = useState(false);
+    const [alturaTeclado, setAlturaTeclado] = useState(0);
     const [historialReimpresion, setHistorialReimpresion] = useState([]); // 🆕 Historial unificado (backend + local fallback)
     const [cargandoHistorial, setCargandoHistorial] = useState(false);
     const [inputBuscadorEnFoco, setInputBuscadorEnFoco] = useState(false); // 🆕 Rastrear foco del buscador
@@ -88,7 +90,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [ventaEnEdicion, setVentaEnEdicion] = useState(null); // venta completa que se está editando
     const [modalEdicionVisible, setModalEdicionVisible] = useState(false);
     const [carritoEdicion, setCarritoEdicion] = useState({}); // {nombreProducto: cantidad}
+    const [cantidadesEdicionInput, setCantidadesEdicionInput] = useState({}); // texto temporal por producto para evitar que desaparezca al borrar
+    const [metodoPagoEdicion, setMetodoPagoEdicion] = useState('EFECTIVO');
+    const [busquedaProductoEdicion, setBusquedaProductoEdicion] = useState('');
+    const [focoCampoEdicion, setFocoCampoEdicion] = useState(null); // null | 'search' | 'cantidad'
     const [cargandoEdicion, setCargandoEdicion] = useState(false);
+    const modoCantidadConTeclado = tecladoAbierto && focoCampoEdicion === 'cantidad';
 
     // 🆕 Ventas del backend del día actual (para badges y alertas de venta duplicada)
     const [ventasBackendDia, setVentasBackendDia] = useState([]);
@@ -104,29 +111,76 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const sincronizandoAutoRef = useRef(false);
     const buscadorRef = useRef(null);
     const listaProductosRef = useRef(null);
+    const scrollOffsetProductosRef = useRef(0);
     const indiceCantidadEnFocoRef = useRef(null);
     const carritoRef = useRef({});
+    const listaEdicionRef = useRef(null);
+    const carritoEdicionRef = useRef({});
+    const inputsCantidadEdicionRef = useRef({});
 
     const asegurarVisibilidadInputCantidad = useCallback((index, animated = true) => {
         if (index === null || index === undefined || index < 0) return;
 
         requestAnimationFrame(() => {
             try {
-                // Dejamos el producto enfocado en el tercio superior para evitar empujar header/acciones.
+                if (tecladoAbierto) {
+                    // Con teclado abierto evitamos "bajones" del item:
+                    // solo desplazamos la lista hacia arriba (nunca hacia abajo).
+                    const altoEstimadoFila = 92;
+                    const target = Math.max(0, (index * altoEstimadoFila) - 220);
+                    const actual = scrollOffsetProductosRef.current || 0;
+                    const offsetSeguro = Math.max(target, actual);
+                    listaProductosRef.current?.scrollToOffset({
+                        offset: offsetSeguro,
+                        animated: false,
+                    });
+                    return;
+                }
+
                 listaProductosRef.current?.scrollToIndex({
                     index,
                     viewPosition: 0.22,
+                    viewOffset: 40,
                     animated,
                 });
             } catch (e) {
                 // Fallback silencioso: no bloquear la edición si FlatList aún no midió el índice.
             }
         });
+    }, [tecladoAbierto]);
+
+    const normalizarMetodoPagoEdicion = useCallback((metodoRaw) => {
+        const metodo = String(metodoRaw || 'EFECTIVO').trim().toUpperCase();
+        return METODOS_PAGO_VALIDOS_EDICION.includes(metodo) ? metodo : 'EFECTIVO';
     }, []);
+
+    const asegurarVisibilidadInputEdicion = useCallback((index = 0, delayMs = 0) => {
+        const ejecutar = () => {
+            try {
+                const baseY = Math.max(0, index * 86);
+                const destinoY = tecladoAbierto ? Math.max(0, baseY - 120) : baseY;
+                // Evita efecto visual de "rebote" cuando el teclado ya está abierto.
+                listaEdicionRef.current?.scrollTo({ y: destinoY, animated: !tecladoAbierto });
+            } catch (e) {
+                // sin bloqueo
+            }
+        };
+
+        if (delayMs > 0) {
+            setTimeout(ejecutar, delayMs);
+            return;
+        }
+
+        requestAnimationFrame(ejecutar);
+    }, [tecladoAbierto]);
 
     useEffect(() => {
         carritoRef.current = carrito;
     }, [carrito]);
+
+    useEffect(() => {
+        carritoEdicionRef.current = carritoEdicion;
+    }, [carritoEdicion]);
 
     useEffect(() => {
         const debounceId = setTimeout(() => {
@@ -1023,6 +1077,14 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     detalles: Array.isArray(pedido?.detalles) ? pedido.detalles : (Array.isArray(pedido?.detalles_info) ? pedido.detalles_info : []),
                 }));
 
+            // Si backend respondió, solo mezclar ventas locales pendientes/no sincronizadas.
+            // Esto evita tarjetas "fantasma" duplicadas por mezclar local+backend de la misma venta.
+            const fallbackLocalPendientes = fallbackLocal.filter((venta) => {
+                const estado = String(venta?.estado || '').toUpperCase();
+                if (estado === 'ANULADA') return true;
+                return venta?.sincronizada !== true;
+            });
+
             const obtenerClaveHistorial = (item) => {
                 if (item?.origen === 'PEDIDO_FACTURADO') {
                     return `pedido-${item?.id ?? item?._key ?? Math.random()}`;
@@ -1038,7 +1100,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             // Unificar backend + local: evita ocultar ventas locales pendientes
             const mapa = new Map();
-            [...ventasRuta, ...pedidosFacturados, ...fallbackLocal].forEach((item) => {
+            [...ventasRuta, ...pedidosFacturados, ...fallbackLocalPendientes].forEach((item) => {
                 const key = obtenerClaveHistorial(item);
                 const previo = mapa.get(key);
 
@@ -1100,13 +1162,39 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
         setVentaEnEdicion(venta);
         setCarritoEdicion(carritoInicial);
+        setCantidadesEdicionInput(
+            Object.fromEntries(
+                Object.entries(carritoInicial).map(([nombre, item]) => [nombre, String(item?.cantidad || 0)])
+            )
+        );
+        setMetodoPagoEdicion(normalizarMetodoPagoEdicion(venta?.metodo_pago));
+        setBusquedaProductoEdicion('');
+        setFocoCampoEdicion(null);
         setModalEdicionVisible(true);
         setMostrarHistorialVentas(false); // Cerrar historial mientras se edita
     };
 
     /** Modifica la cantidad de un producto en el carritoEdicion */
     const cambiarCantidadEdicion = (nombreProducto, nuevaCantidad) => {
-        const cantidad = parseInt(nuevaCantidad) || 0;
+        const valorRaw = String(nuevaCantidad ?? '');
+        const valorLimpio = valorRaw.replace(/[^\d]/g, '');
+
+        // Permitir campo vacío temporalmente para que no desaparezca la fila mientras escribe.
+        if (valorLimpio === '') {
+            setCantidadesEdicionInput(prev => ({
+                ...prev,
+                [nombreProducto]: '',
+            }));
+            return;
+        }
+
+        const cantidad = parseInt(valorLimpio, 10) || 0;
+
+        setCantidadesEdicionInput(prev => ({
+            ...prev,
+            [nombreProducto]: String(cantidad),
+        }));
+
         setCarritoEdicion(prev => {
             const updated = { ...prev };
             if (cantidad <= 0) {
@@ -1125,6 +1213,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     /** Confirma la edición: actualiza backend, stock local y el historial */
     const confirmarEdicionVenta = async () => {
         if (!ventaEnEdicion) return;
+        const metodoPagoNormalizado = normalizarMetodoPagoEdicion(metodoPagoEdicion);
 
         const nuevosDetalles = Object.entries(carritoEdicion).map(([nombre, item]) => ({
             nombre,
@@ -1148,6 +1237,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 await editarVentaRuta(ventaEnEdicion.id, {
                     detalles: nuevosDetalles,
                     total: nuevoTotal,
+                    metodo_pago: metodoPagoNormalizado,
                 });
             }
 
@@ -1158,7 +1248,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         (v.id && v.id === ventaEnEdicion.id) ||
                         (v.id_local && v.id_local === ventaEnEdicion.id_local);
                     if (mismaVenta) {
-                        return { ...v, detalles: nuevosDetalles, total: nuevoTotal, editada: true };
+                        return {
+                            ...v,
+                            detalles: nuevosDetalles,
+                            total: nuevoTotal,
+                            metodo_pago: metodoPagoNormalizado,
+                            editada: true,
+                        };
                     }
                     return v;
                 })
@@ -1172,7 +1268,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         (v.id_local && v.id_local === ventaEnEdicion.id_local) ||
                         (v._key && v._key === ventaEnEdicion._key);
                     if (mismaVenta) {
-                        return { ...v, detalles: nuevosDetalles, total: nuevoTotal, editada: true };
+                        return {
+                            ...v,
+                            detalles: nuevosDetalles,
+                            total: nuevoTotal,
+                            metodo_pago: metodoPagoNormalizado,
+                            editada: true,
+                        };
                     }
                     return v;
                 })
@@ -1191,11 +1293,51 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         (v.id && v.id === ventaEnEdicion.id) ||
                         (v.id_local && v.id_local === ventaEnEdicion.id_local);
                     if (mismaVenta) {
-                        return { ...v, detalles: nuevosDetalles, total: nuevoTotal, editada: true };
+                        return {
+                            ...v,
+                            detalles: nuevosDetalles,
+                            total: nuevoTotal,
+                            metodo_pago: metodoPagoNormalizado,
+                            editada: true,
+                        };
                     }
                     return v;
                 });
                 await AsyncStorage.setItem('ventas', JSON.stringify(ventasActualizadas));
+
+                // 🆕 Mantener coherencia con cola offline si la venta aún no se había sincronizado
+                try {
+                    const colaRaw = await AsyncStorage.getItem('ventas_pendientes_sync');
+                    const cola = colaRaw ? JSON.parse(colaRaw) : [];
+                    let huboCambiosEnCola = false;
+
+                    const colaActualizada = cola.map((pendiente) => {
+                        const idPendiente = pendiente?.id;
+                        const idLocalPendiente = pendiente?.data?.id_local;
+                        const mismaVenta =
+                            (idPendiente && (idPendiente === ventaEnEdicion.id || idPendiente === ventaEnEdicion.id_local)) ||
+                            (idLocalPendiente && (idLocalPendiente === ventaEnEdicion.id || idLocalPendiente === ventaEnEdicion.id_local));
+
+                        if (!mismaVenta) return pendiente;
+
+                        huboCambiosEnCola = true;
+                        return {
+                            ...pendiente,
+                            data: {
+                                ...(pendiente?.data || {}),
+                                detalles: nuevosDetalles,
+                                total: nuevoTotal,
+                                metodo_pago: metodoPagoNormalizado,
+                            },
+                        };
+                    });
+
+                    if (huboCambiosEnCola) {
+                        await AsyncStorage.setItem('ventas_pendientes_sync', JSON.stringify(colaActualizada));
+                    }
+                } catch (colaErr) {
+                    console.warn('⚠️ No se pudo actualizar la cola offline tras editar venta:', colaErr?.message || colaErr);
+                }
             } catch (err) {
                 console.error("Error guardando edición localmente", err);
             }
@@ -1271,6 +1413,10 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             setModalEdicionVisible(false);
             setVentaEnEdicion(null);
             setCarritoEdicion({});
+            setCantidadesEdicionInput({});
+            setMetodoPagoEdicion('EFECTIVO');
+            setBusquedaProductoEdicion('');
+            setFocoCampoEdicion(null);
 
             // Refrescar stock desde backend en segundo plano (sin exigir arrastrar para sincronizar)
             if (diaSeleccionado && fechaSeleccionada) {
@@ -1279,7 +1425,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             Alert.alert(
                 '✅ Venta editada',
-                `La venta fue actualizada correctamente.\nNuevo total: ${formatearMoneda(Math.round(nuevoTotal))}`,
+                `La venta fue actualizada correctamente.\nNuevo total: ${formatearMoneda(Math.round(nuevoTotal))}\nPago: ${metodoPagoNormalizado}`,
                 [{ text: 'Ver historial', onPress: () => abrirHistorialReimpresion() }, { text: 'OK' }]
             );
         } catch (error) {
@@ -1937,6 +2083,16 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         }))
     ), [productos, normalizarTexto]);
 
+    const productosSugeridosEdicion = useMemo(() => {
+        const query = normalizarTexto(busquedaProductoEdicion);
+        if (!query || query.length < 2) return [];
+
+        return productosIndexBusqueda
+            .filter((entry) => entry.nombreNormalizado.includes(query))
+            .slice(0, 8)
+            .map((entry) => entry.producto);
+    }, [busquedaProductoEdicion, productosIndexBusqueda, normalizarTexto]);
+
     // Filtrar productos según búsqueda (usa el estado local para funcionar igual online/offline)
     const productosFiltrados = useMemo(() => {
         const query = normalizarTexto(busquedaProductoDebounced);
@@ -2023,6 +2179,45 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const getPrecioProducto = useCallback((producto) => {
         return preciosPorProductoId[Number(producto.id)] ?? producto.precio;
     }, [preciosPorProductoId]);
+
+    const agregarProductoEdicion = useCallback((producto) => {
+        if (!producto?.nombre) return;
+
+        const nombreProducto = String(producto.nombre).trim();
+        const precioUnitario = Number(preciosPorProductoId[Number(producto.id)] ?? producto.precio ?? 0);
+
+        setCarritoEdicion((prev) => {
+            const itemActual = prev[nombreProducto];
+            const cantidadNueva = (itemActual?.cantidad || 0) + 1;
+
+            return {
+                ...prev,
+                [nombreProducto]: {
+                    cantidad: cantidadNueva,
+                    precio: precioUnitario,
+                    subtotal: precioUnitario * cantidadNueva,
+                },
+            };
+        });
+
+        setBusquedaProductoEdicion('');
+        setFocoCampoEdicion('cantidad');
+
+        // Enfocar de inmediato la cantidad del producto agregado para que el vendedor
+        // escriba la cantidad sin tener que buscar la fila manualmente.
+        setTimeout(() => {
+            const nombres = Object.keys(carritoEdicionRef.current || {});
+            const index = nombres.findIndex((n) => n === nombreProducto);
+            if (index >= 0) {
+                asegurarVisibilidadInputEdicion(index + 1, 0);
+            }
+
+            const inputRef = inputsCantidadEdicionRef.current[nombreProducto];
+            if (inputRef?.focus) {
+                inputRef.focus();
+            }
+        }, tecladoAbierto ? 80 : 150);
+    }, [preciosPorProductoId, asegurarVisibilidadInputEdicion, tecladoAbierto]);
 
     // Calcular totales - 🚀 Optimizado con useMemo
     const { subtotal, total } = useMemo(() => {
@@ -2763,14 +2958,16 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     }, [clienteSeleccionado, clientesOrdenDia]);
 
     useEffect(() => {
-        const showSub = Keyboard.addListener('keyboardDidShow', () => {
+        const showSub = Keyboard.addListener('keyboardDidShow', (event) => {
             setTecladoAbierto(true);
+            setAlturaTeclado(event?.endCoordinates?.height || 0);
             if (indiceCantidadEnFocoRef.current !== null) {
                 asegurarVisibilidadInputCantidad(indiceCantidadEnFocoRef.current, false);
             }
         });
         const hideSub = Keyboard.addListener('keyboardDidHide', () => {
             setTecladoAbierto(false);
+            setAlturaTeclado(0);
             setForzarMostrarTurno(false); // Resetear vistazo al cerrar teclado
             indiceCantidadEnFocoRef.current = null;
         });
@@ -3149,6 +3346,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                 indiceCantidadEnFocoRef.current = index;
                                 setInputCantidadEnFoco(true);
                                 asegurarVisibilidadInputCantidad(index);
+                                // Segundo ajuste cuando el teclado ya terminó de abrir.
+                                setTimeout(() => asegurarVisibilidadInputCantidad(index, false), 120);
                             }}
                             onBlur={() => {
                                 setInputCantidadEnFoco(false);
@@ -3495,6 +3694,10 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         asegurarVisibilidadInputCantidad(info.index);
                     }, 120);
                 }}
+                onScroll={(event) => {
+                    scrollOffsetProductosRef.current = event.nativeEvent.contentOffset?.y || 0;
+                }}
+                scrollEventThrottle={16}
                 // 🚀 Propiedades de optimización
                 initialNumToRender={10}
                 maxToRenderPerBatch={10}
@@ -4005,94 +4208,254 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             {/* 🆕 MODAL EDICIÓN DE VENTA */}
             <Modal
                 visible={modalEdicionVisible}
-                animationType="slide"
+                animationType="fade"
                 transparent={true}
                 onRequestClose={() => {
                     setModalEdicionVisible(false);
+                    setMetodoPagoEdicion('EFECTIVO');
+                    setCantidadesEdicionInput({});
+                    setBusquedaProductoEdicion('');
+                    setFocoCampoEdicion(null);
                     setMostrarHistorialVentas(true);
                 }}
             >
-                <KeyboardAvoidingView style={[styles.modalOverlay, { justifyContent: 'flex-end' }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                <KeyboardAvoidingView
+                    style={[
+                        styles.modalOverlay,
+                        {
+                            justifyContent: 'flex-end',
+                            // Mantener posición estable del modal para evitar el efecto
+                            // de "sube/baja" al abrir el teclado.
+                            paddingTop: 6,
+                            paddingHorizontal: tecladoAbierto ? 6 : 8,
+                            // Cuando se edita cantidad, damos más espacio al contenido
+                            // inferior (total + botones) para evitar que se "corte".
+                            paddingBottom: Platform.OS === 'android'
+                                ? (modoCantidadConTeclado ? 104 : 124)
+                                : (modoCantidadConTeclado ? 52 : 60),
+                        }
+                    ]}
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                >
                     <View style={{
                         backgroundColor: '#fff',
                         borderTopLeftRadius: 20,
                         borderTopRightRadius: 20,
-                        padding: 20,
-                        maxHeight: '90%',
+                        width: '100%',
+                        padding: 12,
+                        maxHeight: '98%',
                         flexShrink: 1,
+                        overflow: 'hidden',
                     }}>
                         {/* Header */}
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: modoCantidadConTeclado ? 8 : 16 }}>
                             <View>
                                 <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#333' }}>✏️ Editar Venta</Text>
-                                <Text style={{ fontSize: 13, color: '#666', marginTop: 2 }}>
-                                    {ventaEnEdicion?.cliente_negocio || ventaEnEdicion?.cliente_nombre || 'Cliente'}
-                                </Text>
+                                {!modoCantidadConTeclado && (
+                                    <Text style={{ fontSize: 13, color: '#666', marginTop: 2 }}>
+                                        {ventaEnEdicion?.cliente_negocio || ventaEnEdicion?.cliente_nombre || 'Cliente'}
+                                    </Text>
+                                )}
                             </View>
                             <TouchableOpacity onPress={() => {
                                 setModalEdicionVisible(false);
+                                setMetodoPagoEdicion('EFECTIVO');
+                                setCantidadesEdicionInput({});
+                                setBusquedaProductoEdicion('');
+                                setFocoCampoEdicion(null);
                                 setMostrarHistorialVentas(true);
                             }}>
                                 <Ionicons name="close-circle" size={30} color="#999" />
                             </TouchableOpacity>
                         </View>
 
-                        <Text style={{ fontSize: 12, color: '#e74c3c', marginBottom: 12, fontStyle: 'italic' }}>
-                            ⚠️ Modifica las cantidades. El stock y el Cargue se ajustarán automáticamente.
-                        </Text>
+                            <View style={{ marginTop: -4, marginBottom: tecladoAbierto ? 6 : 10 }}>
+                                <View style={{ flexDirection: 'row', gap: 8 }}>
+                                    {METODOS_PAGO_VALIDOS_EDICION.map((metodo) => {
+                                        const activo = metodoPagoEdicion === metodo;
+                                        return (
+                                            <TouchableOpacity
+                                                key={metodo}
+                                                style={{
+                                                    flex: 1,
+                                                    borderWidth: 1,
+                                                    borderColor: activo ? '#003d88' : '#d0d7de',
+                                                    backgroundColor: activo ? '#003d88' : '#f8f9fa',
+                                                    borderRadius: 8,
+                                                    paddingVertical: tecladoAbierto ? 8 : 10,
+                                                    alignItems: 'center',
+                                                }}
+                                                onPress={() => setMetodoPagoEdicion(metodo)}
+                                            >
+                                                <Text style={{ color: activo ? '#fff' : '#333', fontWeight: '700', fontSize: tecladoAbierto ? 11 : 12 }}>
+                                                    {metodo}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                            </View>
 
-                        <ScrollView
-                            style={{ flexShrink: 1, maxHeight: 400 }}
-                            contentContainerStyle={{ paddingBottom: 20 }}
-                            keyboardShouldPersistTaps="handled"
-                        >
-                            {Object.entries(carritoEdicion).map(([nombre, item]) => (
+                            <View style={{ marginBottom: tecladoAbierto ? 6 : 12 }}>
+                                <TextInput
+                                    style={{
+                                        borderWidth: 1,
+                                        borderColor: '#ced4da',
+                                        borderRadius: 8,
+                                        paddingHorizontal: 12,
+                                        paddingVertical: 10,
+                                        fontSize: 14,
+                                        color: '#333',
+                                        backgroundColor: '#fff',
+                                    }}
+                                    placeholder="Buscar producto para agregar..."
+                                    value={busquedaProductoEdicion}
+                                    onChangeText={setBusquedaProductoEdicion}
+                                    onFocus={() => {
+                                        setFocoCampoEdicion('search');
+                                        asegurarVisibilidadInputEdicion(0);
+                                    }}
+                                    onBlur={() => {
+                                        setFocoCampoEdicion((prev) => (prev === 'search' ? null : prev));
+                                    }}
+                                    placeholderTextColor="#999"
+                                />
+
+                                {busquedaProductoEdicion.trim().length >= 2 && (
+                                    <View style={{
+                                        marginTop: 8,
+                                        borderWidth: 1,
+                                        borderColor: '#e1e4e8',
+                                        borderRadius: 8,
+                                        backgroundColor: '#f8f9fa',
+                                        maxHeight: tecladoAbierto ? 220 : 170,
+                                    }}>
+                                        <ScrollView keyboardShouldPersistTaps="handled">
+                                            {productosSugeridosEdicion.length === 0 ? (
+                                                <Text style={{ padding: 10, fontSize: 12, color: '#666' }}>
+                                                    Sin coincidencias.
+                                                </Text>
+                                            ) : (
+                                                productosSugeridosEdicion.map((prod) => (
+                                                    <View
+                                                        key={`edit-add-${prod.id}`}
+                                                        style={{
+                                                            flexDirection: 'row',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'space-between',
+                                                            paddingHorizontal: 10,
+                                                            paddingVertical: 8,
+                                                            borderBottomWidth: 1,
+                                                            borderBottomColor: '#e9ecef',
+                                                        }}
+                                                    >
+                                                        <View style={{ flex: 1, paddingRight: 8 }}>
+                                                            <Text style={{ fontSize: 13, color: '#222', fontWeight: '600' }}>
+                                                                {prod.nombre}
+                                                            </Text>
+                                                            <Text style={{ fontSize: 12, color: '#666' }}>
+                                                                {formatearMoneda(preciosPorProductoId[Number(prod.id)] ?? prod.precio ?? 0)}
+                                                            </Text>
+                                                        </View>
+                                                        <TouchableOpacity
+                                                            style={{
+                                                                backgroundColor: '#00ad53',
+                                                                borderRadius: 7,
+                                                                paddingHorizontal: 12,
+                                                                paddingVertical: 6,
+                                                            }}
+                                                            onPress={() => agregarProductoEdicion(prod)}
+                                                        >
+                                                            <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>Agregar</Text>
+                                                        </TouchableOpacity>
+                                                    </View>
+                                                ))
+                                            )}
+                                        </ScrollView>
+                                    </View>
+                                )}
+                            </View>
+
+                            <ScrollView
+                                ref={listaEdicionRef}
+                                style={{
+                                    flexShrink: 1,
+                                    minHeight: tecladoAbierto ? 72 : 90,
+                                    maxHeight: tecladoAbierto
+                                        ? (focoCampoEdicion === 'cantidad' ? 170 : 130)
+                                        : 220,
+                                }}
+                                contentContainerStyle={{ paddingBottom: tecladoAbierto ? 10 : 20 }}
+                                keyboardShouldPersistTaps="handled"
+                            >
+                            {Object.entries(carritoEdicion).map(([nombre, item], idx) => (
                                 <View key={nombre} style={{
                                     flexDirection: 'row',
                                     alignItems: 'center',
                                     justifyContent: 'space-between',
-                                    padding: 12,
+                                    padding: 9,
                                     backgroundColor: '#f8f9fa',
-                                    borderRadius: 8,
-                                    marginBottom: 8,
+                                    borderRadius: 7,
+                                    marginBottom: 6,
                                     borderWidth: 1,
                                     borderColor: '#e9ecef',
                                 }}>
                                     <View style={{ flex: 1 }}>
-                                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#333' }}>{nombre}</Text>
-                                        <Text style={{ fontSize: 12, color: '#666' }}>
+                                        <Text style={{ fontSize: 12, fontWeight: '600', color: '#333' }}>{nombre}</Text>
+                                        <Text style={{ fontSize: 11, color: '#666' }}>
                                             {formatearMoneda(item.precio)} c/u
                                         </Text>
                                     </View>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                         {/* Decrementar */}
                                         <TouchableOpacity
-                                            style={{ backgroundColor: '#e74c3c', borderRadius: 6, width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
+                                            style={{ backgroundColor: '#e74c3c', borderRadius: 6, width: 30, height: 30, justifyContent: 'center', alignItems: 'center' }}
                                             onPress={() => cambiarCantidadEdicion(nombre, item.cantidad - 1)}
                                         >
-                                            <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', lineHeight: 22 }}>−</Text>
+                                            <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold', lineHeight: 20 }}>−</Text>
                                         </TouchableOpacity>
                                         {/* Input cantidad */}
                                         <TextInput
+                                            ref={(ref) => {
+                                                if (ref) {
+                                                    inputsCantidadEdicionRef.current[nombre] = ref;
+                                                } else {
+                                                    delete inputsCantidadEdicionRef.current[nombre];
+                                                }
+                                            }}
                                             style={{
                                                 borderWidth: 1, borderColor: '#ced4da', borderRadius: 6,
-                                                width: 48, textAlign: 'center', fontSize: 16, fontWeight: 'bold',
-                                                paddingVertical: 4, color: '#333'
+                                                width: 44, textAlign: 'center', fontSize: 15, fontWeight: 'bold',
+                                                paddingVertical: 3, color: '#333'
                                             }}
                                             keyboardType="numeric"
-                                            value={String(item.cantidad)}
+                                            value={cantidadesEdicionInput[nombre] ?? String(item.cantidad)}
                                             onChangeText={(val) => cambiarCantidadEdicion(nombre, val)}
+                                            onBlur={() => {
+                                                setFocoCampoEdicion((prev) => (prev === 'cantidad' ? null : prev));
+                                                setCantidadesEdicionInput(prev => ({
+                                                    ...prev,
+                                                    [nombre]: String(carritoEdicion[nombre]?.cantidad ?? 0),
+                                                }));
+                                            }}
+                                            onFocus={() => {
+                                                setFocoCampoEdicion('cantidad');
+                                                // Un solo scroll (con pequeño delay si el teclado aún no abrió)
+                                                // para evitar el salto arriba/abajo.
+                                                const delay = tecladoAbierto ? 0 : 120;
+                                                asegurarVisibilidadInputEdicion(idx + 1, delay);
+                                            }}
                                             selectTextOnFocus={true} /* 🆕 Auto-selecciona el numero al hacer click */
                                         />
                                         {/* Incrementar */}
                                         <TouchableOpacity
-                                            style={{ backgroundColor: '#00ad53', borderRadius: 6, width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
+                                            style={{ backgroundColor: '#00ad53', borderRadius: 6, width: 30, height: 30, justifyContent: 'center', alignItems: 'center' }}
                                             onPress={() => cambiarCantidadEdicion(nombre, item.cantidad + 1)}
                                         >
-                                            <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', lineHeight: 22 }}>+</Text>
+                                            <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold', lineHeight: 20 }}>+</Text>
                                         </TouchableOpacity>
                                         {/* Subtotal */}
-                                        <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#003d88', minWidth: 70, textAlign: 'right' }}>
+                                        <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#003d88', minWidth: 62, textAlign: 'right' }}>
                                             {formatearMoneda(item.precio * item.cantidad)}
                                         </Text>
                                     </View>
@@ -4101,7 +4464,15 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         </ScrollView>
 
                         {/* Total actualizado */}
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e9ecef' }}>
+                        <View style={{
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginTop: tecladoAbierto ? 8 : 12,
+                            paddingTop: modoCantidadConTeclado ? 6 : (tecladoAbierto ? 8 : 12),
+                            borderTopWidth: 1,
+                            borderTopColor: '#e9ecef'
+                        }}>
                             <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#333' }}>NUEVO TOTAL</Text>
                             <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#e74c3c' }}>
                                 {formatearMoneda(Math.round(
@@ -4111,18 +4482,34 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         </View>
 
                         {/* Botones */}
-                        <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+                        <View style={{ flexDirection: 'row', gap: 12, marginTop: modoCantidadConTeclado ? 8 : (tecladoAbierto ? 10 : 16) }}>
                             <TouchableOpacity
-                                style={{ flex: 1, backgroundColor: '#6c757d', padding: 14, borderRadius: 10, alignItems: 'center' }}
+                                style={{
+                                    flex: 1,
+                                    backgroundColor: '#6c757d',
+                                    padding: tecladoAbierto ? 11 : 14,
+                                    borderRadius: 10,
+                                    alignItems: 'center'
+                                }}
                                 onPress={() => {
                                     setModalEdicionVisible(false);
+                                    setMetodoPagoEdicion('EFECTIVO');
+                                    setCantidadesEdicionInput({});
+                                    setBusquedaProductoEdicion('');
+                                    setFocoCampoEdicion(null);
                                     setMostrarHistorialVentas(true);
                                 }}
                             >
                                 <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 15 }}>Cancelar</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                                style={{ flex: 2, backgroundColor: cargandoEdicion ? '#aaa' : '#e74c3c', padding: 14, borderRadius: 10, alignItems: 'center' }}
+                                style={{
+                                    flex: 2,
+                                    backgroundColor: cargandoEdicion ? '#aaa' : '#e74c3c',
+                                    padding: tecladoAbierto ? 11 : 14,
+                                    borderRadius: 10,
+                                    alignItems: 'center'
+                                }}
                                 onPress={confirmarEdicionVenta}
                                 disabled={cargandoEdicion}
                             >
