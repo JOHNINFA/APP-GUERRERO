@@ -295,8 +295,24 @@ export const editarVentaRuta = async (ventaId, datosActualizados) => {
     });
 
     if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Error al editar venta: ${response.status} - ${errorText}`);
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch (_) {
+            payload = null;
+        }
+
+        const backendMessage =
+            payload?.error ||
+            payload?.detail ||
+            payload?.mensaje ||
+            `Error al editar venta (${response.status})`;
+
+        const error = new Error(backendMessage);
+        error.code = payload?.codigo || payload?.code || `HTTP_${response.status}`;
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
     }
 
     return await response.json();
