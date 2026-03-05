@@ -78,6 +78,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [pedidosEntregadosHoy, setPedidosEntregadosHoy] = useState([]); // 🆕 IDs de pedidos entregados hoy
     const [pedidosNoEntregadosHoy, setPedidosNoEntregadosHoy] = useState([]); // 🆕 Pedidos NO entregados hoy
     const [mostrarHistorialVentas, setMostrarHistorialVentas] = useState(false); // 🆕 Estado para modal historial
+    const [mostrarSoloAnuladas, setMostrarSoloAnuladas] = useState(false); // 🆕 Filtro para ver solo ventas anuladas
     const [clientesOrdenDia, setClientesOrdenDia] = useState([]); // 🆕 Orden del día para auto-avance
     const [clienteSeleccionadoEsPedido, setClienteSeleccionadoEsPedido] = useState(false);
     const [tecladoAbierto, setTecladoAbierto] = useState(false);
@@ -4374,21 +4375,132 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             >
                 <View style={[styles.modalOverlay, { justifyContent: 'flex-end' }]}>
                     <View style={[styles.modalContent, { maxHeight: '80%', width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, backgroundColor: 'transparent', borderWidth: 0, shadowOpacity: 0, elevation: 0 }]}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 15 }}>
-                            <TouchableOpacity onPress={() => setMostrarHistorialVentas(false)}>
-                                <Ionicons name="close-circle" size={30} color="#666" />
-                            </TouchableOpacity>
-                        </View>
+                        {(() => {
+                            // Separamos las listas y calculamos totales y cantidades
+                            const ventasRegulares = historialReimpresion.filter(v => v.estado !== 'ANULADA');
+                            const totalVentasHistorial = ventasRegulares.reduce((suma, v) => suma + (parseFloat(v.total) || 0), 0);
+                            const qtyVentas = ventasRegulares.length;
+
+                            const ventasAnuladas = historialReimpresion.filter(v => v.estado === 'ANULADA');
+                            const totalAnuladas = ventasAnuladas.reduce((suma, v) => suma + (parseFloat(v.total) || 0), 0);
+                            const qtyAnuladas = ventasAnuladas.length;
+
+                            return (
+                                <View style={{ marginBottom: 15 }}>
+                                    {/* Contenedor Superior: Botón X a la derecha */}
+                                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 10 }}>
+                                        <TouchableOpacity
+                                            onPress={() => setMostrarHistorialVentas(false)}
+                                            style={{
+                                                backgroundColor: 'rgba(0, 61, 136, 0.15)',
+                                                width: 36,
+                                                height: 36,
+                                                borderRadius: 18,
+                                                justifyContent: 'center',
+                                                alignItems: 'center',
+                                            }}
+                                        >
+                                            <Ionicons name="close" size={24} color="#ffffff" />
+                                        </TouchableOpacity>
+                                    </View>
+
+                                    {/* Contenedor de ÚNICA Card Principal */}
+                                    <View style={{ flexDirection: 'column' }}>
+                                        <View
+                                            style={{
+                                                backgroundColor: mostrarSoloAnuladas ? '#fff0f0' : '#eefdf5',
+                                                borderRadius: 12,
+                                                paddingHorizontal: 12,
+                                                paddingVertical: 8,
+                                                borderWidth: 1,
+                                                borderColor: mostrarSoloAnuladas ? '#fce8e8' : '#d1fae5',
+                                                flexDirection: 'row',
+                                                justifyContent: qtyAnuladas > 0 ? 'space-between' : 'center',
+                                                alignItems: 'center',
+                                            }}
+                                        >
+                                            {/* Sección Izquierda: Datos de la Venta Regular en Horizontal */}
+                                            <View style={{ flexDirection: 'column', flex: qtyAnuladas > 0 ? 1 : 0, paddingRight: qtyAnuladas > 0 ? 10 : 0, alignItems: qtyAnuladas > 0 ? 'flex-start' : 'center' }}>
+                                                {/* Arriba: Círculo y Texto "VENTAS REG" + Monto Grande */}
+                                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                    <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', marginRight: 6, elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 1 }}>
+                                                        <Ionicons name={mostrarSoloAnuladas ? "ban" : "trending-up"} size={12} color={mostrarSoloAnuladas ? "#dc2626" : "#059669"} />
+                                                    </View>
+
+                                                    <View style={{ flexDirection: 'column', justifyContent: 'center' }}>
+                                                        <Text style={{ color: mostrarSoloAnuladas ? '#dc2626' : '#059669', fontSize: 9, fontWeight: 'bold', letterSpacing: 0.5, marginBottom: 1 }}>
+                                                            {mostrarSoloAnuladas ? 'ANULADAS' : 'VENTAS REG.'}
+                                                        </Text>
+                                                        <Text
+                                                            style={{ fontSize: 18, fontWeight: 'bold', color: '#1e293b', lineHeight: 20 }}
+                                                            numberOfLines={1}
+                                                            adjustsFontSizeToFit={true}
+                                                            minimumFontScale={0.6}
+                                                        >
+                                                            {formatearMoneda(Math.round(mostrarSoloAnuladas ? totalAnuladas : totalVentasHistorial))}
+                                                        </Text>
+                                                    </View>
+                                                </View>
+
+                                                {/* Abajo: Pastillita de transacciones bien achatada */}
+                                                <View style={{ alignSelf: qtyAnuladas > 0 ? 'flex-start' : 'center', backgroundColor: mostrarSoloAnuladas ? '#fee2e2' : '#dcfce7', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, marginTop: 4, flexDirection: 'row', alignItems: 'center', marginLeft: qtyAnuladas > 0 ? 28 : 0 }}>
+                                                    <View style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: mostrarSoloAnuladas ? '#dc2626' : '#16a34a', marginRight: 4 }} />
+                                                    <Text style={{ color: mostrarSoloAnuladas ? '#991b1b' : '#166534', fontSize: 9, fontWeight: 'bold' }}>
+                                                        {mostrarSoloAnuladas ? `${qtyAnuladas} cancelaciones` : `${qtyVentas} transacciones`}
+                                                    </Text>
+                                                </View>
+                                            </View>
+
+                                            {/* Sección Derecha: Badge/Botón para Anuladas (Solo si hay) */}
+                                            {qtyAnuladas > 0 && (
+                                                <TouchableOpacity
+                                                    activeOpacity={0.8}
+                                                    onPress={() => setMostrarSoloAnuladas(!mostrarSoloAnuladas)}
+                                                    style={{
+                                                        backgroundColor: mostrarSoloAnuladas ? '#fff' : '#fee2e2',
+                                                        borderRadius: 20,
+                                                        paddingHorizontal: 12,
+                                                        paddingVertical: 6,
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        flexDirection: 'row',
+                                                        borderWidth: 1,
+                                                        borderColor: '#fca5a5',
+                                                        elevation: 1,
+                                                        flexShrink: 0, // <-- Evita que la pastilla de la derecha se apachurre
+                                                    }}
+                                                >
+                                                    <Ionicons name={mostrarSoloAnuladas ? "return-up-back" : "warning"} size={14} color={mostrarSoloAnuladas ? "#2563eb" : "#dc2626"} style={{ marginRight: 4 }} />
+                                                    <Text style={{ color: mostrarSoloAnuladas ? '#2563eb' : '#dc2626', fontSize: 11, fontWeight: 'bold' }}>
+                                                        {mostrarSoloAnuladas ? 'Ver Todas' : 'Anuladas'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            )}
+                                        </View>
+                                    </View>
+                                </View>
+                            );
+                        })()}
 
                         <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
                             {cargandoHistorial && (
                                 <Text style={{ textAlign: 'center', color: '#666', marginBottom: 10 }}>Cargando historial...</Text>
                             )}
 
-                            {historialReimpresion.length === 0 ? (
-                                <Text style={{ textAlign: 'center', color: '#666', marginTop: 20 }}>No hay ventas registradas hoy</Text>
-                            ) : (
-                                historialReimpresion.map((venta) => {
+                            {(() => {
+                                const ventasAMostrar = mostrarSoloAnuladas
+                                    ? historialReimpresion.filter(v => v.estado === 'ANULADA')
+                                    : historialReimpresion.filter(v => v.estado !== 'ANULADA'); // <-- Excluir aquí las anuladas de la vista normal
+
+                                if (ventasAMostrar.length === 0) {
+                                    return (
+                                        <Text style={{ textAlign: 'center', color: '#666', marginTop: 20 }}>
+                                            {mostrarSoloAnuladas ? 'No hay ventas anuladas que mostrar' : 'No hay ventas registradas hoy'}
+                                        </Text>
+                                    );
+                                }
+
+                                return ventasAMostrar.map((venta) => {
                                     const esAnulada = venta.estado === 'ANULADA';
                                     const yaModificada = ventaYaFueModificada(venta);
                                     const metodoPagoCard = normalizarMetodoPagoEdicion(venta?.metodo_pago);
@@ -4498,9 +4610,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                             </View>
                                         </View>
                                     );
-                                })
-
-                            )}
+                                });
+                            })()}
                         </ScrollView>
                     </View>
                 </View>
