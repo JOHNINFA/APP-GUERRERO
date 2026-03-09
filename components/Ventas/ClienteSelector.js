@@ -49,7 +49,10 @@ const ClienteSelector = ({
     onMarcarEntregado, // 🆕 Función para marcar pedido como entregado
     onMarcarNoEntregado, // 🆕 Función para marcar pedido como no entregado
     onClientesDiaActualizados, // 🆕 Reportar orden del día al padre para auto-siguiente cliente
-    onActualizarPedidos // 🆕 Refrescar pedidos pendientes desde el padre
+    onActualizarPedidos, // 🆕 Refrescar pedidos pendientes desde el padre
+    onClienteOcasional, // 🆕 Callback para abrir modal de cliente ocasional
+    flagCrearCliente: flagCrearClienteProp, // 🆕 Flag desde VentasScreen (polling 30s)
+    flagVentaRapida: flagVentaRapidaProp // 🆕 Flag desde VentasScreen (polling 30s)
 }) => {
     const [clientesDelDia, setClientesDelDia] = useState([]);
     const [todosLosClientes, setTodosLosClientes] = useState([]);
@@ -67,6 +70,16 @@ const ClienteSelector = ({
     // 🆕 Estados para Drag & Drop
     const [modoOrdenar, setModoOrdenar] = useState(false);
     const [guardandoOrden, setGuardandoOrden] = useState(false);
+    // 🆕 Flag para habilitar/deshabilitar botón Nuevo Cliente
+    const [permitirCrearCliente, setPermitirCrearCliente] = useState(true);
+    // 🆕 Flag para habilitar/deshabilitar botón Venta Rápida
+    const [permitirVentaRapida, setPermitirVentaRapida] = useState(true);
+
+    // 🆕 Sincronizar flags desde props (polling de VentasScreen cada 30s)
+    useEffect(() => {
+        if (flagCrearClienteProp !== undefined) setPermitirCrearCliente(flagCrearClienteProp);
+        if (flagVentaRapidaProp !== undefined) setPermitirVentaRapida(flagVentaRapidaProp);
+    }, [flagCrearClienteProp, flagVentaRapidaProp]);
 
     const normalizarTexto = (texto) => (texto ? texto.toString().toLowerCase().trim() : '');
     const ITEM_HEIGHT_ESTIMADO = 96;
@@ -98,7 +111,7 @@ const ClienteSelector = ({
         cacheKeyDia: `${CACHE_KEY_CLIENTES_DIA}${userId}_${dia}`
     });
 
-    // 🆕 Obtener rutaId del vendedor (ya no es necesario para guardar orden)
+    // 🆕 Obtener rutaId del vendedor + flags de permisos (revisa TODAS las rutas)
     const obtenerRutaId = async () => {
         try {
             const response = await fetch(`${API_URL}/api/rutas/?vendedor_id=${userId}`);
@@ -106,7 +119,12 @@ const ClienteSelector = ({
                 const rutas = await response.json();
                 if (rutas.length > 0) {
                     setRutaId(rutas[0].id);
-                    console.log('📍 RutaId obtenida:', rutas[0].id);
+                    // 🆕 Revisar TODAS las rutas: si ALGUNA tiene el flag en false, deshabilitar
+                    const permitidoCrear = rutas.every(r => r.permitir_crear_cliente !== false);
+                    const permitidoRapida = rutas.every(r => r.permitir_venta_rapida !== false);
+                    setPermitirCrearCliente(permitidoCrear);
+                    setPermitirVentaRapida(permitidoRapida);
+                    console.log(`📍 Rutas: ${rutas.map(r => r.nombre).join(', ')} | Crear: ${permitidoCrear} | Rápida: ${permitidoRapida}`);
                     return rutas[0].id;
                 }
             }
@@ -433,6 +451,11 @@ const ClienteSelector = ({
                 const clientesDiaFormateados = dataDia.map((c, index) => formatearCliente(c, index, true));
                 const { cacheKeyTodos, cacheKeyDia } = construirCacheKeys(dia);
 
+                // 🔥 FIX SALTO VISUAL: Comparar IDs para evitar re-render innecesario
+                const idsNuevos = clientesDiaFormateados.map(c => c.id).join(',');
+                const idsActuales = clientesDelDia.map(c => c.id).join(',');
+                const ordenCambio = idsNuevos !== idsActuales;
+
                 await AsyncStorage.setItem(cacheKeyDia, JSON.stringify({
                     clientes: clientesDiaFormateados,
                     timestamp: Date.now()
@@ -445,13 +468,16 @@ const ClienteSelector = ({
                     }));
                 }
 
-                // 🆕 Los clientes ya vienen filtrados y ordenados por día del servidor
-                setClientesDelDia(clientesDiaFormateados);
+                // 🆕 Solo actualizar estado si realmente cambió (evita salto visual)
+                if (ordenCambio) {
+                    setClientesDelDia(clientesDiaFormateados);
+                    console.log('✅ Clientes actualizados en segundo plano (orden cambió). Día:', dia);
+                } else {
+                    console.log('✅ Clientes sin cambios de orden, omitiendo re-render. Día:', dia);
+                }
                 if (clientesTodosFormateados) {
                     setTodosLosClientes(clientesTodosFormateados);
                 }
-
-                console.log('✅ Clientes actualizados en segundo plano. Orden del día:', dia);
             }
         } catch (error) {
             console.log('⚠️ Error actualizando en fondo:', error.message);
@@ -1263,8 +1289,8 @@ const ClienteSelector = ({
                     >
                         <TouchableOpacity
                             style={[styles.btnFlechaMini, esPrimero && styles.btnFlechaDeshabilitado]}
-                                onPressIn={() => startRapidMove(indiceOrdenBase, -1)} // 🚀 Inicio Hold
-                                onPressOut={() => stopRapidMove(indiceOrdenBase, -1)} // 🚀 Fin Hold
+                            onPressIn={() => startRapidMove(indiceOrdenBase, -1)} // 🚀 Inicio Hold
+                            onPressOut={() => stopRapidMove(indiceOrdenBase, -1)} // 🚀 Fin Hold
                             disabled={esPrimero}
                         >
                             <Ionicons name="chevron-up" size={24} color={esPrimero ? "#eee" : "#003d88"} />
@@ -1294,8 +1320,8 @@ const ClienteSelector = ({
 
                         <TouchableOpacity
                             style={[styles.btnFlechaMini, esUltimo && styles.btnFlechaDeshabilitado]}
-                                onPressIn={() => startRapidMove(indiceOrdenBase, 1)} // 🚀 Inicio Hold
-                                onPressOut={() => stopRapidMove(indiceOrdenBase, 1)} // 🚀 Fin Hold
+                            onPressIn={() => startRapidMove(indiceOrdenBase, 1)} // 🚀 Inicio Hold
+                            onPressOut={() => stopRapidMove(indiceOrdenBase, 1)} // 🚀 Fin Hold
                             disabled={esUltimo}
                         >
                             <Ionicons name="chevron-down" size={24} color={esUltimo ? "#eee" : "#003d88"} />
@@ -1433,8 +1459,8 @@ const ClienteSelector = ({
                         style={styles.inputBusqueda}
                         placeholder="Buscar por nombre, negocio o dirección..."
                         value={busqueda}
-                        onChangeText={setBusqueda}
-                        autoCapitalize="none"
+                        onChangeText={(text) => setBusqueda(text.toUpperCase())}
+                        autoCapitalize="characters"
                     />
                     {busqueda.length > 0 && (
                         <TouchableOpacity onPress={() => setBusqueda('')}>
@@ -1467,14 +1493,55 @@ const ClienteSelector = ({
                         </Text>
                     </TouchableOpacity>
 
-                    {/* Botón Nuevo Cliente */}
+                    {/* Botón Nuevo Cliente — se deshabilita visualmente según flag de ruta */}
                     <TouchableOpacity
-                        style={[styles.btnAccion, { backgroundColor: '#00ad53' }]}
-                        onPress={handleNuevoCliente}
+                        style={[
+                            styles.btnAccion,
+                            { backgroundColor: '#00ad53' },
+                            !permitirCrearCliente && { opacity: 0.35 }
+                        ]}
+                        onPress={() => {
+                            if (!permitirCrearCliente) {
+                                Alert.alert(
+                                    'No disponible',
+                                    'La creación de clientes está deshabilitada para esta ruta.',
+                                    [{ text: 'Entendido' }]
+                                );
+                                return;
+                            }
+                            handleNuevoCliente();
+                        }}
                     >
                         <Ionicons name="add-circle" size={20} color="white" />
                         <Text style={styles.btnAccionTexto}>Nuevo Cliente</Text>
                     </TouchableOpacity>
+
+                    {/* 🆕 Botón Venta Rápida (Cliente Ocasional) — respeta flag de ruta */}
+                    {onClienteOcasional && (
+                        <TouchableOpacity
+                            style={[
+                                styles.btnAccion,
+                                { backgroundColor: '#f59e0b' },
+                                !permitirVentaRapida && { opacity: 0.35 }
+                            ]}
+                            onPress={() => {
+                                if (!permitirVentaRapida) {
+                                    Alert.alert(
+                                        'No disponible',
+                                        'La venta rápida está deshabilitada para esta ruta.',
+                                        [{ text: 'Entendido' }]
+                                    );
+                                    return;
+                                }
+                                onClienteOcasional();
+                                setMostrarTodos(false);
+                                onClose();
+                            }}
+                        >
+                            <Ionicons name="flash" size={20} color="white" />
+                            <Text style={styles.btnAccionTexto}>Ocasional</Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
 
                 {/* 🆕 Indicador de guardando */}
@@ -1637,14 +1704,16 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 10,
+        paddingVertical: 10,
+        paddingHorizontal: 6,
         borderRadius: 8,
-        gap: 6,
+        gap: 3,
     },
     btnAccionTexto: {
         color: 'white',
-        fontSize: 14,
+        fontSize: 11,
         fontWeight: 'bold',
+        textAlign: 'center',
     },
     btnNuevoCliente: {
         flex: 1,
@@ -1676,6 +1745,7 @@ const styles = StyleSheet.create({
     },
     listaContent: {
         padding: 15,
+        paddingBottom: 100, // 🆕 Espacio extra para que no se sienta reducido o cortado al final
     },
     clienteItem: {
         flexDirection: 'row',

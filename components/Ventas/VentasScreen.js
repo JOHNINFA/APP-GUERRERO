@@ -5,6 +5,7 @@ import DateTimePicker from '@react-native-community/datetimepicker'; // 🆕 Imp
 import ClienteSelector from './ClienteSelector';
 import ClienteModal from './ClienteModal';
 import ClienteNotaModal from './ClienteNotaModal'; // 🆕 Importar
+import ClienteOcasionalModal from './ClienteOcasionalModal'; // 🆕 Modal venta rápida
 import DevolucionesVencidas from './DevolucionesVencidas';
 import ResumenVentaModal from './ResumenVentaModal';
 import { ConfirmarEntregaModal } from './ConfirmarEntregaModal'; // 🆕 Importar modal
@@ -91,7 +92,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [guardandoMetodoPagoCard, setGuardandoMetodoPagoCard] = useState(false);
     const [inputBuscadorEnFoco, setInputBuscadorEnFoco] = useState(false); // 🆕 Rastrear foco del buscador
     const [forzarMostrarTurno, setForzarMostrarTurno] = useState(false); // 🆕 Para ver el turno bajo demanda (peeking)
-    const [inputCantidadEnFoco, setInputCantidadEnFoco] = useState(false); // 🆕 Rastrear foco específico en inputs de cantidad
+    const [compensacionBloqueSuperior, setCompensacionBloqueSuperior] = useState(0);
 
     // 🆕 Estados para edición de venta desde historial
     const [ventaEnEdicion, setVentaEnEdicion] = useState(null); // venta completa que se está editando
@@ -103,9 +104,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [focoCampoEdicion, setFocoCampoEdicion] = useState(null); // null | 'search' | 'cantidad'
     const [cargandoEdicion, setCargandoEdicion] = useState(false);
     const modoCantidadConTeclado = tecladoAbierto && focoCampoEdicion === 'cantidad';
-    const alturaListaEdicionConTeclado = focoCampoEdicion === 'cantidad'
-        ? (alturaTeclado >= 320 ? 165 : 185) // VOLVEMOS AL ESTABLE ANTERIOR
-        : 155;
+    const alturaListaEdicionConTeclado = (alturaTeclado >= 320 ? 150 : 170);
 
     // 🆕 Ventas del backend del día actual (para badges y alertas de venta duplicada)
     const [ventasBackendDia, setVentasBackendDia] = useState([]);
@@ -119,10 +118,15 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const bannerTimerRef = useRef(null);
     const modalSyncTimerRef = useRef(null);
     const sincronizandoAutoRef = useRef(false);
+    const bloqueSuperiorRef = useRef(null);
+    const bloqueSuperiorYBaseRef = useRef(null);
+    const compensacionRafRef = useRef(null);
     const buscadorRef = useRef(null);
     const listaProductosRef = useRef(null);
     const scrollOffsetProductosRef = useRef(0);
     const indiceCantidadEnFocoRef = useRef(null);
+    const [indiceCantidadActivo, setIndiceCantidadActivo] = useState(null); // Para saber en qué indice estamos usando el foco de cantidad y ocultar base 
+    const tecladoDesdeCantidadPrincipalRef = useRef(false);
     const scrollOffsetEdicionRef = useRef(0);
     const indiceCantidadEdicionEnFocoRef = useRef(null);
     const carritoRef = useRef({});
@@ -133,37 +137,106 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const asegurarVisibilidadInputCantidad = useCallback((index, animated = true, forzarTecladoAbierto = null) => {
         if (index === null || index === undefined || index < 0) return;
 
-        const tecladoActivo = typeof forzarTecladoAbierto === 'boolean'
-            ? forzarTecladoAbierto
-            : tecladoAbierto;
-
         requestAnimationFrame(() => {
             try {
-                if (tecladoActivo) {
-                    // Con teclado abierto evitamos "bajones" del item:
-                    // solo desplazamos la lista hacia arriba (nunca hacia abajo).
-                    const altoEstimadoFila = 92;
-                    const target = Math.max(0, (index * altoEstimadoFila) - 220);
-                    const actual = scrollOffsetProductosRef.current || 0;
-                    const offsetSeguro = Math.max(target, actual);
-                    listaProductosRef.current?.scrollToOffset({
-                        offset: offsetSeguro,
-                        animated: false,
-                    });
-                    return;
-                }
-
+                // Hacemos scroll directo al índice sin usar offset matemático fijo para
+                // evitar que Android colapse el ScrollView y empuje el header superior.
                 listaProductosRef.current?.scrollToIndex({
                     index,
-                    viewPosition: 0.22,
-                    viewOffset: 40,
-                    animated,
+                    viewPosition: 0.1, // Mostrarlo más cerca de la parte superior del teclado
+                    viewOffset: 20, // Pequeño espacio para que el teclado no lo tape exacto
+                    // 🚀 Optimizador: si es el producto 1 o 2 (índice 0 o 1), el salto es inmediato (sin animación)
+                    // para que el teclado salga y la vista se acomode al instante sin sentirse lento.
+                    animated: index > 1, 
                 });
             } catch (e) {
                 // Fallback silencioso: no bloquear la edición si FlatList aún no midió el índice.
             }
         });
-    }, [tecladoAbierto]);
+    }, []);
+
+    const empujarSoloListaCantidad = useCallback((index, keyboardHeight = 0) => {
+        if (index === null || index === undefined || index < 0) return;
+        if (index < 2) return; // 1ro-2do no necesitan empuje adicional
+
+        requestAnimationFrame(() => {
+            try {
+                const actual = scrollOffsetProductosRef.current || 0;
+                const altoFila = 92;
+                const topFila = index * altoFila;
+                const distanciaDesdeTop = topFila - actual;
+
+                // Si la fila tocada cae en la mitad inferior visible,
+                // nudgear un poco la lista hacia arriba (sin mover header/card).
+                if (distanciaDesdeTop >= 170) {
+                    const nudge = Math.min(90, Math.max(60, keyboardHeight * 0.1));
+                    listaProductosRef.current?.scrollToOffset({
+                        offset: Math.max(0, actual + nudge),
+                        animated: true,
+                    });
+                }
+            } catch (e) {
+                // fallback silencioso
+            }
+        });
+    }, []);
+
+    const preAjusteListaAntesDeTecladoCantidad = useCallback((index) => {
+        // NO hacer nada - dejar que el usuario haga scroll manual si es necesario
+        return;
+    }, []);
+
+    const medirBloqueSuperiorEnPantalla = useCallback((callback) => {
+        const nodo = bloqueSuperiorRef.current;
+        if (!nodo || typeof nodo.measureInWindow !== 'function') return;
+        nodo.measureInWindow((x, y) => {
+            if (typeof y === 'number' && Number.isFinite(y)) {
+                callback?.(y);
+            }
+        });
+    }, []);
+
+    const refrescarBaseBloqueSuperior = useCallback(() => {
+        if (tecladoDesdeCantidadPrincipalRef.current || indiceCantidadEnFocoRef.current !== null) return;
+        requestAnimationFrame(() => {
+            medirBloqueSuperiorEnPantalla((y) => {
+                bloqueSuperiorYBaseRef.current = y;
+            });
+        });
+    }, [medirBloqueSuperiorEnPantalla]);
+
+    const cancelarCompensacionAnimada = useCallback(() => {
+        if (compensacionRafRef.current) {
+            cancelAnimationFrame(compensacionRafRef.current);
+            compensacionRafRef.current = null;
+        }
+    }, []);
+
+    const actualizarCompensacionBloqueSuperior = useCallback(() => {
+        if (!tecladoDesdeCantidadPrincipalRef.current) return;
+        medirBloqueSuperiorEnPantalla((yActual) => {
+            const yBase = bloqueSuperiorYBaseRef.current;
+            if (typeof yBase !== 'number') return;
+            const delta = Math.max(0, yBase - yActual);
+            setCompensacionBloqueSuperior((prev) => (Math.abs(prev - delta) > 0.5 ? delta : prev));
+        });
+    }, [medirBloqueSuperiorEnPantalla]);
+
+    const iniciarCompensacionAnimada = useCallback((duracionMs = 700) => {
+        cancelarCompensacionAnimada();
+        const inicio = Date.now();
+
+        const tick = () => {
+            actualizarCompensacionBloqueSuperior();
+            if (tecladoDesdeCantidadPrincipalRef.current && (Date.now() - inicio) < duracionMs) {
+                compensacionRafRef.current = requestAnimationFrame(tick);
+            } else {
+                compensacionRafRef.current = null;
+            }
+        };
+
+        compensacionRafRef.current = requestAnimationFrame(tick);
+    }, [actualizarCompensacionBloqueSuperior, cancelarCompensacionAnimada]);
 
     const normalizarMetodoPagoEdicion = useCallback((metodoRaw) => {
         const metodo = String(metodoRaw || 'EFECTIVO').trim().toUpperCase();
@@ -254,12 +327,37 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     }, [carritoEdicion]);
 
     useEffect(() => {
+        const timeoutId = setTimeout(() => {
+            refrescarBaseBloqueSuperior();
+        }, 120);
+
+        return () => clearTimeout(timeoutId);
+    }, [refrescarBaseBloqueSuperior]);
+
+    useEffect(() => {
         const debounceId = setTimeout(() => {
             setBusquedaProductoDebounced(busquedaProducto);
         }, 140);
 
         return () => clearTimeout(debounceId);
     }, [busquedaProducto]);
+
+    const manejarBusquedaProducto = useCallback((texto) => {
+        setBusquedaProducto(texto);
+
+        // Al filtrar manualmente, reiniciar la lista para mostrar el primer
+        // resultado visible sin depender del scroll anterior.
+        if (listaProductosRef.current) {
+            requestAnimationFrame(() => {
+                try {
+                    listaProductosRef.current?.scrollToOffset({ offset: 0, animated: false });
+                    scrollOffsetProductosRef.current = 0;
+                } catch (e) {
+                    // Sin bloqueo si FlatList aun no esta lista.
+                }
+            });
+        }
+    }, []);
 
     const mostrarConfirmacionSyncRapida = useCallback((enviadas) => {
         setTextoModalSyncRapido(
@@ -324,7 +422,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
                 setEstadoBanner('offline');
             } else {
-                // Volvió internet → sincronizar de inmediato
+                // Volvió internet → quitar banner offline PRIMERO, luego sincronizar
+                setEstadoBanner(null);
                 await sincronizarPendientesAutomatico({ forzar: true });
             }
         });
@@ -346,6 +445,30 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         return () => clearInterval(intervalId);
     }, [hayInternet, sincronizarPendientesAutomatico]);
 
+    // 🆕 Verificar flags de permisos de ruta (se llama al montar y al abrir selector)
+    const verificarFlagsRuta = useCallback(async () => {
+        if (!userId) return;
+        try {
+            const resp = await fetch(`${API_URL}/api/rutas/?vendedor_id=${userId}`);
+            if (resp.ok) {
+                const rutas = await resp.json();
+                if (rutas.length > 0) {
+                    const crear = rutas.every(r => r.permitir_crear_cliente !== false);
+                    const rapida = rutas.every(r => r.permitir_venta_rapida !== false);
+                    setFlagCrearCliente(crear);
+                    setFlagVentaRapida(rapida);
+                }
+            }
+        } catch (e) {
+            // Silencioso — sin internet no bloquea nada
+        }
+    }, [userId]);
+
+    // Verificar al montar VentasScreen (1 sola vez)
+    useEffect(() => {
+        verificarFlagsRuta();
+    }, [verificarFlagsRuta]);
+
     // 🆕 Cargar Pedidos
     const verificarPedidosPendientes = async (fechaStr) => {
         try {
@@ -359,7 +482,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             console.log(`📦 Buscando pedidos para ${userId} en ${fecha}`);
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos
+            const timeoutId = setTimeout(() => controller.abort(), 25000); // 10 segundos
             const headersAuth = await obtenerAuthHeaders();
 
             const response = await fetch(`${ENDPOINTS.PEDIDOS_PENDIENTES}?vendedor_id=${userId}&fecha=${fecha}`, {
@@ -409,8 +532,11 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     };
 
     const abrirSelectorCliente = async () => {
-        // Refrescar pedidos antes de abrir selector para no perder pedidos nuevos del CRM
-        await verificarPedidosPendientes();
+        // Refrescar pedidos y flags antes de abrir selector
+        await Promise.all([
+            verificarPedidosPendientes(),
+            verificarFlagsRuta() // 🆕 Re-verificar permisos al abrir
+        ]);
         setMostrarSelectorCliente(true);
     };
 
@@ -475,7 +601,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            const timeoutId = setTimeout(() => controller.abort(), 25000);
             const headersAuth = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
 
             const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_NO_ENTREGADO(pedidoEnNovedad.id), {
@@ -595,7 +721,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         try {
             // Enviar metodo_pago en el cuerpo del POST
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            const timeoutId = setTimeout(() => controller.abort(), 25000);
             const headersAuth = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
 
             const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_ENTREGADO(pedidoParaEntregar.id), {
@@ -700,6 +826,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     // Estados para modales
     const [mostrarSelectorCliente, setMostrarSelectorCliente] = useState(false);
     const [mostrarModalCliente, setMostrarModalCliente] = useState(false);
+    const [mostrarModalOcasional, setMostrarModalOcasional] = useState(false); // 🆕 Modal Cliente Ocasional
     const [mostrarVencidas, setMostrarVencidas] = useState(false);
     const [mostrarResumen, setMostrarResumen] = useState(false);
     const [mostrarResumenEntrega, setMostrarResumenEntrega] = useState(false); // 🆕 Para confirmar entrega de pedido
@@ -713,6 +840,10 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     // Estado para pull to refresh
     const [refreshing, setRefreshing] = useState(false);
     const [ventasPendientes, setVentasPendientes] = useState(0);
+
+    // 🆕 Flags de permisos de ruta (controlados desde la web)
+    const [flagCrearCliente, setFlagCrearCliente] = useState(true);
+    const [flagVentaRapida, setFlagVentaRapida] = useState(true);
 
     // 🆕 Estado para cerrar turno
     const [mostrarModalCerrarTurno, setMostrarModalCerrarTurno] = useState(false);
@@ -862,7 +993,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             // 🆕 Llamar al backend para abrir turno (persistir estado)
             try {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 10000);
+                const timeoutId = setTimeout(() => controller.abort(), 25000);
                 const headersAuth = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
 
                 const response = await fetch(ENDPOINTS.TURNO_ABRIR, {
@@ -983,7 +1114,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             console.log('🚀 Precargando clientes de ruta en segundo plano...');
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos
+            const timeoutId = setTimeout(() => controller.abort(), 25000); // 10 segundos
 
             const response = await fetch(url, { signal: controller.signal });
             clearTimeout(timeoutId);
@@ -1037,38 +1168,69 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     // Estado para cliente preseleccionado desde rutas
     const [clientePreseleccionado, setClientePreseleccionado] = useState(null);
 
-    // 🆕 Función para cargar las ventas del día (para mostrar el conteo correcto)
+    // 🆕 Función para cargar las ventas del día combinando Local y Backend
     const cargarVentasDelDia = async (fecha) => {
         try {
-            const todasLasVentas = await obtenerVentas();
-
-            // Formatear fecha del día para comparar (YYYY-MM-DD)
             const fechaDia = fecha.toISOString().split('T')[0];
+            const vendedorIdVentas = String(userId).toUpperCase().startsWith('ID') ? String(userId).toUpperCase() : `ID${userId}`;
 
-            // Filtrar ventas del día
-            const ventasHoy = todasLasVentas.filter(venta => {
-                const fechaVenta = venta.fecha.split('T')[0];
-                return fechaVenta === fechaDia;
-            });
+            // 1. Obtener locales offline
+            const todasLasVentasLocal = await obtenerVentas();
+            const localesHoy = todasLasVentasLocal.filter(v => v.fecha.split('T')[0] === fechaDia);
+
+            let ventasUnificadas = localesHoy;
+
+            // 2. Obtener backend
+            try {
+                const respConfig = await fetch(`${API_URL}/api/ventas-ruta/?vendedor_id=${vendedorIdVentas}&fecha=${fechaDia}`);
+                if (respConfig.ok) {
+                    const data = await respConfig.json();
+                    const backendHoy = Array.isArray(data) ? data : [];
+
+                    // 3. Deduplicar (mantener backend + locales que aún no subieron)
+                    const mapa = new Map();
+                    // Agregar locales pendientes
+                    localesHoy.forEach(v => {
+                        if (v.sincronizada !== true && String(v.estado || '').toUpperCase() !== 'ANULADA') {
+                            const key = v.id_local || `local-${Math.random()}`;
+                            mapa.set(key, v);
+                        }
+                    });
+                    // Agregar backend (sobreescribe local si coinciden, aunque los pendientes no deberían cruzar)
+                    backendHoy.forEach(v => {
+                        if (String(v.estado || '').toUpperCase() !== 'ANULADA') {
+                            const key = v.id_local || v.id_venta_local || `backend-${v.id}`;
+                            mapa.set(key, v);
+                        }
+                    });
+
+                    ventasUnificadas = Array.from(mapa.values());
+                }
+            } catch (errBackend) {
+                console.log('⚠️ No se pudo obtener ventas del backend, usando locales:', errBackend?.message);
+                ventasUnificadas = localesHoy.filter(v => String(v.estado || '').toUpperCase() !== 'ANULADA');
+            }
 
             // Calcular totales
-            const cantidadVentas = ventasHoy.length;
-            const totalDinero = ventasHoy.reduce((sum, v) => sum + (v.total || 0), 0);
+            const cantidadVentas = ventasUnificadas.length;
+            const totalDinero = ventasUnificadas.reduce((sum, v) => sum + (parseFloat(v.total) || 0), 0);
 
-            // 🆕 Calcular diferencia por precios especiales
-            // Si hay precios personalizados en la venta, significa que se aplicó una lista especial
+            // Calcular diferencia por precios especiales
             let diferencia = 0;
-            ventasHoy.forEach(venta => {
-                if (venta.preciosPersonalizados && Object.keys(venta.preciosPersonalizados).length > 0) {
-                    // Recalcular el total sin precios especiales
-                    let totalSinEspeciales = 0;
-                    venta.productos.forEach(prod => {
-                        // Si el producto tiene precio personalizado, restar la diferencia
-                        if (venta.preciosPersonalizados[prod.id]) {
-                            const precioBase = prod.precio; // Precio original
-                            const precioEspecial = venta.preciosPersonalizados[prod.id];
-                            const diferenciaProd = (precioEspecial - precioBase) * prod.cantidad;
-                            diferencia += diferenciaProd;
+            ventasUnificadas.forEach(venta => {
+                const detalles = Array.isArray(venta.detalles) ? venta.detalles : (Array.isArray(venta.productos) ? venta.productos : []);
+                let tienePersonalizados = false;
+                let objPersonalizados = venta.preciosPersonalizados || {};
+
+                // A veces el backend manda precios personalizados de otra forma, pero si no, la venta local sí los tiene
+                if (Object.keys(objPersonalizados).length > 0) {
+                    detalles.forEach(prod => {
+                        const idProd = prod.id || prod.producto_id; // Depende de la prop local vs backend
+                        if (objPersonalizados[idProd]) {
+                            const precioBase = parseFloat(prod.precio_base || prod.precio_unitario || prod.precio);
+                            const precioEspecial = parseFloat(objPersonalizados[idProd]);
+                            const diferenciaProd = (precioEspecial - precioBase) * parseInt(prod.cantidad || 0);
+                            if (!isNaN(diferenciaProd)) diferencia += diferenciaProd;
                         }
                     });
                 }
@@ -1076,8 +1238,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             setTotalVentasHoy(cantidadVentas);
             setTotalDineroHoy(totalDinero);
-            setDiferenciaPrecios(diferencia); // 🆕 Guardar diferencia
-            setVentasDelDia(ventasHoy); // 🆕 Guardar ventas para indicador visual
+            setDiferenciaPrecios(diferencia);
+            setVentasDelDia(ventasUnificadas);
         } catch (error) {
             console.error('Error cargando ventas del día:', error);
         }
@@ -1722,7 +1884,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     onPress: async () => {
                         try {
                             const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 10000);
+                            const timeoutId = setTimeout(() => controller.abort(), 25000);
                             const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
                             const response = await fetch(
                                 `${API_URL}/api/ventas-ruta/${venta.id}/anular/`,
@@ -2176,7 +2338,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     // Función para sincronizar al arrastrar hacia abajo (con timeout y manejo de errores)
     const onRefresh = async () => {
         setRefreshing(true);
-        const TIMEOUT_MS = 10000; // 10 segundos timeout
+        const TIMEOUT_MS = 25000; // 10 segundos timeout
 
         try {
             // Helper para ejecutar con timeout
@@ -2514,6 +2676,33 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             return;
         }
 
+        // 🆕 Validar tope de venta para clientes ocasionales y BLOQUEAR
+        if (clienteSeleccionado.esOcasional && clienteSeleccionado.tope_venta) {
+            const topeVenta = parseFloat(clienteSeleccionado.tope_venta);
+            
+            // 🆕 Calcular suma de ventas ocasionales ya hechas hoy
+            const totalOcasionalesPrevias = (ventasDelDia || []).reduce((sum, v) => {
+                const esOcasional = v.cliente_ocasional || 
+                                   (v.cliente_negocio && String(v.cliente_negocio).toUpperCase().includes('(OCASIONAL)')) ||
+                                   (v.nombre_negocio && String(v.nombre_negocio).toUpperCase().includes('(OCASIONAL)'));
+                                   
+                if (esOcasional && String(v.estado || '').toUpperCase() !== 'ANULADA') {
+                    return sum + (parseFloat(v.total) || 0);
+                }
+                return sum;
+            }, 0);
+
+            const totalAcumulado = totalOcasionalesPrevias + total;
+
+            if (totalAcumulado > topeVenta) {
+                Alert.alert(
+                    'Tope Diario Excedido', 
+                    `Tu límite diario para clientes ocasionales es de $${topeVenta.toLocaleString()}.\n\nYa has vendido $${totalOcasionalesPrevias.toLocaleString()} hoy, y esta venta es de $${total.toLocaleString()} (Acumulado: $${totalAcumulado.toLocaleString()}).\n\nSolicita un aumento de tope desde "Otros -> Gestión de Rutas -> Clientes Ocasionales".`
+                );
+                return; // ⛔ Bloquear la venta
+            }
+        }
+
         // 🆕 Función interna para procesar la venta después de validaciones
         const procesarVenta = () => {
             // Preparar datos de la venta
@@ -2546,7 +2735,11 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 total: total,
                 nota: nota,
                 vencidas: vencidas,
-                fotoVencidas: fotoVencidas
+                fotoVencidas: fotoVencidas,
+                // 🆕 Si es cliente ocasional, incluir su ID real
+                ...(clienteSeleccionado.esOcasional && clienteSeleccionado.clienteOcasionalId ? {
+                    cliente_ocasional: clienteSeleccionado.clienteOcasionalId
+                } : {})
             };
 
             setVentaTemporal(venta);
@@ -3219,13 +3412,28 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
     useEffect(() => {
         const showSub = Keyboard.addListener('keyboardDidShow', (event) => {
-            setTecladoAbierto(true);
-            setAlturaTeclado(event?.endCoordinates?.height || 0);
-            if (indiceCantidadEnFocoRef.current !== null) {
-                // Forzar modo teclado para evitar un ajuste inicial "hacia abajo".
-                asegurarVisibilidadInputCantidad(indiceCantidadEnFocoRef.current, false, true);
+            const focoCantidadPrincipal = tecladoDesdeCantidadPrincipalRef.current || indiceCantidadEnFocoRef.current !== null;
+            const focoCantidadEdicion = indiceCantidadEdicionEnFocoRef.current !== null;
+            const altura = event?.endCoordinates?.height || 0;
+
+            // En pantalla principal NO tocar layout global.
+            if (focoCantidadPrincipal || focoCantidadEdicion || modalEdicionVisible) {
+                if (focoCantidadPrincipal) tecladoDesdeCantidadPrincipalRef.current = true;
+                setTecladoAbierto(true);
+                setAlturaTeclado(altura);
+                setCompensacionBloqueSuperior(0);
+            } else {
+                setTecladoAbierto(false);
+                setAlturaTeclado(0);
+                // 🔧 DESACTIVADO: NO empujar nada en lista principal
+                // if (focoCantidadPrincipal) {
+                //     empujarSoloListaCantidad(indiceCantidadEnFocoRef.current, altura);
+                //     actualizarCompensacionBloqueSuperior();
+                //     iniciarCompensacionAnimada(760);
+                // }
             }
-            if (indiceCantidadEdicionEnFocoRef.current !== null) {
+
+            if (focoCantidadEdicion) {
                 asegurarVisibilidadInputEdicion(
                     indiceCantidadEdicionEnFocoRef.current,
                     0,
@@ -3235,17 +3443,31 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             }
         });
         const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+            cancelarCompensacionAnimada();
             setTecladoAbierto(false);
             setAlturaTeclado(0);
             setForzarMostrarTurno(false); // Resetear vistazo al cerrar teclado
+            tecladoDesdeCantidadPrincipalRef.current = false;
+            setCompensacionBloqueSuperior(0);
             indiceCantidadEnFocoRef.current = null;
+            setIndiceCantidadActivo(null);
             indiceCantidadEdicionEnFocoRef.current = null;
+            refrescarBaseBloqueSuperior();
         });
         return () => {
+            cancelarCompensacionAnimada();
             showSub.remove();
             hideSub.remove();
         };
-    }, [asegurarVisibilidadInputCantidad, asegurarVisibilidadInputEdicion]);
+    }, [
+        asegurarVisibilidadInputEdicion,
+        empujarSoloListaCantidad,
+        actualizarCompensacionBloqueSuperior,
+        iniciarCompensacionAnimada,
+        cancelarCompensacionAnimada,
+        refrescarBaseBloqueSuperior,
+        modalEdicionVisible
+    ]);
 
     // Cargar orden del día en segundo plano para que el auto-siguiente funcione sin abrir selector
     useEffect(() => {
@@ -3606,6 +3828,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         <TextInput
                             style={styles.inputCantidad}
                             value={String(cantidad)}
+                            onPressIn={() => {
+                                preAjusteListaAntesDeTecladoCantidad(index);
+                                tecladoDesdeCantidadPrincipalRef.current = true;
+                                indiceCantidadEnFocoRef.current = index;
+                                setIndiceCantidadActivo(index);
+                                setTecladoAbierto(true); // 🚀 Ocultar cabeceras instantáneamente sin esperar al teclado nativo
+                            }}
                             onChangeText={(texto) => {
                                 const num = parseInt(texto) || 0;
                                 actualizarCantidad(item.id, num);
@@ -3614,15 +3843,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             selectTextOnFocus
                             onFocus={() => {
                                 indiceCantidadEnFocoRef.current = index;
-                                setInputCantidadEnFoco(true);
-                                // Si ya está abierto, ajustar de inmediato.
-                                // Si está cerrado, esperar a keyboardDidShow (evita rebote).
-                                if (tecladoAbierto) {
-                                    asegurarVisibilidadInputCantidad(index, false, true);
-                                }
+                                setIndiceCantidadActivo(index);
+                                setTecladoAbierto(true); // 🚀 Refuerzo visual inmediato
+                                // NO hacer scroll automático - el usuario hace scroll manual si necesita
                             }}
                             onBlur={() => {
-                                setInputCantidadEnFoco(false);
+                                tecladoDesdeCantidadPrincipalRef.current = false;
                                 indiceCantidadEnFocoRef.current = null;
                             }}
                         />
@@ -3642,7 +3868,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 </View>
             </View>
         );
-    }, [carrito, stockCargue, clienteSeleccionado, pedidoClienteSeleccionado, modoEdicionPedido, tecladoAbierto, actualizarCantidad, asegurarVisibilidadInputCantidad]);
+    }, [carrito, stockCargue, clienteSeleccionado, pedidoClienteSeleccionado, modoEdicionPedido, tecladoAbierto, productosFiltrados.length, actualizarCantidad, asegurarVisibilidadInputCantidad, preAjusteListaAntesDeTecladoCantidad]);
 
     // 🆕 Handler para cuando se guarda una nota
     const handleNotaGuardada = async (nota) => {
@@ -3796,153 +4022,177 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 </View>
             )}
 
-            {/* Header - Cliente - Siempre visible completo para prevenir saltos */}
-            <View style={[
-                styles.headerCliente
-            ]}>
-                <View
-                    style={[
-                        styles.clienteSelector,
-                        clienteSeleccionado && (() => {
+            <View
+                ref={bloqueSuperiorRef}
+                collapsable={false}
+                style={compensacionBloqueSuperior > 0 ? { transform: [{ translateY: compensacionBloqueSuperior }] } : null}
+                onLayout={() => {
+                    refrescarBaseBloqueSuperior();
+                }}
+            >
+                {/* Header - Cliente - Visible si no hay teclado (salvo si el foco está en la búsqueda o hay filtro activo) */}
+                {(!tecladoAbierto || inputBuscadorEnFoco || busquedaProducto.length > 0) && (
+                    <View style={[styles.headerCliente]}>
+                    <View
+                        style={[
+                            styles.clienteSelector,
+                            clienteSeleccionado && (() => {
+                                const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                                const tienePedidoEntregado = pedidosEntregadosHoy.some(p => {
+                                    const pDestinatario = norm(p.destinatario);
+                                    const cNegocio = norm(clienteSeleccionado.negocio);
+                                    const cNombre = norm(clienteSeleccionado.nombre);
+                                    return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+                                });
+                                return tienePedidoEntregado ? {
+                                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                                    borderColor: '#22c55e'
+                                } : null;
+                            })()
+                        ]}
+                    >
+                        <TouchableOpacity
+                            style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                            onPress={abrirSelectorCliente}
+                        >
+                            {clienteSeleccionado?.esOcasional ? (
+                                <View style={[styles.badgeTipoHeaderRuta, { backgroundColor: '#fef3c7', borderColor: '#f59e0b' }]}><Text style={[styles.badgeTipoHeaderTexto, { color: '#d97706' }]}>O</Text></View>
+                            ) : clienteSeleccionadoEsPedido ? (
+                                <View style={styles.badgeTipoHeaderPedido}><Text style={styles.badgeTipoHeaderTexto}>P</Text></View>
+                            ) : (
+                                <View style={styles.badgeTipoHeaderRuta}><Text style={styles.badgeTipoHeaderTexto}>R</Text></View>
+                            )}
+                            <View style={styles.clienteInfo}>
+                                <Text style={[styles.clienteNombre, (clienteSeleccionado?.negocio || '').length > 34 && styles.clienteNombreMedio]}>
+                                    {clienteSeleccionado?.negocio || 'Seleccionar Cliente'}
+                                </Text>
+                                {/* Mostrar detalles siempre */}
+                                {clienteSeleccionado && (
+                                    <>
+                                        {clienteSeleccionado?.nombre && <Text style={styles.clienteDetalle}>👤 {clienteSeleccionado.nombre}</Text>}
+                                        <Text style={styles.clienteDetalle}>
+                                            {pedidoClienteSeleccionado ? `📦 Pedido #${pedidoClienteSeleccionado.numero_pedido}` : `📞 ${clienteSeleccionado?.celular || 'Sin teléfono'}`}
+                                        </Text>
+                                        <Text style={styles.clienteDetalle}>📍 {clienteSeleccionado?.direccion || 'Sin dirección'}</Text>
+                                    </>
+                                )}
+                            </View>
+                        </TouchableOpacity>
+                        {/* 🆕 Check verde si ya se le vendió hoy (NO si solo está entregado) */}
+                        {clienteSeleccionado && (() => {
                             const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
-                            const tienePedidoEntregado = pedidosEntregadosHoy.some(p => {
+
+                            const esPedidoEntregado = pedidosEntregadosHoy.some(p => {
                                 const pDestinatario = norm(p.destinatario);
                                 const cNegocio = norm(clienteSeleccionado.negocio);
                                 const cNombre = norm(clienteSeleccionado.nombre);
                                 return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
                             });
-                            return tienePedidoEntregado ? {
-                                backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                                borderColor: '#22c55e'
-                            } : null;
-                        })()
-                    ]}
-                >
-                    <TouchableOpacity
-                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
-                        onPress={abrirSelectorCliente}
-                    >
-                        {clienteSeleccionadoEsPedido ? (
-                            <View style={styles.badgeTipoHeaderPedido}><Text style={styles.badgeTipoHeaderTexto}>P</Text></View>
-                        ) : (
-                            <View style={styles.badgeTipoHeaderRuta}><Text style={styles.badgeTipoHeaderTexto}>R</Text></View>
-                        )}
-                        <View style={styles.clienteInfo}>
-                            <Text style={[styles.clienteNombre, (clienteSeleccionado?.negocio || '').length > 34 && styles.clienteNombreMedio]}>
-                                {clienteSeleccionado?.negocio || 'Seleccionar Cliente'}
-                            </Text>
-                            {/* Mostrar detalles siempre */}
-                            {clienteSeleccionado && (
-                                <>
-                                    {clienteSeleccionado?.nombre && <Text style={styles.clienteDetalle}>👤 {clienteSeleccionado.nombre}</Text>}
-                                    <Text style={styles.clienteDetalle}>
-                                        {pedidoClienteSeleccionado ? `📦 Pedido #${pedidoClienteSeleccionado.numero_pedido}` : `📞 ${clienteSeleccionado?.celular || 'Sin teléfono'}`}
-                                    </Text>
-                                    <Text style={styles.clienteDetalle}>📍 {clienteSeleccionado?.direccion || 'Sin dirección'}</Text>
-                                </>
-                            )}
-                        </View>
-                    </TouchableOpacity>
-                    {/* 🆕 Check verde si ya se le vendió hoy (NO si solo está entregado) */}
-                    {clienteSeleccionado && (() => {
-                        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
 
-                        const esPedidoEntregado = pedidosEntregadosHoy.some(p => {
-                            const pDestinatario = norm(p.destinatario);
-                            const cNegocio = norm(clienteSeleccionado.negocio);
-                            const cNombre = norm(clienteSeleccionado.nombre);
-                            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
-                        });
+                            if (esPedidoEntregado) return null;
 
-                        if (esPedidoEntregado) return null;
+                            const ventaConfirmada = ventasDelDia.some(venta => {
+                                if (venta.estado === 'ANULADA') return false;
+                                const vNegocio = norm(venta.cliente_negocio);
+                                const vNombre = norm(venta.cliente_nombre);
+                                const cNegocio = norm(clienteSeleccionado.negocio);
+                                const cNombre = norm(clienteSeleccionado.nombre);
+                                return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
+                            });
 
-                        const ventaConfirmada = ventasDelDia.some(venta => {
-                            if (venta.estado === 'ANULADA') return false;
-                            const vNegocio = norm(venta.cliente_negocio);
-                            const vNombre = norm(venta.cliente_nombre);
-                            const cNegocio = norm(clienteSeleccionado.negocio);
-                            const cNombre = norm(clienteSeleccionado.nombre);
-                            return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
-                        });
-
-                        return ventaConfirmada ? (
-                            <View style={styles.headerCheckVendido}>
-                                <Text style={styles.headerTextoVendido}>VENDIDO</Text>
-                            </View>
-                        ) : null;
-                    })()}
-                    {clienteSeleccionado && (
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <TouchableOpacity
-                                style={styles.btnNotaInterno}
-                                onPress={() => setMostrarNotaModal(true)}
-                            >
-                                <Ionicons name={clienteSeleccionado.nota ? "document-text" : "document-text-outline"} size={26} color={clienteSeleccionado.nota ? "#dc3545" : "#A0A0A0"} />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={{ padding: 5, marginLeft: 2, marginRight: 5, justifyContent: 'center', alignItems: 'center' }}
-                                onPress={() => avanzarAlSiguienteCliente({ limpiarAntes: true, mostrarAvisoFin: true })}
-                            >
-                                <Ionicons name="play-skip-forward" size={26} color="#003d88" />
-                            </TouchableOpacity>
-                        </View>
-                    )}
-                </View>
-            </View>
-
-            {/* 🆕 Botones de acciones siempre visibles para evitar el efecto de 'empuje' al abrir el teclado */}
-            <View style={styles.botonesAccionesContainer}>
-                {pedidoClienteSeleccionado ? (
-                    <>
-                        <TouchableOpacity style={[styles.btnAccion, styles.btnEditar]} onPress={editarPedidoClienteSeleccionado}>
-                            <Ionicons name="create" size={18} color="white" /><Text style={styles.btnAccionTexto}>Editar</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={[styles.btnAccion, styles.btnEntregado]} onPress={marcarEntregadoClienteSeleccionado}>
-                            <Ionicons name="checkmark-circle" size={18} color="white" /><Text style={styles.btnAccionTexto}>Entregar</Text>
-                        </TouchableOpacity>
-                    </>
-                ) : (
-                    <>
-                        <TouchableOpacity style={[styles.btnAccion, styles.btnVencidas]} onPress={() => setMostrarVencidas(true)}>
-                            <Ionicons name="alert-circle" size={18} color="white" />
-                            <Text style={styles.btnAccionTexto}>Vencidas</Text>
-                            {vencidas.length > 0 && (
-                                <View style={styles.badgeAccion}>
-                                    <Text style={styles.badgeTexto}>{vencidas.length}</Text>
+                            return ventaConfirmada ? (
+                                <View style={styles.headerCheckVendido}>
+                                    <Text style={styles.headerTextoVendido}>VENDIDO</Text>
                                 </View>
-                            )}
-                        </TouchableOpacity>
-                        {turnoAbierto && (
-                            <TouchableOpacity style={[styles.btnAccion, styles.btnCerrarPequeño]} onPress={() => setMostrarModalCerrarTurno(true)}>
-                                <Ionicons name="lock-closed" size={18} color="white" /><Text style={styles.btnAccionTexto}>Cerrar</Text>
-                            </TouchableOpacity>
+                            ) : null;
+                        })()}
+                        {clienteSeleccionado && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <TouchableOpacity
+                                    style={styles.btnNotaInterno}
+                                    onPress={() => setMostrarNotaModal(true)}
+                                >
+                                    <Ionicons name={clienteSeleccionado.nota ? "document-text" : "document-text-outline"} size={26} color={clienteSeleccionado.nota ? "#dc3545" : "#A0A0A0"} />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={{ padding: 5, marginLeft: 2, marginRight: 5, justifyContent: 'center', alignItems: 'center' }}
+                                    onPress={() => avanzarAlSiguienteCliente({ limpiarAntes: true, mostrarAvisoFin: true })}
+                                >
+                                    <Ionicons name="play-skip-forward" size={26} color="#003d88" />
+                                </TouchableOpacity>
+                            </View>
                         )}
-                    </>
+                    </View>
+                    </View>
                 )}
-            </View>
 
-            {/* Buscador */}
-            <View style={styles.busquedaContainer}>
-                <Ionicons name="search" size={20} color="#666" style={styles.iconoBusqueda} />
-                <TextInput
-                    ref={buscadorRef}
-                    style={styles.inputBusqueda}
-                    placeholder="Buscar producto..."
-                    value={busquedaProducto}
-                    onChangeText={setBusquedaProducto}
-                    autoCapitalize="characters"
-                    onFocus={() => setInputBuscadorEnFoco(true)}
-                    onBlur={() => setInputBuscadorEnFoco(false)}
-                />
-                {busquedaProducto.length > 0 && (
-                    <TouchableOpacity
-                        onPress={() => {
-                            setBusquedaProducto('');
-                            buscadorRef.current?.focus(); // 🚀 Mantener el foco al limpiar para evitar saltos
+                {/* Botones de acciones: Visibles si no hay teclado (salvo si el foco está en la búsqueda o hay filtro activo) */}
+                {(!tecladoAbierto || inputBuscadorEnFoco || busquedaProducto.length > 0) && (
+                    <View style={styles.botonesAccionesContainer}>
+                    {pedidoClienteSeleccionado ? (
+                        <>
+                            <TouchableOpacity style={[styles.btnAccion, styles.btnEditar]} onPress={editarPedidoClienteSeleccionado}>
+                                <Ionicons name="create" size={18} color="white" /><Text style={styles.btnAccionTexto}>Editar</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[styles.btnAccion, styles.btnEntregado]} onPress={marcarEntregadoClienteSeleccionado}>
+                                <Ionicons name="checkmark-circle" size={18} color="white" /><Text style={styles.btnAccionTexto}>Entregar</Text>
+                            </TouchableOpacity>
+                        </>
+                    ) : (
+                        <>
+                            <TouchableOpacity style={[styles.btnAccion, styles.btnVencidas]} onPress={() => setMostrarVencidas(true)}>
+                                <Ionicons name="alert-circle" size={18} color="white" />
+                                <Text style={styles.btnAccionTexto}>Vencidas</Text>
+                                {vencidas.length > 0 && (
+                                    <View style={styles.badgeAccion}>
+                                        <Text style={styles.badgeTexto}>{vencidas.length}</Text>
+                                    </View>
+                                )}
+                            </TouchableOpacity>
+                            {turnoAbierto && (
+                                <TouchableOpacity style={[styles.btnAccion, styles.btnCerrarPequeño]} onPress={async () => {
+                                    // 🆕 Forzar recarga de totales EN VIVO desde backend antes de mostrar el modal
+                                    await verificarPedidosPendientes();
+                                    await cargarVentasDelDia(fechaSeleccionada);
+                                    setMostrarModalCerrarTurno(true);
+                                }}>
+                                    <Ionicons name="lock-closed" size={18} color="white" /><Text style={styles.btnAccionTexto}>Cerrar</Text>
+                                </TouchableOpacity>
+                            )}
+                        </>
+                    )}
+                    </View>
+                )}
+
+                {/* Buscador: Se oculta cuando el teclado de cantidad de productos está abierto (salvo si hay filtro activo) */}
+                {(!tecladoAbierto || inputBuscadorEnFoco || busquedaProducto.length > 0) && (
+                    <View style={styles.busquedaContainer}>
+                    <Ionicons name="search" size={20} color="#666" style={styles.iconoBusqueda} />
+                    <TextInput
+                        ref={buscadorRef}
+                        style={styles.inputBusqueda}
+                        placeholder="Buscar producto..."
+                        value={busquedaProducto}
+                        onChangeText={manejarBusquedaProducto}
+                        autoCapitalize="characters"
+                        onFocus={() => {
+                            setInputBuscadorEnFoco(true);
+                            setTecladoAbierto(false); // 🚀 Forzar "modo normal" al tocar el buscador, evitando falsos positivos de listado
                         }}
-                    >
-                        <Ionicons name="close-circle" size={20} color="#666" />
-                    </TouchableOpacity>
+                        onBlur={() => setInputBuscadorEnFoco(false)}
+                    />
+                    {busquedaProducto.length > 0 && (
+                        <TouchableOpacity
+                            onPress={() => {
+                                setTecladoAbierto(false); // 🚀 Evitar que al limpiar se asuma erróneamente que estamos editando cantidades
+                                manejarBusquedaProducto('');
+                                buscadorRef.current?.focus(); // 🚀 Mantener el foco al limpiar para evitar saltos
+                            }}
+                        >
+                            <Ionicons name="close-circle" size={20} color="#666" />
+                        </TouchableOpacity>
+                    )}
+                    </View>
                 )}
             </View>
 
@@ -3955,7 +4205,9 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 style={styles.listaProductos}
                 contentContainerStyle={[
                     styles.listaContent,
-                    tecladoAbierto ? styles.listaContentConTeclado : styles.listaContentNormal
+                    tecladoAbierto
+                        ? styles.listaContentConTeclado
+                        : styles.listaContentNormal
                 ]}
                 keyboardShouldPersistTaps="handled"
                 onScrollToIndexFailed={(info) => {
@@ -4103,10 +4355,56 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     setMostrarSelectorCliente(false);
                     setMostrarModalCliente(true);
                 }}
+                onClienteOcasional={async () => {
+                    // 🆕 Validar tope global ANTES de dejarlo crear al cliente ocasional
+                    const totalOcasionalesPrevias = (ventasDelDia || []).reduce((sum, v) => {
+                        const esOcasional = v.cliente_ocasional || 
+                                           (v.cliente_negocio && String(v.cliente_negocio).toUpperCase().includes('(OCASIONAL)')) ||
+                                           (v.nombre_negocio && String(v.nombre_negocio).toUpperCase().includes('(OCASIONAL)'));
+                                           
+                        if (esOcasional && String(v.estado || '').toUpperCase() !== 'ANULADA') {
+                            return sum + (parseFloat(v.total) || 0);
+                        }
+                        return sum;
+                    }, 0);
+
+                    // Consultar tope actual al backend si hay internet, o usar 60000 por defecto
+                    let topeVentaLimit = 60000;
+                    try {
+                        const vendedorIdLimpio = String(userId).toUpperCase().replace('ID', '');
+                        const resp = await fetch(`${API_URL}/api/rutas/?vendedor_id=ID${vendedorIdLimpio}`);
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            if (data.length > 0 && data[0].tope_cliente_ocasional) {
+                                topeVentaLimit = parseFloat(data[0].tope_cliente_ocasional);
+                            }
+                        }
+                    } catch (e) {
+                        console.log('Error obteniendo tope de ruta, usando fallback:', e);
+                        // Si falla (offline) usamos fallback buscando el tope en los existentes en ventasDelDia
+                        const ventaConTope = (ventasDelDia || []).find(v => v.cliente_ocasional && v.tope_venta);
+                        if (ventaConTope && ventaConTope.tope_venta) {
+                            topeVentaLimit = parseFloat(ventaConTope.tope_venta);
+                        }
+                    }
+
+                    if (totalOcasionalesPrevias >= topeVentaLimit) {
+                        Alert.alert(
+                            'Tope Diario Excedido ⛔',
+                            'Has superado el tope de ventas para clientes ocasionales.\n\nPor favor, contacta a un administrador.'
+                        );
+                        return; // Bloquear apertura del modal
+                    }
+
+                    setMostrarSelectorCliente(false);
+                    setMostrarModalOcasional(true);
+                }}
                 onClientesDiaActualizados={setClientesOrdenDia}
                 onActualizarPedidos={verificarPedidosPendientes}
                 userId={userId}
                 diaSeleccionado={diaSeleccionado}
+                flagCrearCliente={flagCrearCliente}
+                flagVentaRapida={flagVentaRapida}
             />
 
             <ClienteModal
@@ -4116,6 +4414,17 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 onClienteGuardado={handleClienteGuardado}
                 clientes={clientes}
                 vendedorId={userId}
+            />
+
+            {/* 🆕 Modal Cliente Ocasional (Venta Rápida) */}
+            <ClienteOcasionalModal
+                visible={mostrarModalOcasional}
+                onClose={() => setMostrarModalOcasional(false)}
+                onClienteCreado={(clienteOcasional) => {
+                    // Seleccionar el cliente ocasional como si fuera un cliente normal
+                    handleSeleccionarCliente(clienteOcasional);
+                }}
+                userId={userId}
             />
 
 
@@ -4170,28 +4479,28 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                 const granTotal = totalDineroHoy + totalPedidos;
 
                                 return (
-                                    <View style={styles.modalCerrarResumen}>
+                                    <View style={[styles.modalCerrarResumen, { paddingRight: 25 }]}>
                                         <View style={styles.modalCerrarFila}>
-                                            <Text style={styles.modalCerrarLabel}>Ventas Ruta ({totalVentasHoy}):</Text>
-                                            <Text style={styles.modalCerrarValor}>{formatearMoneda(totalDineroHoy)}</Text>
+                                            <Text style={[styles.modalCerrarLabel, { flex: 1 }]}>Ventas Ruta ({totalVentasHoy}):</Text>
+                                            <Text style={[styles.modalCerrarValor, { textAlign: 'right', marginRight: 10 }]}>{formatearMoneda(totalDineroHoy)}</Text>
                                         </View>
 
                                         <View style={styles.modalCerrarFila}>
-                                            <Text style={styles.modalCerrarLabel}>Pedidos ({pedidosEntregadosHoy.length}):</Text>
-                                            <Text style={styles.modalCerrarValor}>{formatearMoneda(totalPedidos)}</Text>
+                                            <Text style={[styles.modalCerrarLabel, { flex: 1 }]}>Pedidos ({pedidosEntregadosHoy.length}):</Text>
+                                            <Text style={[styles.modalCerrarValor, { textAlign: 'right', marginRight: 10 }]}>{formatearMoneda(totalPedidos)}</Text>
                                         </View>
 
                                         {/* 🆕 Mostrar diferencia por precios especiales solo si existe */}
                                         {diferenciaPrecios > 0 && (
                                             <View style={[styles.modalCerrarFila, { marginTop: 8, backgroundColor: '#fff3cd', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6 }]}>
-                                                <Text style={[styles.modalCerrarLabel, { color: '#856404', fontSize: 13 }]}>💰 Venta Precios Especiales:</Text>
-                                                <Text style={[styles.modalCerrarValor, { color: '#28a745', fontWeight: 'bold' }]}>+{formatearMoneda(diferenciaPrecios)}</Text>
+                                                <Text style={[styles.modalCerrarLabel, { color: '#856404', fontSize: 13, flex: 1 }]}>💰 Venta Precios Especiales:</Text>
+                                                <Text style={[styles.modalCerrarValor, { color: '#28a745', fontWeight: 'bold', textAlign: 'right', marginRight: 10 }]}>+{formatearMoneda(diferenciaPrecios)}</Text>
                                             </View>
                                         )}
 
-                                        <View style={[styles.modalCerrarFila, { marginTop: 10, borderTopWidth: 1, borderColor: '#eee', paddingTop: 10 }]}>
-                                            <Text style={[styles.modalCerrarLabel, { fontWeight: 'bold', fontSize: 16 }]}>TOTAL A ENTREGAR:</Text>
-                                            <Text style={[styles.modalCerrarValor, { fontWeight: 'bold', fontSize: 16, color: '#003d88' }]}>
+                                        <View style={{ marginTop: 15, borderTopWidth: 2, borderColor: '#003d88', paddingTop: 10 }}>
+                                            <Text style={{ fontWeight: 'bold', fontSize: 13, color: '#666' }}>TOTAL A ENTREGAR:</Text>
+                                            <Text style={{ fontWeight: 'bold', fontSize: 22, color: '#003d88', textAlign: 'right', marginTop: 2 }}>
                                                 {formatearMoneda(granTotal)}
                                             </Text>
                                         </View>
@@ -4695,9 +5004,9 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         {
                             // Fijo en zona superior para evitar salto al abrir teclado.
                             justifyContent: 'flex-start',
-                            paddingTop: Platform.OS === 'android' ? (tecladoAbierto ? 2 : 10) : 34,
+                            paddingTop: Platform.OS === 'android' ? 2 : 34,
                             paddingHorizontal: 8,
-                            paddingBottom: Platform.OS === 'android' ? (tecladoAbierto ? 2 : 12) : 20,
+                            paddingBottom: Platform.OS === 'android' ? 2 : 20,
                         }
                     ]}
                     // En Android evitamos `height` porque recorta la parte inferior
@@ -4709,18 +5018,14 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         backgroundColor: '#fff',
                         borderRadius: 20,
                         width: '100%',
-                        padding: 12,
-                        maxHeight: Platform.OS === 'android'
-                            ? (tecladoAbierto ? '100%' : '84%') // Aumentado a 100% para máximo espacio
-                            : '88%',
-                        minHeight: Platform.OS === 'android'
-                            ? (tecladoAbierto ? '68%' : '72%')
-                            : '70%',
+                        padding: 8,
+                        maxHeight: Platform.OS === 'android' ? '93%' : '88%',
+                        minHeight: Platform.OS === 'android' ? '64%' : '70%',
                         flexShrink: 1,
                         overflow: 'hidden',
                     }}>
                         {/* Header */}
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: tecladoAbierto ? 4 : 16 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
                             <View>
                                 <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#333' }}>✏️ Editar Venta</Text>
                                 {!modoCantidadConTeclado && (
@@ -4741,7 +5046,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             </TouchableOpacity>
                         </View>
 
-                        <View style={{ marginTop: -4, marginBottom: tecladoAbierto ? 4 : 10 }}>
+                        <View style={{ marginTop: -4, marginBottom: 4 }}>
                             <View style={{ flexDirection: 'row', gap: 8 }}>
                                 {METODOS_PAGO_VALIDOS_EDICION.map((metodo) => {
                                     const activo = metodoPagoEdicion === metodo;
@@ -4754,12 +5059,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                                 borderColor: activo ? '#003d88' : '#d0d7de',
                                                 backgroundColor: activo ? '#003d88' : '#f8f9fa',
                                                 borderRadius: 8,
-                                                paddingVertical: tecladoAbierto ? 6 : 10,
+                                                paddingVertical: 4,
                                                 alignItems: 'center',
                                             }}
                                             onPress={() => setMetodoPagoEdicion(metodo)}
                                         >
-                                            <Text style={{ color: activo ? '#fff' : '#333', fontWeight: '700', fontSize: tecladoAbierto ? 11 : 12 }}>
+                                            <Text style={{ color: activo ? '#fff' : '#333', fontWeight: '700', fontSize: 10 }}>
                                                 {metodo}
                                             </Text>
                                         </TouchableOpacity>
@@ -4768,14 +5073,14 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             </View>
                         </View>
 
-                        <View style={{ marginBottom: tecladoAbierto ? 4 : 12 }}>
+                        <View style={{ marginBottom: 4 }}>
                             <TextInput
                                 style={{
                                     borderWidth: 1,
                                     borderColor: '#ced4da',
                                     borderRadius: 8,
                                     paddingHorizontal: 12,
-                                    paddingVertical: tecladoAbierto ? 6 : 10,
+                                    paddingVertical: 4,
                                     fontSize: 14,
                                     color: '#333',
                                     backgroundColor: '#fff',
@@ -4800,7 +5105,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                     borderColor: '#e1e4e8',
                                     borderRadius: 8,
                                     backgroundColor: '#f8f9fa',
-                                    maxHeight: tecladoAbierto ? 220 : 170,
+                                    maxHeight: 220,
                                 }}>
                                     <ScrollView keyboardShouldPersistTaps="handled">
                                         {productosSugeridosEdicion.length === 0 ? (
@@ -4852,12 +5157,10 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             ref={listaEdicionRef}
                             style={{
                                 flexShrink: 1,
-                                minHeight: tecladoAbierto ? 110 : 90,
-                                maxHeight: tecladoAbierto
-                                    ? Math.max(150, alturaListaEdicionConTeclado)
-                                    : 220,
+                                minHeight: 110,
+                                maxHeight: Math.max(140, alturaListaEdicionConTeclado + 40),
                             }}
-                            contentContainerStyle={{ paddingBottom: tecladoAbierto ? 10 : 20 }}
+                            contentContainerStyle={{ paddingBottom: 10 }}
                             keyboardShouldPersistTaps="handled"
                             onScroll={(event) => {
                                 scrollOffsetEdicionRef.current = event.nativeEvent.contentOffset?.y || 0;
@@ -4869,26 +5172,26 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                     flexDirection: 'row',
                                     alignItems: 'center',
                                     justifyContent: 'space-between',
-                                    padding: tecladoAbierto ? 5 : 9, // Reducido el padding interno
+                                    padding: 5,
                                     backgroundColor: '#f8f9fa',
                                     borderRadius: 7,
-                                    marginBottom: tecladoAbierto ? 3 : 6, // Reducido el margen entre items
+                                    marginBottom: 3,
                                     borderWidth: 1,
                                     borderColor: '#e9ecef',
                                 }}>
                                     <View style={{ flex: 1 }}>
-                                        <Text style={{ fontSize: tecladoAbierto ? 11 : 12, fontWeight: '600', color: '#333' }}>{nombre}</Text>
-                                        <Text style={{ fontSize: tecladoAbierto ? 10 : 11, color: '#666' }}>
+                                        <Text style={{ fontSize: 11, fontWeight: '600', color: '#333' }}>{nombre}</Text>
+                                        <Text style={{ fontSize: 10, color: '#666' }}>
                                             {formatearMoneda(item.precio)} c/u
                                         </Text>
                                     </View>
                                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                         {/* Decrementar */}
                                         <TouchableOpacity
-                                            style={{ backgroundColor: '#e74c3c', borderRadius: 6, width: tecladoAbierto ? 26 : 30, height: tecladoAbierto ? 26 : 30, justifyContent: 'center', alignItems: 'center' }}
+                                            style={{ backgroundColor: '#e74c3c', borderRadius: 6, width: 26, height: 26, justifyContent: 'center', alignItems: 'center' }}
                                             onPress={() => cambiarCantidadEdicion(nombre, item.cantidad - 1)}
                                         >
-                                            <Text style={{ color: '#fff', fontSize: tecladoAbierto ? 15 : 16, fontWeight: 'bold', lineHeight: tecladoAbierto ? 18 : 20 }}>−</Text>
+                                            <Text style={{ color: '#fff', fontSize: 15, fontWeight: 'bold', lineHeight: 18 }}>−</Text>
                                         </TouchableOpacity>
                                         {/* Input cantidad */}
                                         <TextInput
@@ -4901,8 +5204,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                             }}
                                             style={{
                                                 borderWidth: 1, borderColor: '#ced4da', borderRadius: 6,
-                                                width: tecladoAbierto ? 38 : 44, textAlign: 'center', fontSize: tecladoAbierto ? 13 : 15, fontWeight: 'bold',
-                                                paddingVertical: tecladoAbierto ? 1 : 3, color: '#333'
+                                                width: 38, textAlign: 'center', fontSize: 13, fontWeight: 'bold',
+                                                paddingVertical: 1, color: '#333'
                                             }}
                                             keyboardType="numeric"
                                             value={cantidadesEdicionInput[nombre] ?? String(item.cantidad)}
@@ -4924,10 +5227,10 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                         />
                                         {/* Incrementar */}
                                         <TouchableOpacity
-                                            style={{ backgroundColor: '#00ad53', borderRadius: 6, width: tecladoAbierto ? 26 : 30, height: tecladoAbierto ? 26 : 30, justifyContent: 'center', alignItems: 'center' }}
+                                            style={{ backgroundColor: '#00ad53', borderRadius: 6, width: 26, height: 26, justifyContent: 'center', alignItems: 'center' }}
                                             onPress={() => cambiarCantidadEdicion(nombre, item.cantidad + 1)}
                                         >
-                                            <Text style={{ color: '#fff', fontSize: tecladoAbierto ? 15 : 16, fontWeight: 'bold', lineHeight: tecladoAbierto ? 18 : 20 }}>+</Text>
+                                            <Text style={{ color: '#fff', fontSize: 15, fontWeight: 'bold', lineHeight: 18 }}>+</Text>
                                         </TouchableOpacity>
                                         {/* Subtotal */}
                                         <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#003d88', minWidth: 62, textAlign: 'right' }}>
@@ -4943,26 +5246,26 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             flexDirection: 'row',
                             justifyContent: 'space-between',
                             alignItems: 'center',
-                            marginTop: tecladoAbierto ? 4 : 12,
-                            paddingTop: tecladoAbierto ? 4 : 12,
+                            marginTop: 2,
+                            paddingTop: 2,
                             borderTopWidth: 1,
                             borderTopColor: '#e9ecef'
                         }}>
-                            <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#333' }}>NUEVO TOTAL</Text>
-                            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#e74c3c' }}>
+                            <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#333' }}>NUEVO TOTAL</Text>
+                            <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#e74c3c' }}>
                                 {formatearMoneda(Math.round(
                                     Object.values(carritoEdicion).reduce((sum, i) => sum + (i.precio * i.cantidad), 0)
                                 ))}
                             </Text>
                         </View>
-
+                        
                         {/* Botones */}
-                        <View style={{ flexDirection: 'row', gap: 12, marginTop: tecladoAbierto ? 6 : 16, paddingBottom: tecladoAbierto ? 12 : 0 }}>
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 4, paddingBottom: 8 }}>
                             <TouchableOpacity
                                 style={{
                                     flex: 1,
                                     backgroundColor: '#6c757d',
-                                    padding: tecladoAbierto ? 11 : 14,
+                                    padding: 8,
                                     borderRadius: 10,
                                     alignItems: 'center'
                                 }}
@@ -4975,20 +5278,20 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                     setMostrarHistorialVentas(true);
                                 }}
                             >
-                                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 15 }}>Cancelar</Text>
+                                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Cancelar</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={{
                                     flex: 2,
                                     backgroundColor: cargandoEdicion ? '#aaa' : '#e74c3c',
-                                    padding: tecladoAbierto ? 11 : 14,
+                                    padding: 8,
                                     borderRadius: 10,
                                     alignItems: 'center'
                                 }}
                                 onPress={confirmarEdicionVenta}
                                 disabled={cargandoEdicion}
                             >
-                                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 15 }}>
+                                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>
                                     {cargandoEdicion ? 'Guardando...' : '✅ Guardar Edición'}
                                 </Text>
                             </TouchableOpacity>
@@ -5452,7 +5755,7 @@ const styles = StyleSheet.create({
         paddingBottom: 260,
     },
     listaContentConTeclado: {
-        paddingBottom: 620,
+        paddingBottom: 220, // 🆕 El mínimo necesario para evitar saltos y superposición
     },
     productoItem: {
         flexDirection: 'row',
