@@ -90,7 +90,7 @@ const ProductList = ({ selectedDay, userId, searchText }) => {
       console.log(`✅ ${productosFormateados.length} productos cargados para Sugeridos (filtrados por disponible_app_sugeridos)`);
       setProductos(productosFormateados);
     } catch (error) {
-      console.error('❌ Error cargando productos:', error);
+      console.warn('❌ Error cargando productos:', error);
       Alert.alert('Error', 'No se pudieron cargar los productos');
     }
   };
@@ -230,7 +230,7 @@ const ProductList = ({ selectedDay, userId, searchText }) => {
       }
 
     } catch (error) {
-      console.error('Error enviando sugerido:', error);
+      console.warn('Error enviando sugerido:', error);
 
       // 🆕 Distinguir entre timeout y error de conexión
       if (error.name === 'AbortError') {
@@ -283,12 +283,12 @@ const ProductList = ({ selectedDay, userId, searchText }) => {
           contentContainerStyle={styles.scrollContainer}
           initialNumToRender={10}
           maxToRenderPerBatch={10}
-          windowSize={5}
+          windowSize={10} // Aumentado para mayor fluidez
           removeClippedSubviews={true}
           updateCellsBatchingPeriod={50}
           getItemLayout={(data, index) => ({
-            length: 150, // altura aproximada de cada item
-            offset: 150 * index,
+            length: 120, // Altura real: 100 de imagen + 20 de padding (10 superior, 10 inferior)
+            offset: 120 * index,
             index,
           })}
         />
@@ -392,6 +392,7 @@ const styles = StyleSheet.create({
   },
   scrollContainer: {
     padding: 10,
+    paddingBottom: 220, // Espacio extra para que el teclado nunca tape el último producto
   },
   loadingContainer: {
     flex: 1,

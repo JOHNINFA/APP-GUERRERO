@@ -98,6 +98,41 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [ventaEnEdicion, setVentaEnEdicion] = useState(null); // venta completa que se está editando
     const [modalEdicionVisible, setModalEdicionVisible] = useState(false);
     const [carritoEdicion, setCarritoEdicion] = useState({}); // {nombreProducto: cantidad}
+
+    // 🚀 OPTIMIZACIÓN: Memoizar flags del cliente seleccionado para evitar cálculos en render
+    const norm = useCallback((str) => str ? str.toString().toUpperCase().trim() : '', []);
+    
+    const clienteSeleccionadoYaVendido = useMemo(() => {
+        if (!clienteSeleccionado) return false;
+        const cNegocio = norm(clienteSeleccionado.negocio);
+        const cNombre = norm(clienteSeleccionado.nombre);
+        
+        // 1. Revisar ventas del backend (si están anuladas, no cuenta)
+        const anuladoEnBackend = (ventasBackendDia || []).some(b => 
+            b.estado === 'ANULADA' && 
+            ((b.nombre_negocio && norm(b.nombre_negocio) === cNegocio) || (b.cliente_nombre && norm(b.cliente_nombre) === cNombre))
+        );
+        if (anuladoEnBackend) return false;
+
+        // 2. Revisar ventas locales del día
+        return (ventasDelDia || []).some(venta => {
+            if (venta.estado === 'ANULADA') return false;
+            const vNegocio = norm(venta.cliente_negocio || venta.nombre_negocio);
+            const vNombre = norm(venta.cliente_nombre);
+            return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
+        });
+    }, [clienteSeleccionado, ventasDelDia, ventasBackendDia, norm]);
+
+    const clienteSeleccionadoConPedidoEntregado = useMemo(() => {
+        if (!clienteSeleccionado) return false;
+        const cNegocio = norm(clienteSeleccionado.negocio);
+        const cNombre = norm(clienteSeleccionado.nombre);
+        
+        return (pedidosEntregadosHoy || []).some(p => {
+            const pDestinatario = norm(p.destinatario);
+            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+        });
+    }, [clienteSeleccionado, pedidosEntregadosHoy, norm]);
     const [cantidadesEdicionInput, setCantidadesEdicionInput] = useState({}); // texto temporal por producto para evitar que desaparezca al borrar
     const [metodoPagoEdicion, setMetodoPagoEdicion] = useState('EFECTIVO');
     const [busquedaProductoEdicion, setBusquedaProductoEdicion] = useState('');
@@ -334,6 +369,16 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         return () => clearTimeout(timeoutId);
     }, [refrescarBaseBloqueSuperior]);
 
+    // 🚀 Auto-foco en el buscador al seleccionar cliente (Venta Rápida)
+    useEffect(() => {
+        if (clienteSeleccionado && clienteSeleccionado.id !== 'general') {
+            // Un pequeño delay para asegurar que la UI se haya acomodado
+            setTimeout(() => {
+                buscadorRef.current?.focus();
+            }, 500);
+        }
+    }, [clienteSeleccionado]);
+
     useEffect(() => {
         const debounceId = setTimeout(() => {
             setBusquedaProductoDebounced(busquedaProducto);
@@ -344,6 +389,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
     const manejarBusquedaProducto = useCallback((texto) => {
         setBusquedaProducto(texto);
+
+        // 🚀 Optimización: Si el texto está vacío (X presionada), limpiar el filtro inmediatamente
+        // sin esperar los 140ms del debounce.
+        if (!texto) {
+            setBusquedaProductoDebounced('');
+        }
 
         // Al filtrar manualmente, reiniciar la lista para mostrar el primer
         // resultado visible sin depender del scroll anterior.
@@ -357,7 +408,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 }
             });
         }
-    }, []);
+    }, [setBusquedaProductoDebounced]);
 
     const mostrarConfirmacionSyncRapida = useCallback((enviadas) => {
         setTextoModalSyncRapido(
@@ -505,7 +556,9 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         id: p.id,
                         destinatario: p.destinatario,
                         numero_pedido: p.numero_pedido,
-                        total: parseFloat(p.total) || 0
+                        total: parseFloat(p.total) || 0,
+                        fecha: p.fecha_actualizacion || p.fecha || p.fecha_entrega,
+                        fecha_actualizacion: p.fecha_actualizacion
                     }));
 
                     // 🆕 SOLO mostrar pedidos anulados desde App Móvil (no los del frontend)
@@ -532,12 +585,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     };
 
     const abrirSelectorCliente = async () => {
-        // Refrescar pedidos y flags antes de abrir selector
-        await Promise.all([
-            verificarPedidosPendientes(),
-            verificarFlagsRuta() // 🆕 Re-verificar permisos al abrir
-        ]);
+        // 🚀 Abrir inmediatamente para mejor UX
         setMostrarSelectorCliente(true);
+
+        // Refrescar pedidos y flags en segundo plano
+        verificarPedidosPendientes();
+        verificarFlagsRuta();
     };
 
     const cargarPedidoEnCarrito = (pedido) => {
@@ -737,12 +790,24 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             if (data.success) {
                 // 🆕 Agregar pedido con info del destinatario
+                // 🚀 Generar timestamp respetando el día seleccionado pero con hora actual
+                const ahora = new Date();
+                const year = fechaSeleccionada.getFullYear();
+                const month = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
+                const day = String(fechaSeleccionada.getDate()).padStart(2, '0');
+                const hours = String(ahora.getHours()).padStart(2, '0');
+                const minutes = String(ahora.getMinutes()).padStart(2, '0');
+                const seconds = String(ahora.getSeconds()).padStart(2, '0');
+                const fechaRegistro = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+
                 setPedidosEntregadosHoy(prev => [...prev, {
                     id: pedidoParaEntregar.id,
                     destinatario: pedidoParaEntregar.destinatario || clienteSeleccionado?.negocio || 'Cliente',
                     numero_pedido: pedidoParaEntregar.numero_pedido,
                     metodo_pago: metodoPago, // 🆕 Guardar localmente también
-                    total: parseFloat(pedidoParaEntregar.total) || 0 // 🆕 Guardar total
+                    total: parseFloat(pedidoParaEntregar.total) || 0, // 🆕 Guardar total
+                    fecha: fechaRegistro, // 🚀 Guardar respetando el día de la prueba
+                    fecha_actualizacion: fechaRegistro
                 }]);
 
                 // 🆕 Limpiar pedido del cliente para volver a botones normales
@@ -793,7 +858,9 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     destinatario: pedidoParaEntregar.destinatario || clienteSeleccionado?.negocio || 'Cliente',
                     numero_pedido: pedidoParaEntregar.numero_pedido,
                     metodo_pago: metodoPago,
-                    total: parseFloat(pedidoParaEntregar.total) || 0
+                    total: parseFloat(pedidoParaEntregar.total) || 0,
+                    fecha: new Date().toISOString(),
+                    fecha_actualizacion: new Date().toISOString()
                 }]);
 
                 setPedidosPendientes(prev => prev.map(p =>
@@ -1246,17 +1313,36 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     };
 
     const construirHistorialLocal = () => {
-        const listaLocal = Array.isArray(ventasDelDia) ? ventasDelDia : [];
-        return listaLocal
-            .map((venta, index) => ({
-                ...venta,
-                _key: `local-${venta?.id ?? index}-${venta?.fecha ?? ''}`,
-                origen: venta?.origen || (venta?.es_pedido ? 'PEDIDO_FACTURADO' : 'RUTA'),
-                cliente_negocio: venta?.cliente_negocio || venta?.nombre_negocio || venta?.destinatario || venta?.cliente_nombre || 'Cliente General',
-                cliente_nombre: venta?.cliente_nombre || venta?.destinatario || 'Cliente General',
-                detalles: Array.isArray(venta?.detalles) ? venta.detalles : (Array.isArray(venta?.productos) ? venta.productos : []),
+        const rutaLocales = Array.isArray(ventasDelDia) ? ventasDelDia : [];
+        const pedidosLocales = (Array.isArray(pedidosEntregadosHoy) ? pedidosEntregadosHoy : []).map(p => ({
+            ...p,
+            _key: `pedido-local-${p.id}`,
+            origen: 'PEDIDO_FACTURADO',
+            cliente_negocio: p.destinatario || p.nombre_negocio || 'Cliente General',
+            cliente_nombre: p.destinatario || 'Cliente General',
+            total: parseFloat(p.total) || 0,
+            fecha: p.fecha_actualizacion || p.fecha || p.fecha_entrega,
+            detalles: Array.isArray(p.detalles) ? p.detalles : (Array.isArray(p.detalles_info) ? p.detalles_info : []),
+        }));
+
+        return [...rutaLocales, ...pedidosLocales]
+            .map((item, index) => ({
+                ...item,
+                _key: item._key || `local-${item?.id ?? index}-${item?.fecha ?? ''}`,
+                origen: item?.origen || (item?.es_pedido ? 'PEDIDO_FACTURADO' : 'RUTA'),
+                cliente_negocio: item?.cliente_negocio || item?.nombre_negocio || item?.destinatario || item?.cliente_nombre || 'Cliente General',
+                cliente_nombre: item?.cliente_nombre || item?.destinatario || 'Cliente General',
+                detalles: Array.isArray(item?.detalles) ? item.detalles : (Array.isArray(item?.productos) ? item.productos : []),
             }))
-            .sort((a, b) => new Date(b?.fecha || 0) - new Date(a?.fecha || 0));
+            .sort((a, b) => {
+                // 🚀 Normalizar para comparar solo por el tiempo si el día es diferente por pruebas
+                const dA = new Date(a?.fecha || 0);
+                const dB = new Date(b?.fecha || 0);
+                // Forzamos el mismo día para que solo importe la HORA en el orden
+                dA.setFullYear(2000, 0, 1);
+                dB.setFullYear(2000, 0, 1);
+                return dB.getTime() - dA.getTime();
+            });
     };
 
     const cargarHistorialReimpresion = async () => {
@@ -1291,6 +1377,9 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 cliente_negocio: venta?.nombre_negocio || venta?.cliente_nombre || 'Cliente General',
                 cliente_nombre: venta?.cliente_nombre || 'Cliente General',
                 vendedor: venta?.vendedor_nombre || vendedorNombre || `Vendedor ${userId}`,
+                fecha_actualizacion: venta?.fecha_ultima_edicion || venta?.fecha,
+                fecha_creacion: venta?.fecha,
+                fecha: venta?.fecha || venta?.fecha_ultima_edicion,
                 detalles: Array.isArray(venta?.detalles) ? venta.detalles : [],
             }));
 
@@ -1304,6 +1393,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     cliente_negocio: pedido?.destinatario || 'Cliente General',
                     cliente_nombre: pedido?.destinatario || 'Cliente General',
                     vendedor: vendedorNombre || `Vendedor ${userId}`,
+                    fecha_actualizacion: pedido?.fecha_actualizacion,
+                    fecha_creacion: pedido?.fecha,
                     fecha: pedido?.fecha_actualizacion || pedido?.fecha || (pedido?.fecha_entrega ? `${pedido.fecha_entrega}T12:00:00` : null),
                     total: parseFloat(pedido?.total) || 0,
                     metodo_pago: pedido?.metodo_pago || 'EFECTIVO',
@@ -1352,7 +1443,20 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             });
 
             const combinado = Array.from(mapa.values())
-                .sort((a, b) => new Date(b?.fecha || 0) - new Date(a?.fecha || 0));
+                .sort((a, b) => {
+                    const fA = a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0;
+                    const fB = b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0;
+                    
+                    const dA = new Date(fA);
+                    const dB = new Date(fB);
+
+                    // 🚀 Para pruebas: Si los días son distintos, forzamos el mismo día 
+                    // para que el orden dependa exclusivamente de la HORA.
+                    dA.setFullYear(2000, 0, 1);
+                    dB.setFullYear(2000, 0, 1);
+                    
+                    return dB.getTime() - dA.getTime();
+                });
 
             setHistorialReimpresion(combinado.length > 0 ? combinado : fallbackLocal);
         } catch (error) {
@@ -1413,7 +1517,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     };
 
     const abrirSelectorMetodoPagoDesdeCard = useCallback((venta) => {
-        if (!venta || venta.estado === 'ANULADA' || venta.origen === 'PEDIDO_FACTURADO') return;
+        if (!venta || venta.estado === 'ANULADA') return;
         if (ventaYaFueModificada(venta)) {
             Alert.alert('Bloqueado', 'Esta venta ya fue modificada una vez y no admite otro cambio de método de pago.');
             return;
@@ -1430,7 +1534,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     }, [guardandoMetodoPagoCard]);
 
     const actualizarMetodoPagoDesdeCard = useCallback(async (venta, metodoNuevoRaw) => {
-        if (!venta || venta.estado === 'ANULADA' || venta.origen === 'PEDIDO_FACTURADO') return false;
+        if (!venta || venta.estado === 'ANULADA') return false;
         if (ventaYaFueModificada(venta)) {
             Alert.alert('Bloqueado', 'Esta venta ya fue modificada una vez y no admite otro cambio de método de pago.');
             return false;
@@ -1444,22 +1548,28 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
         const esVentaLocal = !venta.id || String(venta._key || '').startsWith('local-');
 
-        const esMismaVenta = (v) => {
-            if (!v) return false;
-            return (
+        const aplicarMetodoEnMemoria = (metodoPago, extra = {}) => {
+            const esMismaVenta = (v) => (
                 (v.id && venta.id && v.id === venta.id) ||
                 (v.id_local && venta.id_local && v.id_local === venta.id_local) ||
                 (v._key && venta._key && v._key === venta._key)
             );
-        };
 
-        const aplicarMetodoEnMemoria = (metodoPago, extra = {}) => {
-            setVentasDelDia(prev => prev.map(v => (
-                esMismaVenta(v) ? { ...v, metodo_pago: metodoPago, editada: true, ...extra } : v
-            )));
-            setHistorialReimpresion(prev => prev.map(v => (
-                esMismaVenta(v) ? { ...v, metodo_pago: metodoPago, editada: true, ...extra } : v
-            )));
+            setVentasDelDia(prev => prev.map(v => esMismaVenta(v) ? { ...v, metodo_pago: metodoPago, editada: true, ...extra } : v));
+            setHistorialReimpresion(prev => {
+                const updated = prev.map(v => esMismaVenta(v) ? { 
+                    ...v, 
+                    metodo_pago: metodoPago, 
+                    editada: true, 
+                    ...extra,
+                    fecha_actualizacion: extra.fecha_ultima_edicion || v.fecha_actualizacion 
+                } : v);
+                return updated.sort((a, b) => {
+                    const fechaA = new Date(a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0).getTime();
+                    const fechaB = new Date(b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0).getTime();
+                    return fechaB - fechaA;
+                });
+            });
         };
 
         // Optimista en UI para que el cambio se vea instantáneo en la card
@@ -1472,10 +1582,17 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             const dispositivoId = await obtenerDispositivoId();
             let responseData = null;
             if (!esVentaLocal) {
-                responseData = await editarVentaRuta(venta.id, {
-                    metodo_pago: metodoNuevo,
-                    dispositivo_id: dispositivoId,
-                });
+                if (venta.origen === 'PEDIDO_FACTURADO') {
+                    responseData = await actualizarPedido(venta.id, {
+                        metodo_pago: metodoNuevo,
+                        editado_desde_app: true
+                    });
+                } else {
+                    responseData = await editarVentaRuta(venta.id, {
+                        metodo_pago: metodoNuevo,
+                        dispositivo_id: dispositivoId,
+                    });
+                }
             }
 
             const metaEdicionFinal = {
@@ -1536,7 +1653,37 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             }
             return true;
         } catch (error) {
-            // Rollback visual si backend falla
+            const esErrorConexion = error?.message?.includes('Network') || error?.message?.includes('timeout') || error?.message?.includes('Aborted') || !netInfo.isConnected;
+            
+            // Si es un error de conexión y es un pedido facturado, lo mandamos a la cola offline
+            if (esErrorConexion && !esVentaLocal && venta.origen === 'PEDIDO_FACTURADO') {
+                try {
+                    const colaAccionesRaw = await AsyncStorage.getItem('pedidos_acciones_pendientes');
+                    const colaAcciones = colaAccionesRaw ? JSON.parse(colaAccionesRaw) : [];
+                    
+                    // Filtrar si ya existe una actualización de pago para este mismo pedido para no duplicar
+                    const nuevaCola = colaAcciones.filter(a => !(a.id === venta.id && a.tipo === 'ACTUALIZAR_PAGO'));
+                    
+                    nuevaCola.push({
+                        id: venta.id,
+                        tipo: 'ACTUALIZAR_PAGO',
+                        metodo_pago: metodoNuevo,
+                        fecha_local: new Date().toISOString()
+                    });
+                    
+                    await AsyncStorage.setItem('pedidos_acciones_pendientes', JSON.stringify(nuevaCola));
+                    console.log('📡 Cambio de pago guardado en cola offline para envío automático');
+                    
+                    // IMPORTANTE: En este caso NO hacemos rollback visual, 
+                    // dejamos el cambio optimista en pantalla porque ya está en la cola para sincronizar.
+                    Alert.alert('Modo Offline', 'Sin conexión: El cambio de pago se sincronizará automáticamente apenas detecte señal.');
+                    return true;
+                } catch (queueErr) {
+                    console.error('Error guardando en cola de pedidos:', queueErr);
+                }
+            }
+
+            // Rollback visual si backend falla (y no es por conexión manejable offline)
             aplicarMetodoEnMemoria(metodoAnterior, {
                 veces_editada: Number(venta?.veces_editada || 0),
                 fecha_ultima_edicion: venta?.fecha_ultima_edicion || null,
@@ -1673,8 +1820,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             );
 
             // Actualizar en historialReimpresion para que la card se vea en rojo
-            setHistorialReimpresion(prev =>
-                prev.map(v => {
+            setHistorialReimpresion(prev => {
+                const updated = prev.map(v => {
                     const mismaVenta =
                         (v.id && v.id === ventaEnEdicion.id) ||
                         (v.id_local && v.id_local === ventaEnEdicion.id_local) ||
@@ -1686,11 +1833,17 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             total: nuevoTotal,
                             metodo_pago: metodoPagoNormalizado,
                             ...metaEdicionConfirmada,
+                            fecha_actualizacion: metaEdicionConfirmada.fecha_ultima_edicion || v.fecha_actualizacion,
                         };
                     }
                     return v;
-                })
-            );
+                });
+                return updated.sort((a, b) => {
+                    const fechaA = new Date(a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0).getTime();
+                    const fechaB = new Date(b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0).getTime();
+                    return fechaB - fechaA;
+                });
+            });
 
             // 🆕 Actualizar contadores diarios de dinero (cantidad de ventas sigue igual)
             const viejoTotal = parseFloat(ventaEnEdicion.total || 0);
@@ -1899,7 +2052,14 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                         (v.id_local && v.id_local === venta.id_local);
                                     return misma ? { ...v, estado: 'ANULADA' } : v;
                                 };
-                                setHistorialReimpresion(prev => prev.map(marcarAnulada));
+                                setHistorialReimpresion(prev => {
+                                    const updated = prev.map(marcarAnulada);
+                                    return updated.sort((a, b) => {
+                                        const fechaA = new Date(a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0).getTime();
+                                        const fechaB = new Date(b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0).getTime();
+                                        return fechaB - fechaA;
+                                    });
+                                });
                                 setVentasDelDia(prev => prev.map(marcarAnulada));
                                 setVentasBackendDia(prev => prev.map(marcarAnulada)); // 🆕 badge header
 
@@ -2956,13 +3116,25 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
                 verificarPedidosPendientes(fechaStr);
 
+                // 🚀 Generar timestamp respetando el día seleccionado para el historial
+                const ahora = new Date();
+                const year = fechaSeleccionada.getFullYear();
+                const month = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
+                const day = String(fechaSeleccionada.getDate()).padStart(2, '0');
+                const hours = String(ahora.getHours()).padStart(2, '0');
+                const minutes = String(ahora.getMinutes()).padStart(2, '0');
+                const seconds = String(ahora.getSeconds()).padStart(2, '0');
+                const fechaRegistro = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+
                 setPedidosEntregadosHoy(prev => [...prev, {
                     ...pedidoClienteSeleccionado,
                     destinatario: pedidoClienteSeleccionado.destinatario || clienteSeleccionado?.negocio || clienteSeleccionado?.nombre || 'Cliente', // 🆕 Asegurar destinatario para match visual
                     estado: 'ENTREGADA',
                     total: ventaConDatos.total,
                     detalles: detallesNuevos,
-                    novedades: novedades
+                    novedades: novedades,
+                    fecha: fechaRegistro, // 🚀 Guardar respetando el día de la prueba
+                    fecha_actualizacion: fechaRegistro
                 }]);
 
                 // Mock de respuesta para la UI
@@ -3443,6 +3615,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             }
         });
         const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+            Keyboard.dismiss(); // 🚀 Forzar pérdida de foco de los inputs para que al tocarlos de nuevo se vuelva a abrir el teclado nativo
             cancelarCompensacionAnimada();
             setTecladoAbierto(false);
             setAlturaTeclado(0);
@@ -4032,97 +4205,68 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             >
                 {/* Header - Cliente - Visible si no hay teclado (salvo si el foco está en la búsqueda o hay filtro activo) */}
                 {(!tecladoAbierto || inputBuscadorEnFoco || busquedaProducto.length > 0) && (
-                    <View style={[styles.headerCliente]}>
-                    <View
-                        style={[
-                            styles.clienteSelector,
-                            clienteSeleccionado && (() => {
-                                const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
-                                const tienePedidoEntregado = pedidosEntregadosHoy.some(p => {
-                                    const pDestinatario = norm(p.destinatario);
-                                    const cNegocio = norm(clienteSeleccionado.negocio);
-                                    const cNombre = norm(clienteSeleccionado.nombre);
-                                    return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
-                                });
-                                return tienePedidoEntregado ? {
+                    <View style={styles.headerCliente}>
+                        <View
+                            style={[
+                                styles.clienteSelector,
+                                clienteSeleccionado && clienteSeleccionadoConPedidoEntregado ? {
                                     backgroundColor: 'rgba(34, 197, 94, 0.1)',
                                     borderColor: '#22c55e'
-                                } : null;
-                            })()
-                        ]}
-                    >
-                        <TouchableOpacity
-                            style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
-                            onPress={abrirSelectorCliente}
+                                } : null
+                            ]}
                         >
-                            {clienteSeleccionado?.esOcasional ? (
-                                <View style={[styles.badgeTipoHeaderRuta, { backgroundColor: '#fef3c7', borderColor: '#f59e0b' }]}><Text style={[styles.badgeTipoHeaderTexto, { color: '#d97706' }]}>O</Text></View>
-                            ) : clienteSeleccionadoEsPedido ? (
-                                <View style={styles.badgeTipoHeaderPedido}><Text style={styles.badgeTipoHeaderTexto}>P</Text></View>
-                            ) : (
-                                <View style={styles.badgeTipoHeaderRuta}><Text style={styles.badgeTipoHeaderTexto}>R</Text></View>
-                            )}
-                            <View style={styles.clienteInfo}>
-                                <Text style={[styles.clienteNombre, (clienteSeleccionado?.negocio || '').length > 34 && styles.clienteNombreMedio]}>
-                                    {clienteSeleccionado?.negocio || 'Seleccionar Cliente'}
-                                </Text>
-                                {/* Mostrar detalles siempre */}
-                                {clienteSeleccionado && (
-                                    <>
-                                        {clienteSeleccionado?.nombre && <Text style={styles.clienteDetalle}>👤 {clienteSeleccionado.nombre}</Text>}
-                                        <Text style={styles.clienteDetalle}>
-                                            {pedidoClienteSeleccionado ? `📦 Pedido #${pedidoClienteSeleccionado.numero_pedido}` : `📞 ${clienteSeleccionado?.celular || 'Sin teléfono'}`}
-                                        </Text>
-                                        <Text style={styles.clienteDetalle}>📍 {clienteSeleccionado?.direccion || 'Sin dirección'}</Text>
-                                    </>
+                            <TouchableOpacity
+                                style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                                onPress={abrirSelectorCliente}
+                            >
+                                {clienteSeleccionado?.esOcasional ? (
+                                    <View style={[styles.badgeTipoHeaderRuta, { backgroundColor: '#fef3c7', borderColor: '#f59e0b' }]}><Text style={[styles.badgeTipoHeaderTexto, { color: '#d97706' }]}>O</Text></View>
+                                ) : clienteSeleccionadoEsPedido ? (
+                                    <View style={styles.badgeTipoHeaderPedido}><Text style={styles.badgeTipoHeaderTexto}>P</Text></View>
+                                ) : (
+                                    <View style={styles.badgeTipoHeaderRuta}><Text style={styles.badgeTipoHeaderTexto}>R</Text></View>
                                 )}
-                            </View>
-                        </TouchableOpacity>
-                        {/* 🆕 Check verde si ya se le vendió hoy (NO si solo está entregado) */}
-                        {clienteSeleccionado && (() => {
-                            const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
+                                <View style={styles.clienteInfo}>
+                                    <Text style={[styles.clienteNombre, (clienteSeleccionado?.negocio || '').length > 34 && styles.clienteNombreMedio]}>
+                                        {clienteSeleccionado?.negocio || 'Seleccionar Cliente'}
+                                    </Text>
+                                    {/* Mostrar detalles siempre */}
+                                    {clienteSeleccionado && (
+                                        <>
+                                            {clienteSeleccionado?.nombre && <Text style={styles.clienteDetalle}>👤 {clienteSeleccionado.nombre}</Text>}
+                                            <Text style={styles.clienteDetalle}>
+                                                {pedidoClienteSeleccionado ? `📦 Pedido #${pedidoClienteSeleccionado.numero_pedido}` : `📞 ${clienteSeleccionado?.celular || 'Sin teléfono'}`}
+                                            </Text>
+                                            <Text style={styles.clienteDetalle}>📍 {clienteSeleccionado?.direccion || 'Sin dirección'}</Text>
+                                        </>
+                                    )}
+                                </View>
+                            </TouchableOpacity>
 
-                            const esPedidoEntregado = pedidosEntregadosHoy.some(p => {
-                                const pDestinatario = norm(p.destinatario);
-                                const cNegocio = norm(clienteSeleccionado.negocio);
-                                const cNombre = norm(clienteSeleccionado.nombre);
-                                return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
-                            });
-
-                            if (esPedidoEntregado) return null;
-
-                            const ventaConfirmada = ventasDelDia.some(venta => {
-                                if (venta.estado === 'ANULADA') return false;
-                                const vNegocio = norm(venta.cliente_negocio);
-                                const vNombre = norm(venta.cliente_nombre);
-                                const cNegocio = norm(clienteSeleccionado.negocio);
-                                const cNombre = norm(clienteSeleccionado.nombre);
-                                return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
-                            });
-
-                            return ventaConfirmada ? (
+                            {/* 🆕 Badge Vendido si ya se le vendió hoy */}
+                            {clienteSeleccionado && !clienteSeleccionadoConPedidoEntregado && clienteSeleccionadoYaVendido && (
                                 <View style={styles.headerCheckVendido}>
                                     <Text style={styles.headerTextoVendido}>VENDIDO</Text>
                                 </View>
-                            ) : null;
-                        })()}
-                        {clienteSeleccionado && (
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <TouchableOpacity
-                                    style={styles.btnNotaInterno}
-                                    onPress={() => setMostrarNotaModal(true)}
-                                >
-                                    <Ionicons name={clienteSeleccionado.nota ? "document-text" : "document-text-outline"} size={26} color={clienteSeleccionado.nota ? "#dc3545" : "#A0A0A0"} />
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={{ padding: 5, marginLeft: 2, marginRight: 5, justifyContent: 'center', alignItems: 'center' }}
-                                    onPress={() => avanzarAlSiguienteCliente({ limpiarAntes: true, mostrarAvisoFin: true })}
-                                >
-                                    <Ionicons name="play-skip-forward" size={26} color="#003d88" />
-                                </TouchableOpacity>
-                            </View>
-                        )}
-                    </View>
+                            )}
+
+                            {clienteSeleccionado && (
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <TouchableOpacity
+                                        style={styles.btnNotaInterno}
+                                        onPress={() => setMostrarNotaModal(true)}
+                                    >
+                                        <Ionicons name={clienteSeleccionado.nota ? "document-text" : "document-text-outline"} size={26} color={clienteSeleccionado.nota ? "#dc3545" : "#A0A0A0"} />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={{ padding: 5, marginLeft: 2, marginRight: 5, justifyContent: 'center', alignItems: 'center' }}
+                                        onPress={() => avanzarAlSiguienteCliente({ limpiarAntes: true, mostrarAvisoFin: true })}
+                                    >
+                                        <Ionicons name="play-skip-forward" size={26} color="#003d88" />
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        </View>
                     </View>
                 )}
 
@@ -4183,10 +4327,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     />
                     {busquedaProducto.length > 0 && (
                         <TouchableOpacity
+                            style={{ padding: 6 }}
+                            hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
                             onPress={() => {
                                 setTecladoAbierto(false); // 🚀 Evitar que al limpiar se asuma erróneamente que estamos editando cantidades
                                 manejarBusquedaProducto('');
-                                buscadorRef.current?.focus(); // 🚀 Mantener el foco al limpiar para evitar saltos
+                                // Enfocamos el buscador inmediatamente para que el usuario pueda seguir escribiendo
+                                buscadorRef.current?.focus();
                             }}
                         >
                             <Ionicons name="close-circle" size={20} color="#666" />
@@ -4209,7 +4356,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         ? styles.listaContentConTeclado
                         : styles.listaContentNormal
                 ]}
-                keyboardShouldPersistTaps="handled"
+                keyboardShouldPersistTaps="always"
                 onScrollToIndexFailed={(info) => {
                     const promedio = info.averageItemLength || 92;
                     const offset = Math.max(0, (info.index * promedio) - (promedio * 2.2));
@@ -4813,7 +4960,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                     const esAnulada = venta.estado === 'ANULADA';
                                     const yaModificada = ventaYaFueModificada(venta);
                                     const metodoPagoCard = normalizarMetodoPagoEdicion(venta?.metodo_pago);
-                                    const puedeCambiarMetodoDesdeCard = !esAnulada && venta.origen !== 'PEDIDO_FACTURADO' && !yaModificada;
+                                    const puedeCambiarMetodoDesdeCard = !esAnulada && !yaModificada;
                                     const vecesEditada = Number(venta?.veces_editada || 0);
                                     const horaUltimaEdicion = formatearHoraEdicion(venta?.fecha_ultima_edicion);
                                     return (
@@ -4859,7 +5006,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                                 </Text>
                                                 <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
                                                     <Text style={{ fontSize: 13, color: '#666' }}>
-                                                        {venta.fecha ? new Date(venta.fecha).toLocaleTimeString() : 'Hora desconocida'}
+                                                        {(() => {
+                                                            const f = venta.fecha || venta.fecha_actualizacion || venta.fecha_creacion;
+                                                            if (!f) return 'Hora desconocida';
+                                                            const d = new Date(f);
+                                                            if (isNaN(d.getTime())) return 'Hora desconocida';
+                                                            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+                                                        })()}
                                                     </Text>
                                                     {metodoPagoCard ? (
                                                         puedeCambiarMetodoDesdeCard ? (
@@ -5107,7 +5260,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                     backgroundColor: '#f8f9fa',
                                     maxHeight: 220,
                                 }}>
-                                    <ScrollView keyboardShouldPersistTaps="handled">
+                                    <ScrollView keyboardShouldPersistTaps="always">
                                         {productosSugeridosEdicion.length === 0 ? (
                                             <Text style={{ padding: 10, fontSize: 12, color: '#666' }}>
                                                 Sin coincidencias.
@@ -5161,7 +5314,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                 maxHeight: Math.max(140, alturaListaEdicionConTeclado + 40),
                             }}
                             contentContainerStyle={{ paddingBottom: 10 }}
-                            keyboardShouldPersistTaps="handled"
+                            keyboardShouldPersistTaps="always"
                             onScroll={(event) => {
                                 scrollOffsetEdicionRef.current = event.nativeEvent.contentOffset?.y || 0;
                             }}

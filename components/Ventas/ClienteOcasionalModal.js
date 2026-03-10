@@ -10,10 +10,13 @@ import {
     ActivityIndicator,
     KeyboardAvoidingView,
     Platform,
-    Keyboard
+    Keyboard,
+    Dimensions
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { API_URL } from '../../config';
+
+const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('screen');
 
 /**
  * Modal mini para crear un Cliente Ocasional (venta rápida en calle).
@@ -114,14 +117,22 @@ const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId }) =>
     return (
         <Modal
             visible={visible}
-            transparent
-            animationType="slide"
+            transparent={true}
+            animationType="fade"
             onRequestClose={onClose}
+            statusBarTranslucent={true}
         >
-            <View
-                style={styles.overlay}
-            >
-                <View style={[styles.container, tecladoActivo && { transform: [{ translateY: -100 }] }]}>
+            <View style={styles.overlay}>
+                <TouchableOpacity 
+                    style={StyleSheet.absoluteFill} 
+                    activeOpacity={1} 
+                    onPress={() => Keyboard.dismiss()} 
+                />
+                
+                <View style={[
+                    styles.container,
+                    (Platform.OS === 'android' && tecladoActivo) && { transform: [{ translateY: -110 }] }
+                ]}>
                     {/* Header */}
                     <View style={styles.header}>
                         <View style={styles.headerLeft}>
@@ -209,7 +220,7 @@ const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId }) =>
                             </>
                         )}
                     </TouchableOpacity>
-                </View>
+                    </View>
             </View>
         </Modal>
     );
@@ -217,7 +228,8 @@ const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId }) =>
 
 const styles = StyleSheet.create({
     overlay: {
-        flex: 1,
+        width: SCREEN_WIDTH,
+        height: SCREEN_HEIGHT + 100, // Margen extra para asegurar cobertura total
         backgroundColor: 'rgba(0, 0, 0, 0.5)',
         justifyContent: 'center',
         alignItems: 'center',

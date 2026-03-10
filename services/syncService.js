@@ -158,10 +158,13 @@ export const sincronizarPedidosAccionesPendientes = async () => {
                 } else if (accion.tipo === 'NO_ENTREGADO') {
                     url = `${API_URL}/api/pedidos/${accion.id}/marcar_no_entregado/`;
                     body = { motivo: accion.motivo || 'Sin motivo especificado' };
+                } else if (accion.tipo === 'ACTUALIZAR_PAGO') {
+                    url = `${API_URL}/api/pedidos/${accion.id}/actualizar_app/`;
+                    body = { metodo_pago: accion.metodo_pago, editado_desde_app: true };
                 }
 
                 const response = await fetch(url, {
-                    method: 'POST',
+                    method: accion.tipo === 'ACTUALIZAR_PAGO' ? 'PATCH' : 'POST',
                     headers: headersBase,
                     body: JSON.stringify(body)
                 });

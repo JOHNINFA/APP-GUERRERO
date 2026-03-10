@@ -512,7 +512,7 @@ export const sincronizarProductos = async () => {
             console.warn('⚠️ No se pudieron descargar productos:', response.status);
         }
     } catch (error) {
-        console.error('❌ Error sincronizando productos (offline?):', error.message);
+        console.warn('❌ Error sincronizando productos (offline?):', error.message);
     }
 };
 

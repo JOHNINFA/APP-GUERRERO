@@ -211,8 +211,10 @@ export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido })
                             style={styles.btnConfirmar}
                             onPress={() => onConfirmar(tieneVencidas, metodoPago)} // 🆕 Pasar método de pago
                         >
-                            <Ionicons name="checkmark-circle" size={20} color="white" />
-                            <Text style={styles.btnConfirmarTexto}>Confirmar Entrega</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                                <Ionicons name="checkmark-circle" size={20} color="white" />
+                                <Text style={[styles.btnConfirmarTexto, { marginLeft: 5 }]}>Confirmar{"\n"}Entrega</Text>
+                            </View>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -366,18 +368,17 @@ const styles = StyleSheet.create({
     },
     btnConfirmar: {
         flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
         justifyContent: 'center',
-        padding: 12,
+        alignItems: 'center',
+        padding: 5,
         borderRadius: 8,
         backgroundColor: '#22c55e',
-        gap: 5,
     },
     btnConfirmarTexto: {
         color: 'white',
         fontWeight: 'bold',
         fontSize: 14,
+        textAlign: 'center',
     },
     // 🆕 Estilos para pregunta de vencidas
     vencidasContainer: {

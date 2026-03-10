@@ -490,64 +490,56 @@ const ClienteSelector = ({
         }
     };
 
-    // 🆕 Cargar clientes del servidor (con timeout largo)
+    // 🆕 Cargar clientes del servidor (optimizado: no bloquea "Día" por "Todos")
     const cargarClientesDelServidor = async (dia) => {
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 segundos
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-            try {
-                // 🆕 Cargar día + todos en paralelo
-                const urlDia = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}&dia=${dia}`;
-                const urlTodos = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
-                const [responseDia, responseTodos] = await Promise.allSettled([
-                    fetch(urlDia, { signal: controller.signal }),
-                    fetch(urlTodos, { signal: controller.signal })
-                ]);
-                clearTimeout(timeoutId);
+            // ⚡ Cargar primero los del DÍA (lo más urgente)
+            const urlDia = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}&dia=${dia}`;
+            const responseDia = await fetch(urlDia, { signal: controller.signal });
 
-                if (responseDia.status === 'fulfilled' && responseDia.value.ok) {
-                    const dataDia = await responseDia.value.json();
-                    let todosFormateados = null;
-                    if (responseTodos.status === 'fulfilled' && responseTodos.value.ok) {
-                        const dataTodos = await responseTodos.value.json();
-                        todosFormateados = dataTodos.map((c, index) => formatearCliente(c, index, false));
-                    }
+            if (responseDia.ok) {
+                const dataDia = await responseDia.json();
+                const clientesDelDiaFormateados = dataDia.map((c, index) => formatearCliente(c, index, true));
+                
+                setClientesDelDia(clientesDelDiaFormateados);
+                console.log(`📥 Clientes del ${dia} cargados:`, clientesDelDiaFormateados.length);
 
-                    const clientesDelDiaFormateados = dataDia.map((c, index) => formatearCliente(c, index, true));
+                // Guardar en cache del día pronto
+                const { cacheKeyDia } = construirCacheKeys(dia);
+                await AsyncStorage.setItem(cacheKeyDia, JSON.stringify({
+                    clientes: clientesDelDiaFormateados,
+                    timestamp: Date.now()
+                }));
 
-                    // 🆕 El servidor ya devuelve solo los clientes del día, ordenados
-                    setClientesDelDia(clientesDelDiaFormateados);
-                    if (todosFormateados) {
+                // ✅ Quitamos el loading lo antes posible
+                setLoading(false);
+            }
+
+            // 🕒 Cargar "Todos" en SEGUNDO PLANO (sin bloquear el spinner)
+            const urlTodos = `${API_URL}/api/clientes-ruta/?vendedor_id=${userId}`;
+            fetch(urlTodos, { signal: controller.signal })
+                .then(res => res.ok ? res.json() : null)
+                .then(async dataTodos => {
+                    if (dataTodos) {
+                        const todosFormateados = dataTodos.map((c, index) => formatearCliente(c, index, false));
                         setTodosLosClientes(todosFormateados);
-                    }
-                    console.log(`📥 Clientes del ${dia} cargados y ordenados:`, clientesDelDiaFormateados.length);
-
-                    // Guardar en cache separado por tipo
-                    const { cacheKeyTodos, cacheKeyDia } = construirCacheKeys(dia);
-                    await AsyncStorage.setItem(cacheKeyDia, JSON.stringify({
-                        clientes: clientesDelDiaFormateados,
-                        timestamp: Date.now()
-                    }));
-
-                    if (todosFormateados) {
+                        
+                        const { cacheKeyTodos } = construirCacheKeys(dia);
                         await AsyncStorage.setItem(cacheKeyTodos, JSON.stringify({
                             clientes: todosFormateados,
                             timestamp: Date.now()
                         }));
+                        console.log('📥 Todos los clientes cargados en fondo');
                     }
-                }
-            } catch (fetchError) {
-                clearTimeout(timeoutId);
-                if (fetchError.name === 'AbortError') {
-                    console.log('⏱️ Timeout cargando clientes del servidor');
-                } else {
-                    throw fetchError;
-                }
-            }
+                })
+                .catch(err => console.log('⚠️ Error cargando "Todos" en fondo:', err))
+                .finally(() => clearTimeout(timeoutId));
+
         } catch (error) {
             console.log('❌ Error cargando clientes:', error?.message || error);
-        } finally {
             setLoading(false);
         }
     };
@@ -824,7 +816,7 @@ const ClienteSelector = ({
         }
     }, [clientesDelDia, onClientesDiaActualizados]);
 
-    const handleSelectCliente = (cliente) => {
+    const handleSelectCliente = useCallback((cliente) => {
         // ✅ OPTIMIZACIÓN: Cerrar modal PRIMERO para dar sensación de rapidez
         onClose();
         setBusqueda('');
@@ -834,7 +826,7 @@ const ClienteSelector = ({
         setTimeout(() => {
             onSelectCliente(cliente);
         }, 0);
-    };
+    }, [onClose, onSelectCliente]);
 
     const handleNuevoCliente = () => {
         onNuevoCliente();
@@ -853,7 +845,7 @@ const ClienteSelector = ({
         Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`);
     };
 
-    const renderCliente = ({ item, index }) => {
+    const renderCliente = useCallback(({ item, index }) => {
         const negocioNorm = normalizarTexto(item?.negocio);
         const nombreNorm = normalizarTexto(item?.nombre);
         const ventaRealizada =
@@ -1401,7 +1393,19 @@ const ClienteSelector = ({
                 }
             </TouchableOpacity >
         );
-    };
+    }, [
+        mostrarTodos,
+        busqueda,
+        pedidosPorCliente,
+        ventasPorCliente,
+        indiceClientesDiaMap,
+        dragTarget,
+        clientesDelDia.length,
+        handleSelectCliente,
+        startRapidMove,
+        stopRapidMove,
+        moverClienteAlExtremo
+    ]);
 
     return (
         <Modal
@@ -2108,4 +2112,4 @@ const styles = StyleSheet.create({
     },
 });
 
-export default ClienteSelector;
+export default React.memo(ClienteSelector);

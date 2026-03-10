@@ -45,7 +45,7 @@ const Cargue = ({ userId }) => {
       console.log(`✅ ${productosCargue.length} productos cargados para Cargue (filtrados por disponible_app_cargue)`);
       setProductos(productosCargue);
     } catch (error) {
-      console.error('❌ Error cargando productos:', error);
+      console.warn('❌ Error cargando productos:', error);
       Alert.alert('Error', 'No se pudieron cargar los productos');
     }
   };
@@ -261,7 +261,9 @@ const Cargue = ({ userId }) => {
         V: nuevoValorV
       }
     }));
-    Vibration.vibrate(30);
+    
+    // Pequeña vibración en cada toque
+    Vibration.vibrate(10);
 
     // 🔄 Actualizar en el servidor en segundo plano (con timeout)
     // Cancelar request anterior DEL MISMO PRODUCTO si existe
@@ -462,10 +464,11 @@ const Cargue = ({ userId }) => {
           data={productos}
           keyExtractor={item => item}
           renderItem={renderProduct}
-          initialNumToRender={10}
-          maxToRenderPerBatch={10}
-          windowSize={10}
+          initialNumToRender={15}
+          maxToRenderPerBatch={15}
+          windowSize={11}
           removeClippedSubviews={true}
+          updateCellsBatchingPeriod={30}
           contentContainerStyle={styles.listContent}
         />
       )}

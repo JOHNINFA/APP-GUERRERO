@@ -249,7 +249,7 @@ export const actualizarPedido = async (pedidoId, datos) => {
     try {
         console.log('📝 Actualizando pedido:', pedidoId, datos);
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 segundos
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 segundos
 
         const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
         const response = await fetch(`${API_BASE}/pedidos/${pedidoId}/actualizar_app/`, {
