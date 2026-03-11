@@ -101,15 +101,15 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
     // 🚀 OPTIMIZACIÓN: Memoizar flags del cliente seleccionado para evitar cálculos en render
     const norm = useCallback((str) => str ? str.toString().toUpperCase().trim() : '', []);
-    
+
     const clienteSeleccionadoYaVendido = useMemo(() => {
         if (!clienteSeleccionado) return false;
         const cNegocio = norm(clienteSeleccionado.negocio);
         const cNombre = norm(clienteSeleccionado.nombre);
-        
+
         // 1. Revisar ventas del backend (si están anuladas, no cuenta)
-        const anuladoEnBackend = (ventasBackendDia || []).some(b => 
-            b.estado === 'ANULADA' && 
+        const anuladoEnBackend = (ventasBackendDia || []).some(b =>
+            b.estado === 'ANULADA' &&
             ((b.nombre_negocio && norm(b.nombre_negocio) === cNegocio) || (b.cliente_nombre && norm(b.cliente_nombre) === cNombre))
         );
         if (anuladoEnBackend) return false;
@@ -127,7 +127,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         if (!clienteSeleccionado) return false;
         const cNegocio = norm(clienteSeleccionado.negocio);
         const cNombre = norm(clienteSeleccionado.nombre);
-        
+
         return (pedidosEntregadosHoy || []).some(p => {
             const pDestinatario = norm(p.destinatario);
             return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
@@ -182,7 +182,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     viewOffset: 20, // Pequeño espacio para que el teclado no lo tape exacto
                     // 🚀 Optimizador: si es el producto 1 o 2 (índice 0 o 1), el salto es inmediato (sin animación)
                     // para que el teclado salga y la vista se acomode al instante sin sentirse lento.
-                    animated: index > 1, 
+                    animated: index > 1,
                 });
             } catch (e) {
                 // Fallback silencioso: no bloquear la edición si FlatList aún no midió el índice.
@@ -1446,7 +1446,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 .sort((a, b) => {
                     const fA = a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0;
                     const fB = b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0;
-                    
+
                     const dA = new Date(fA);
                     const dB = new Date(fB);
 
@@ -1454,7 +1454,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     // para que el orden dependa exclusivamente de la HORA.
                     dA.setFullYear(2000, 0, 1);
                     dB.setFullYear(2000, 0, 1);
-                    
+
                     return dB.getTime() - dA.getTime();
                 });
 
@@ -1557,12 +1557,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             setVentasDelDia(prev => prev.map(v => esMismaVenta(v) ? { ...v, metodo_pago: metodoPago, editada: true, ...extra } : v));
             setHistorialReimpresion(prev => {
-                const updated = prev.map(v => esMismaVenta(v) ? { 
-                    ...v, 
-                    metodo_pago: metodoPago, 
-                    editada: true, 
+                const updated = prev.map(v => esMismaVenta(v) ? {
+                    ...v,
+                    metodo_pago: metodoPago,
+                    editada: true,
                     ...extra,
-                    fecha_actualizacion: extra.fecha_ultima_edicion || v.fecha_actualizacion 
+                    fecha_actualizacion: extra.fecha_ultima_edicion || v.fecha_actualizacion
                 } : v);
                 return updated.sort((a, b) => {
                     const fechaA = new Date(a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0).getTime();
@@ -1654,26 +1654,26 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             return true;
         } catch (error) {
             const esErrorConexion = error?.message?.includes('Network') || error?.message?.includes('timeout') || error?.message?.includes('Aborted') || !netInfo.isConnected;
-            
+
             // Si es un error de conexión y es un pedido facturado, lo mandamos a la cola offline
             if (esErrorConexion && !esVentaLocal && venta.origen === 'PEDIDO_FACTURADO') {
                 try {
                     const colaAccionesRaw = await AsyncStorage.getItem('pedidos_acciones_pendientes');
                     const colaAcciones = colaAccionesRaw ? JSON.parse(colaAccionesRaw) : [];
-                    
+
                     // Filtrar si ya existe una actualización de pago para este mismo pedido para no duplicar
                     const nuevaCola = colaAcciones.filter(a => !(a.id === venta.id && a.tipo === 'ACTUALIZAR_PAGO'));
-                    
+
                     nuevaCola.push({
                         id: venta.id,
                         tipo: 'ACTUALIZAR_PAGO',
                         metodo_pago: metodoNuevo,
                         fecha_local: new Date().toISOString()
                     });
-                    
+
                     await AsyncStorage.setItem('pedidos_acciones_pendientes', JSON.stringify(nuevaCola));
                     console.log('📡 Cambio de pago guardado en cola offline para envío automático');
-                    
+
                     // IMPORTANTE: En este caso NO hacemos rollback visual, 
                     // dejamos el cambio optimista en pantalla porque ya está en la cola para sincronizar.
                     Alert.alert('Modo Offline', 'Sin conexión: El cambio de pago se sincronizará automáticamente apenas detecte señal.');
@@ -2839,13 +2839,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         // 🆕 Validar tope de venta para clientes ocasionales y BLOQUEAR
         if (clienteSeleccionado.esOcasional && clienteSeleccionado.tope_venta) {
             const topeVenta = parseFloat(clienteSeleccionado.tope_venta);
-            
+
             // 🆕 Calcular suma de ventas ocasionales ya hechas hoy
             const totalOcasionalesPrevias = (ventasDelDia || []).reduce((sum, v) => {
-                const esOcasional = v.cliente_ocasional || 
-                                   (v.cliente_negocio && String(v.cliente_negocio).toUpperCase().includes('(OCASIONAL)')) ||
-                                   (v.nombre_negocio && String(v.nombre_negocio).toUpperCase().includes('(OCASIONAL)'));
-                                   
+                const esOcasional = v.cliente_ocasional ||
+                    (v.cliente_negocio && String(v.cliente_negocio).toUpperCase().includes('(OCASIONAL)')) ||
+                    (v.nombre_negocio && String(v.nombre_negocio).toUpperCase().includes('(OCASIONAL)'));
+
                 if (esOcasional && String(v.estado || '').toUpperCase() !== 'ANULADA') {
                     return sum + (parseFloat(v.total) || 0);
                 }
@@ -2856,7 +2856,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             if (totalAcumulado > topeVenta) {
                 Alert.alert(
-                    'Tope Diario Excedido', 
+                    'Tope Diario Excedido',
                     `Tu límite diario para clientes ocasionales es de $${topeVenta.toLocaleString()}.\n\nYa has vendido $${totalOcasionalesPrevias.toLocaleString()} hoy, y esta venta es de $${total.toLocaleString()} (Acumulado: $${totalAcumulado.toLocaleString()}).\n\nSolicita un aumento de tope desde "Otros -> Gestión de Rutas -> Clientes Ocasionales".`
                 );
                 return; // ⛔ Bloquear la venta
@@ -3517,6 +3517,68 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         seleccionarClienteDirecto(cliente);
     };
 
+    const abrirClienteOcasionalRapido = useCallback(async () => {
+        const totalOcasionalesPrevias = (ventasDelDia || []).reduce((sum, v) => {
+            const esOcasional = v.cliente_ocasional ||
+                (v.cliente_negocio && String(v.cliente_negocio).toUpperCase().includes('(OCASIONAL)')) ||
+                (v.nombre_negocio && String(v.nombre_negocio).toUpperCase().includes('(OCASIONAL)'));
+
+            if (esOcasional && String(v.estado || '').toUpperCase() !== 'ANULADA') {
+                return sum + (parseFloat(v.total) || 0);
+            }
+            return sum;
+        }, 0);
+
+        let topeVentaLimit = 60000;
+        try {
+            const vendedorIdLimpio = String(userId).toUpperCase().replace('ID', '');
+            const resp = await fetch(`${API_URL}/api/rutas/?vendedor_id=ID${vendedorIdLimpio}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.length > 0) {
+                    const ventaRapidaPermitida = data.every(r => r.permitir_venta_rapida !== false);
+                    setFlagVentaRapida(ventaRapidaPermitida);
+
+                    if (!ventaRapidaPermitida) {
+                        Alert.alert(
+                            'No disponible',
+                            'La venta rápida está deshabilitada para esta ruta.\n\nContacta al administrador.'
+                        );
+                        return;
+                    }
+
+                    if (data[0].tope_cliente_ocasional) {
+                        topeVentaLimit = parseFloat(data[0].tope_cliente_ocasional);
+                    }
+                }
+            }
+        } catch (e) {
+            console.log('Error obteniendo tope de ruta, usando fallback:', e);
+            if (flagVentaRapida === false) {
+                Alert.alert(
+                    'No disponible',
+                    'La venta rápida está deshabilitada para este ID.\n\nContacta al administrador.'
+                );
+                return;
+            }
+            const ventaConTope = (ventasDelDia || []).find(v => v.cliente_ocasional && v.tope_venta);
+            if (ventaConTope && ventaConTope.tope_venta) {
+                topeVentaLimit = parseFloat(ventaConTope.tope_venta);
+            }
+        }
+
+        if (totalOcasionalesPrevias >= topeVentaLimit) {
+            Alert.alert(
+                'Tope Diario Excedido ⛔',
+                'Has superado el tope de ventas para clientes ocasionales.\n\nPor favor, contacta a un administrador.'
+            );
+            return;
+        }
+
+        setMostrarSelectorCliente(false);
+        setMostrarModalOcasional(true);
+    }, [ventasDelDia, userId, flagVentaRapida]);
+
     const avanzarAlSiguienteCliente = ({ limpiarAntes = false, mostrarAvisoFin = true } = {}) => {
         const lista = Array.isArray(clientesOrdenDia) ? clientesOrdenDia : [];
 
@@ -4130,10 +4192,10 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     <View style={styles.turnoIndicadorContent}>
                         <View style={styles.puntoVerde} />
                         <Text style={styles.turnoTexto}>
-                            Turno Abierto {horaTurno ? `• ${horaTurno.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                            T.A. {horaTurno ? `• ${horaTurno.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}` : ''}
                         </Text>
                     </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <View style={styles.turnoAcciones}>
                         <Text style={styles.turnoDia}>
                             {diaSeleccionado?.substring(0, 3)} • {fechaSeleccionada?.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
                         </Text>
@@ -4143,22 +4205,36 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                 setMostrarSelectorDia(true);
                                 setForzarMostrarTurno(false);
                             }}
-                            style={styles.btnCambiarDia}
+                            style={styles.turnoAccionBtn}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                         >
                             <Ionicons name="calendar-outline" size={16} color="#003d88" />
                         </TouchableOpacity>
 
                         <TouchableOpacity
                             onPress={abrirHistorialReimpresion}
-                            style={[styles.btnCambiarDia, { marginLeft: 2 }]}
+                            style={styles.turnoAccionBtn}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                         >
                             <Ionicons name="receipt-outline" size={16} color="#003d88" />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            onPress={abrirClienteOcasionalRapido}
+                            style={[
+                                styles.turnoAccionBtn,
+                                !flagVentaRapida && { opacity: 0.35 }
+                            ]}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                            <Ionicons name="flash-outline" size={16} color="#f59e0b" />
                         </TouchableOpacity>
 
                         {forzarMostrarTurno && (
                             <TouchableOpacity
                                 onPress={() => setForzarMostrarTurno(false)}
-                                style={[styles.btnCambiarDia, { marginLeft: 2, backgroundColor: '#ffebee' }]}
+                                style={[styles.turnoAccionBtn, styles.turnoAccionCerrar]}
+                                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                             >
                                 <Ionicons name="close-circle-outline" size={18} color="#f44336" />
                             </TouchableOpacity>
@@ -4273,72 +4349,72 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 {/* Botones de acciones: Visibles si no hay teclado (salvo si el foco está en la búsqueda o hay filtro activo) */}
                 {(!tecladoAbierto || inputBuscadorEnFoco || busquedaProducto.length > 0) && (
                     <View style={styles.botonesAccionesContainer}>
-                    {pedidoClienteSeleccionado ? (
-                        <>
-                            <TouchableOpacity style={[styles.btnAccion, styles.btnEditar]} onPress={editarPedidoClienteSeleccionado}>
-                                <Ionicons name="create" size={18} color="white" /><Text style={styles.btnAccionTexto}>Editar</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={[styles.btnAccion, styles.btnEntregado]} onPress={marcarEntregadoClienteSeleccionado}>
-                                <Ionicons name="checkmark-circle" size={18} color="white" /><Text style={styles.btnAccionTexto}>Entregar</Text>
-                            </TouchableOpacity>
-                        </>
-                    ) : (
-                        <>
-                            <TouchableOpacity style={[styles.btnAccion, styles.btnVencidas]} onPress={() => setMostrarVencidas(true)}>
-                                <Ionicons name="alert-circle" size={18} color="white" />
-                                <Text style={styles.btnAccionTexto}>Vencidas</Text>
-                                {vencidas.length > 0 && (
-                                    <View style={styles.badgeAccion}>
-                                        <Text style={styles.badgeTexto}>{vencidas.length}</Text>
-                                    </View>
-                                )}
-                            </TouchableOpacity>
-                            {turnoAbierto && (
-                                <TouchableOpacity style={[styles.btnAccion, styles.btnCerrarPequeño]} onPress={async () => {
-                                    // 🆕 Forzar recarga de totales EN VIVO desde backend antes de mostrar el modal
-                                    await verificarPedidosPendientes();
-                                    await cargarVentasDelDia(fechaSeleccionada);
-                                    setMostrarModalCerrarTurno(true);
-                                }}>
-                                    <Ionicons name="lock-closed" size={18} color="white" /><Text style={styles.btnAccionTexto}>Cerrar</Text>
+                        {pedidoClienteSeleccionado ? (
+                            <>
+                                <TouchableOpacity style={[styles.btnAccion, styles.btnEditar]} onPress={editarPedidoClienteSeleccionado}>
+                                    <Ionicons name="create" size={18} color="white" /><Text style={styles.btnAccionTexto}>Editar</Text>
                                 </TouchableOpacity>
-                            )}
-                        </>
-                    )}
+                                <TouchableOpacity style={[styles.btnAccion, styles.btnEntregado]} onPress={marcarEntregadoClienteSeleccionado}>
+                                    <Ionicons name="checkmark-circle" size={18} color="white" /><Text style={styles.btnAccionTexto}>Entregar</Text>
+                                </TouchableOpacity>
+                            </>
+                        ) : (
+                            <>
+                                <TouchableOpacity style={[styles.btnAccion, styles.btnVencidas]} onPress={() => setMostrarVencidas(true)}>
+                                    <Ionicons name="alert-circle" size={18} color="white" />
+                                    <Text style={styles.btnAccionTexto}>Vencidas</Text>
+                                    {vencidas.length > 0 && (
+                                        <View style={styles.badgeAccion}>
+                                            <Text style={styles.badgeTexto}>{vencidas.length}</Text>
+                                        </View>
+                                    )}
+                                </TouchableOpacity>
+                                {turnoAbierto && (
+                                    <TouchableOpacity style={[styles.btnAccion, styles.btnCerrarPequeño]} onPress={async () => {
+                                        // 🆕 Forzar recarga de totales EN VIVO desde backend antes de mostrar el modal
+                                        await verificarPedidosPendientes();
+                                        await cargarVentasDelDia(fechaSeleccionada);
+                                        setMostrarModalCerrarTurno(true);
+                                    }}>
+                                        <Ionicons name="lock-closed" size={18} color="white" /><Text style={styles.btnAccionTexto}>Cerrar</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </>
+                        )}
                     </View>
                 )}
 
                 {/* Buscador: Se oculta cuando el teclado de cantidad de productos está abierto (salvo si hay filtro activo) */}
                 {(!tecladoAbierto || inputBuscadorEnFoco || busquedaProducto.length > 0) && (
                     <View style={styles.busquedaContainer}>
-                    <Ionicons name="search" size={20} color="#666" style={styles.iconoBusqueda} />
-                    <TextInput
-                        ref={buscadorRef}
-                        style={styles.inputBusqueda}
-                        placeholder="Buscar producto..."
-                        value={busquedaProducto}
-                        onChangeText={manejarBusquedaProducto}
-                        autoCapitalize="characters"
-                        onFocus={() => {
-                            setInputBuscadorEnFoco(true);
-                            setTecladoAbierto(false); // 🚀 Forzar "modo normal" al tocar el buscador, evitando falsos positivos de listado
-                        }}
-                        onBlur={() => setInputBuscadorEnFoco(false)}
-                    />
-                    {busquedaProducto.length > 0 && (
-                        <TouchableOpacity
-                            style={{ padding: 6 }}
-                            hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
-                            onPress={() => {
-                                setTecladoAbierto(false); // 🚀 Evitar que al limpiar se asuma erróneamente que estamos editando cantidades
-                                manejarBusquedaProducto('');
-                                // Enfocamos el buscador inmediatamente para que el usuario pueda seguir escribiendo
-                                buscadorRef.current?.focus();
+                        <Ionicons name="search" size={20} color="#666" style={styles.iconoBusqueda} />
+                        <TextInput
+                            ref={buscadorRef}
+                            style={styles.inputBusqueda}
+                            placeholder="Buscar producto..."
+                            value={busquedaProducto}
+                            onChangeText={manejarBusquedaProducto}
+                            autoCapitalize="characters"
+                            onFocus={() => {
+                                setInputBuscadorEnFoco(true);
+                                setTecladoAbierto(false); // 🚀 Forzar "modo normal" al tocar el buscador, evitando falsos positivos de listado
                             }}
-                        >
-                            <Ionicons name="close-circle" size={20} color="#666" />
-                        </TouchableOpacity>
-                    )}
+                            onBlur={() => setInputBuscadorEnFoco(false)}
+                        />
+                        {busquedaProducto.length > 0 && (
+                            <TouchableOpacity
+                                style={{ padding: 6 }}
+                                hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+                                onPress={() => {
+                                    setTecladoAbierto(false); // 🚀 Evitar que al limpiar se asuma erróneamente que estamos editando cantidades
+                                    manejarBusquedaProducto('');
+                                    // Enfocamos el buscador inmediatamente para que el usuario pueda seguir escribiendo
+                                    buscadorRef.current?.focus();
+                                }}
+                            >
+                                <Ionicons name="close-circle" size={20} color="#666" />
+                            </TouchableOpacity>
+                        )}
                     </View>
                 )}
             </View>
@@ -4502,50 +4578,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     setMostrarSelectorCliente(false);
                     setMostrarModalCliente(true);
                 }}
-                onClienteOcasional={async () => {
-                    // 🆕 Validar tope global ANTES de dejarlo crear al cliente ocasional
-                    const totalOcasionalesPrevias = (ventasDelDia || []).reduce((sum, v) => {
-                        const esOcasional = v.cliente_ocasional || 
-                                           (v.cliente_negocio && String(v.cliente_negocio).toUpperCase().includes('(OCASIONAL)')) ||
-                                           (v.nombre_negocio && String(v.nombre_negocio).toUpperCase().includes('(OCASIONAL)'));
-                                           
-                        if (esOcasional && String(v.estado || '').toUpperCase() !== 'ANULADA') {
-                            return sum + (parseFloat(v.total) || 0);
-                        }
-                        return sum;
-                    }, 0);
-
-                    // Consultar tope actual al backend si hay internet, o usar 60000 por defecto
-                    let topeVentaLimit = 60000;
-                    try {
-                        const vendedorIdLimpio = String(userId).toUpperCase().replace('ID', '');
-                        const resp = await fetch(`${API_URL}/api/rutas/?vendedor_id=ID${vendedorIdLimpio}`);
-                        if (resp.ok) {
-                            const data = await resp.json();
-                            if (data.length > 0 && data[0].tope_cliente_ocasional) {
-                                topeVentaLimit = parseFloat(data[0].tope_cliente_ocasional);
-                            }
-                        }
-                    } catch (e) {
-                        console.log('Error obteniendo tope de ruta, usando fallback:', e);
-                        // Si falla (offline) usamos fallback buscando el tope en los existentes en ventasDelDia
-                        const ventaConTope = (ventasDelDia || []).find(v => v.cliente_ocasional && v.tope_venta);
-                        if (ventaConTope && ventaConTope.tope_venta) {
-                            topeVentaLimit = parseFloat(ventaConTope.tope_venta);
-                        }
-                    }
-
-                    if (totalOcasionalesPrevias >= topeVentaLimit) {
-                        Alert.alert(
-                            'Tope Diario Excedido ⛔',
-                            'Has superado el tope de ventas para clientes ocasionales.\n\nPor favor, contacta a un administrador.'
-                        );
-                        return; // Bloquear apertura del modal
-                    }
-
-                    setMostrarSelectorCliente(false);
-                    setMostrarModalOcasional(true);
-                }}
+                onClienteOcasional={abrirClienteOcasionalRapido}
                 onClientesDiaActualizados={setClientesOrdenDia}
                 onActualizarPedidos={verificarPedidosPendientes}
                 userId={userId}
@@ -5411,7 +5444,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                 ))}
                             </Text>
                         </View>
-                        
+
                         {/* Botones */}
                         <View style={{ flexDirection: 'row', gap: 8, marginTop: 4, paddingBottom: 8 }}>
                             <TouchableOpacity
@@ -6486,6 +6519,22 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 12,
         fontWeight: '600',
+    },
+    turnoAcciones: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    turnoAccionBtn: {
+        paddingHorizontal: 8,
+        paddingVertical: 7,
+        backgroundColor: '#e0f2fe',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: 'transparent',
+    },
+    turnoAccionCerrar: {
+        backgroundColor: '#ffebee',
     },
     btnAbrirTurnoTexto: {
         color: 'white',

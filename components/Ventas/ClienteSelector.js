@@ -503,7 +503,7 @@ const ClienteSelector = ({
             if (responseDia.ok) {
                 const dataDia = await responseDia.json();
                 const clientesDelDiaFormateados = dataDia.map((c, index) => formatearCliente(c, index, true));
-                
+
                 setClientesDelDia(clientesDelDiaFormateados);
                 console.log(`📥 Clientes del ${dia} cargados:`, clientesDelDiaFormateados.length);
 
@@ -526,7 +526,7 @@ const ClienteSelector = ({
                     if (dataTodos) {
                         const todosFormateados = dataTodos.map((c, index) => formatearCliente(c, index, false));
                         setTodosLosClientes(todosFormateados);
-                        
+
                         const { cacheKeyTodos } = construirCacheKeys(dia);
                         await AsyncStorage.setItem(cacheKeyTodos, JSON.stringify({
                             clientes: todosFormateados,
@@ -1520,32 +1520,6 @@ const ClienteSelector = ({
                         <Text style={styles.btnAccionTexto}>Nuevo Cliente</Text>
                     </TouchableOpacity>
 
-                    {/* 🆕 Botón Venta Rápida (Cliente Ocasional) — respeta flag de ruta */}
-                    {onClienteOcasional && (
-                        <TouchableOpacity
-                            style={[
-                                styles.btnAccion,
-                                { backgroundColor: '#f59e0b' },
-                                !permitirVentaRapida && { opacity: 0.35 }
-                            ]}
-                            onPress={() => {
-                                if (!permitirVentaRapida) {
-                                    Alert.alert(
-                                        'No disponible',
-                                        'La venta rápida está deshabilitada para esta ruta.',
-                                        [{ text: 'Entendido' }]
-                                    );
-                                    return;
-                                }
-                                onClienteOcasional();
-                                setMostrarTodos(false);
-                                onClose();
-                            }}
-                        >
-                            <Ionicons name="flash" size={20} color="white" />
-                            <Text style={styles.btnAccionTexto}>Ocasional</Text>
-                        </TouchableOpacity>
-                    )}
                 </View>
 
                 {/* 🆕 Indicador de guardando */}
@@ -1715,7 +1689,7 @@ const styles = StyleSheet.create({
     },
     btnAccionTexto: {
         color: 'white',
-        fontSize: 11,
+        fontSize: 14,
         fontWeight: 'bold',
         textAlign: 'center',
     },
