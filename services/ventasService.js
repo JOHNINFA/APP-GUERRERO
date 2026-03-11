@@ -55,6 +55,7 @@ export const obtenerDispositivoId = async () => {
 // ==================== COLA DE SINCRONIZACIÓN OFFLINE ====================
 const COLA_PENDIENTES_KEY = 'ventas_pendientes_sync';
 let sincronizandoCola = false;
+let colaPendientesLock = Promise.resolve();
 
 /**
  * Obtiene las ventas pendientes de sincronizar
@@ -70,18 +71,58 @@ export const obtenerVentasPendientes = async () => {
 };
 
 /**
+ * Serializa mutaciones de la cola offline para evitar que varias ventas rápidas
+ * pisen el mismo AsyncStorage cuando no hay internet.
+ */
+const mutarColaPendientes = async (mutator) => {
+    const ejecutar = async () => {
+        const pendientesRaw = await AsyncStorage.getItem(COLA_PENDIENTES_KEY);
+        const pendientes = pendientesRaw ? JSON.parse(pendientesRaw) : [];
+        const resultado = await mutator(Array.isArray(pendientes) ? pendientes : []);
+
+        if (resultado?.skipWrite) {
+            return resultado?.value;
+        }
+
+        const colaFinal = Array.isArray(resultado?.cola) ? resultado.cola : pendientes;
+        await AsyncStorage.setItem(COLA_PENDIENTES_KEY, JSON.stringify(colaFinal));
+        return resultado?.value;
+    };
+
+    const operacion = colaPendientesLock.then(ejecutar, ejecutar);
+    colaPendientesLock = operacion.then(() => undefined, () => undefined);
+    return operacion;
+};
+
+/**
  * Agrega una venta a la cola de pendientes
  */
 const agregarAColaPendientes = async (ventaBackend, ventaId) => {
     try {
-        const pendientes = await obtenerVentasPendientes();
-        pendientes.push({
-            id: ventaId,
-            data: ventaBackend,
-            intentos: 0,
-            fechaCreacion: new Date().toISOString()
+        await mutarColaPendientes(async (pendientes) => {
+            const idObjetivo = String(ventaId);
+            const yaExiste = pendientes.some((v) =>
+                String(v?.id || v?.data?.id_local || v?.data?.id || '') === idObjetivo
+            );
+
+            if (yaExiste) {
+                console.log(`ℹ️ Venta ${ventaId} ya estaba en cola de pendientes`);
+                return { cola: pendientes, value: false };
+            }
+
+            return {
+                cola: [
+                    ...pendientes,
+                    {
+                        id: ventaId,
+                        data: ventaBackend,
+                        intentos: 0,
+                        fechaCreacion: new Date().toISOString()
+                    }
+                ],
+                value: true
+            };
         });
-        await AsyncStorage.setItem(COLA_PENDIENTES_KEY, JSON.stringify(pendientes));
         console.log(`📥 Venta ${ventaId} agregada a cola de pendientes`);
     } catch (error) {
         console.error('Error agregando a cola:', error);
@@ -93,13 +134,15 @@ const agregarAColaPendientes = async (ventaBackend, ventaId) => {
  */
 const eliminarDeColaPendientes = async (ventaId) => {
     try {
-        const pendientes = await obtenerVentasPendientes();
-        const idObjetivo = String(ventaId);
-        const nuevasPendientes = pendientes.filter((v) => {
-            const idActual = String(v?.id || v?.data?.id_local || v?.data?.id || '');
-            return idActual !== idObjetivo;
+        await mutarColaPendientes(async (pendientes) => {
+            const idObjetivo = String(ventaId);
+            const nuevasPendientes = pendientes.filter((v) => {
+                const idActual = String(v?.id || v?.data?.id_local || v?.data?.id || '');
+                return idActual !== idObjetivo;
+            });
+
+            return { cola: nuevasPendientes };
         });
-        await AsyncStorage.setItem(COLA_PENDIENTES_KEY, JSON.stringify(nuevasPendientes));
         console.log(`✅ Venta ${ventaId} eliminada de cola de pendientes`);
     } catch (error) {
         console.error('Error eliminando de cola:', error);
@@ -203,7 +246,7 @@ const rehidratarColaDesdeVentasLocales = async () => {
         }
 
         if (agregadas > 0) {
-            await AsyncStorage.setItem(COLA_PENDIENTES_KEY, JSON.stringify(nuevosPendientes));
+            await mutarColaPendientes(async () => ({ cola: nuevosPendientes }));
             console.log(`♻️ Cola rehidratada: ${agregadas} venta(s) local(es) re-agregadas a pendientes`);
         }
 
@@ -333,13 +376,13 @@ export const sincronizarVentasPendientes = async () => {
                 // Incrementar intentos
                 venta.intentos = (venta.intentos || 0) + 1;
                 try {
-                    const pendientesActuales = await obtenerVentasPendientes();
-                    const pendientesActualizados = pendientesActuales.map((v) =>
-                        String(v?.id || v?.data?.id_local || v?.data?.id || '') === ventaId
-                            ? { ...v, intentos: venta.intentos }
-                            : v
-                    );
-                    await AsyncStorage.setItem(COLA_PENDIENTES_KEY, JSON.stringify(pendientesActualizados));
+                    await mutarColaPendientes(async (pendientesActuales) => ({
+                        cola: pendientesActuales.map((v) =>
+                            String(v?.id || v?.data?.id_local || v?.data?.id || '') === ventaId
+                                ? { ...v, intentos: venta.intentos }
+                                : v
+                        )
+                    }));
                 } catch (persistError) {
                     console.warn('⚠️ No se pudo persistir intentos de sincronización:', persistError.message);
                 }
