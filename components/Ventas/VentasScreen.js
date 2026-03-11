@@ -86,6 +86,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [alturaTeclado, setAlturaTeclado] = useState(0);
     const [historialReimpresion, setHistorialReimpresion] = useState([]); // 🆕 Historial unificado (backend + local fallback)
     const [cargandoHistorial, setCargandoHistorial] = useState(false);
+    const [historialResumenPreview, setHistorialResumenPreview] = useState([]); // 🆕 Solo para resumen mientras carga backend
     const [modalMetodoPagoCardVisible, setModalMetodoPagoCardVisible] = useState(false);
     const [ventaMetodoPagoCard, setVentaMetodoPagoCard] = useState(null);
     const [metodoPagoCardSeleccionado, setMetodoPagoCardSeleccionado] = useState('EFECTIVO');
@@ -93,6 +94,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [inputBuscadorEnFoco, setInputBuscadorEnFoco] = useState(false); // 🆕 Rastrear foco del buscador
     const [forzarMostrarTurno, setForzarMostrarTurno] = useState(false); // 🆕 Para ver el turno bajo demanda (peeking)
     const [compensacionBloqueSuperior, setCompensacionBloqueSuperior] = useState(0);
+    const [modoListaProductos, setModoListaProductos] = useState('scroll'); // normal | scroll
 
     // 🆕 Estados para edición de venta desde historial
     const [ventaEnEdicion, setVentaEnEdicion] = useState(null); // venta completa que se está editando
@@ -168,6 +170,61 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const listaEdicionRef = useRef(null);
     const carritoEdicionRef = useRef({});
     const inputsCantidadEdicionRef = useRef({});
+    const esModoListaScroll = modoListaProductos === 'scroll';
+
+    useEffect(() => {
+        const cargarModoListaProductos = async () => {
+            try {
+                const modoGuardado = await AsyncStorage.getItem('@ventas_modo_lista_productos');
+                if (modoGuardado === 'scroll' || modoGuardado === 'normal') {
+                    setModoListaProductos(modoGuardado);
+                }
+            } catch (e) {
+                console.log('⚠️ No se pudo cargar modo de lista de productos:', e?.message || e);
+            }
+        };
+
+        cargarModoListaProductos();
+    }, []);
+
+    const cambiarModoListaProductos = useCallback(async (modo) => {
+        if (modo !== 'normal' && modo !== 'scroll') return;
+
+        try {
+            await AsyncStorage.setItem('@ventas_modo_lista_productos', modo);
+        } catch (e) {
+            console.log('⚠️ No se pudo guardar modo de lista de productos:', e?.message || e);
+        }
+
+        setModoListaProductos(modo);
+        Keyboard.dismiss();
+        tecladoDesdeCantidadPrincipalRef.current = false;
+        indiceCantidadEnFocoRef.current = null;
+        setIndiceCantidadActivo(null);
+        setTecladoAbierto(false);
+        setAlturaTeclado(0);
+    }, []);
+
+    const abrirOpcionesModoListaProductos = useCallback(() => {
+        Alert.alert(
+            'Modo de lista',
+            `Actual: ${esModoListaScroll ? 'Scroll' : 'Normal'}`,
+            [
+                {
+                    text: 'Normal',
+                    onPress: () => cambiarModoListaProductos('normal'),
+                },
+                {
+                    text: 'Scroll',
+                    onPress: () => cambiarModoListaProductos('scroll'),
+                },
+                {
+                    text: 'Cancelar',
+                    style: 'cancel',
+                },
+            ]
+        );
+    }, [cambiarModoListaProductos, esModoListaScroll]);
 
     const asegurarVisibilidadInputCantidad = useCallback((index, animated = true, forzarTecladoAbierto = null) => {
         if (index === null || index === undefined || index < 0) return;
@@ -1347,11 +1404,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
     const cargarHistorialReimpresion = async () => {
         const fallbackLocal = construirHistorialLocal();
-        setHistorialReimpresion(fallbackLocal);
+        setHistorialResumenPreview(fallbackLocal);
+        setHistorialReimpresion([]);
         setCargandoHistorial(true);
 
         try {
             if (!fechaSeleccionada || !userId) {
+                setHistorialReimpresion(fallbackLocal);
                 setCargandoHistorial(false);
                 return;
             }
@@ -1712,6 +1771,65 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         }
     }, [ventaMetodoPagoCard, metodoPagoCardSeleccionado, actualizarMetodoPagoDesdeCard]);
 
+    const normalizarNombreStockEdicion = useCallback((txt) => (
+        (txt || '')
+            .toString()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toUpperCase()
+            .replace(/\s+/g, ' ')
+            .trim()
+    ), []);
+
+    const resolverClaveStockEdicion = useCallback((nombreProducto) => {
+        const claveDirecta = (nombreProducto || '').toString().toUpperCase().trim();
+        if (Object.prototype.hasOwnProperty.call(stockCargue, claveDirecta)) {
+            return claveDirecta;
+        }
+
+        const nombreNorm = normalizarNombreStockEdicion(nombreProducto);
+        const claveNormalizada = Object.keys(stockCargue).find(
+            (k) => normalizarNombreStockEdicion(k) === nombreNorm
+        );
+        if (claveNormalizada) return claveNormalizada;
+
+        const prodCatalogo = productos.find((p) => {
+            const prodNorm = normalizarNombreStockEdicion(p?.nombre);
+            return prodNorm === nombreNorm || prodNorm.includes(nombreNorm) || nombreNorm.includes(prodNorm);
+        });
+
+        if (prodCatalogo?.nombre) {
+            const claveCatalogo = prodCatalogo.nombre.toUpperCase().trim();
+            if (Object.prototype.hasOwnProperty.call(stockCargue, claveCatalogo)) {
+                return claveCatalogo;
+            }
+            const claveCatalogoNorm = Object.keys(stockCargue).find(
+                (k) => normalizarNombreStockEdicion(k) === normalizarNombreStockEdicion(prodCatalogo.nombre)
+            );
+            if (claveCatalogoNorm) return claveCatalogoNorm;
+            return claveCatalogo;
+        }
+
+        return claveDirecta;
+    }, [stockCargue, productos, normalizarNombreStockEdicion]);
+
+    const obtenerCantidadOriginalEdicion = useCallback((nombreProducto) => {
+        const detallesOriginales = ventaEnEdicion?.detalles || [];
+        const nombreNorm = normalizarNombreStockEdicion(nombreProducto);
+        const itemOriginal = detallesOriginales.find((item) => {
+            const nombre = item?.nombre || item?.producto || '';
+            return normalizarNombreStockEdicion(nombre) === nombreNorm;
+        });
+        return parseInt(itemOriginal?.cantidad || 0, 10) || 0;
+    }, [ventaEnEdicion, normalizarNombreStockEdicion]);
+
+    const obtenerMaximoEditableProducto = useCallback((nombreProducto) => {
+        const claveStock = resolverClaveStockEdicion(nombreProducto);
+        const stockActual = parseInt(stockCargue[claveStock] || 0, 10) || 0;
+        const cantidadOriginal = obtenerCantidadOriginalEdicion(nombreProducto);
+        return Math.max(0, stockActual + cantidadOriginal);
+    }, [stockCargue, resolverClaveStockEdicion, obtenerCantidadOriginalEdicion]);
+
     /** Modifica la cantidad de un producto en el carritoEdicion */
     const cambiarCantidadEdicion = (nombreProducto, nuevaCantidad) => {
         const valorRaw = String(nuevaCantidad ?? '');
@@ -1726,7 +1844,16 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             return;
         }
 
-        const cantidad = parseInt(valorLimpio, 10) || 0;
+        const maximoPermitido = obtenerMaximoEditableProducto(nombreProducto);
+        let cantidad = parseInt(valorLimpio, 10) || 0;
+
+        if (cantidad > maximoPermitido) {
+            cantidad = maximoPermitido;
+            Alert.alert(
+                'Stock insuficiente',
+                `Solo tienes ${maximoPermitido} und disponibles para "${nombreProducto}".`
+            );
+        }
 
         setCantidadesEdicionInput(prev => ({
             ...prev,
@@ -1767,6 +1894,21 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
         if (nuevosDetalles.length === 0) {
             Alert.alert('Sin productos', 'Agrega al menos un producto para guardar la edición.');
+            return;
+        }
+
+        const detalleSinStock = nuevosDetalles.find((item) => {
+            const maximoPermitido = obtenerMaximoEditableProducto(item.nombre || item.producto || '');
+            return (parseInt(item.cantidad, 10) || 0) > maximoPermitido;
+        });
+
+        if (detalleSinStock) {
+            const nombreProducto = detalleSinStock.nombre || detalleSinStock.producto || 'Producto';
+            const maximoPermitido = obtenerMaximoEditableProducto(nombreProducto);
+            Alert.alert(
+                'Stock insuficiente',
+                `No puedes guardar ${detalleSinStock.cantidad} und de "${nombreProducto}". Máximo disponible: ${maximoPermitido}.`
+            );
             return;
         }
 
@@ -1984,10 +2126,11 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             setBusquedaProductoEdicion('');
             setFocoCampoEdicion(null);
 
-            // Refrescar stock desde backend en segundo plano (sin exigir arrastrar para sincronizar)
-            if (diaSeleccionado && fechaSeleccionada) {
-                cargarStockCargue(diaSeleccionado, fechaSeleccionada).catch(() => { });
-            }
+            // IMPORTANTE:
+            // Después de editar, mantenemos el ajuste LOCAL del stock para que la UI
+            // refleje inmediatamente la diferencia de la venta editada.
+            // No recargamos el stock desde backend aquí porque el backend todavía no
+            // reconcilia ese delta y terminaría pisando el valor visible correcto.
 
             Alert.alert(
                 '✅ Venta editada',
@@ -2763,10 +2906,19 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
         const nombreProducto = String(producto.nombre).trim();
         const precioUnitario = Number(preciosPorProductoId[Number(producto.id)] ?? producto.precio ?? 0);
+        const maximoPermitido = obtenerMaximoEditableProducto(nombreProducto);
 
         setCarritoEdicion((prev) => {
             const itemActual = prev[nombreProducto];
             const cantidadNueva = (itemActual?.cantidad || 0) + 1;
+
+            if (cantidadNueva > maximoPermitido) {
+                Alert.alert(
+                    'Stock insuficiente',
+                    `Solo tienes ${maximoPermitido} und disponibles para "${nombreProducto}".`
+                );
+                return prev;
+            }
 
             return {
                 ...prev,
@@ -2799,7 +2951,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 inputRef.focus();
             }
         }, tecladoAbierto ? 80 : 150);
-    }, [preciosPorProductoId, asegurarVisibilidadInputEdicion, tecladoAbierto]);
+    }, [preciosPorProductoId, asegurarVisibilidadInputEdicion, tecladoAbierto, obtenerMaximoEditableProducto]);
 
     // Calcular totales - 🚀 Optimizado con useMemo
     const { subtotal, total } = useMemo(() => {
@@ -3650,6 +3802,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             const focoCantidadEdicion = indiceCantidadEdicionEnFocoRef.current !== null;
             const altura = event?.endCoordinates?.height || 0;
 
+            if (focoCantidadPrincipal && esModoListaScroll) {
+                setTecladoAbierto(false);
+                setAlturaTeclado(0);
+                setCompensacionBloqueSuperior(0);
+                return;
+            }
+
             // En pantalla principal NO tocar layout global.
             if (focoCantidadPrincipal || focoCantidadEdicion || modalEdicionVisible) {
                 if (focoCantidadPrincipal) tecladoDesdeCantidadPrincipalRef.current = true;
@@ -3701,7 +3860,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         iniciarCompensacionAnimada,
         cancelarCompensacionAnimada,
         refrescarBaseBloqueSuperior,
-        modalEdicionVisible
+        modalEdicionVisible,
+        esModoListaScroll
     ]);
 
     // Cargar orden del día en segundo plano para que el auto-siguiente funcione sin abrir selector
@@ -3731,7 +3891,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         };
 
         cargarOrdenDiaSilencioso();
-    }, [turnoAbierto, diaSeleccionado, userId]);
+    }, [turnoAbierto, diaSeleccionado, userId, esModoListaScroll]);
 
     // 🆕 Verificar si el cliente tiene pedido pendiente
     const verificarPedidoCliente = (cliente) => {
@@ -4064,11 +4224,15 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             style={styles.inputCantidad}
                             value={String(cantidad)}
                             onPressIn={() => {
-                                preAjusteListaAntesDeTecladoCantidad(index);
+                                if (!esModoListaScroll) {
+                                    preAjusteListaAntesDeTecladoCantidad(index);
+                                }
                                 tecladoDesdeCantidadPrincipalRef.current = true;
                                 indiceCantidadEnFocoRef.current = index;
                                 setIndiceCantidadActivo(index);
-                                setTecladoAbierto(true); // 🚀 Ocultar cabeceras instantáneamente sin esperar al teclado nativo
+                                if (!esModoListaScroll) {
+                                    setTecladoAbierto(true); // 🚀 Ocultar cabeceras instantáneamente sin esperar al teclado nativo
+                                }
                             }}
                             onChangeText={(texto) => {
                                 const num = parseInt(texto) || 0;
@@ -4079,7 +4243,9 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             onFocus={() => {
                                 indiceCantidadEnFocoRef.current = index;
                                 setIndiceCantidadActivo(index);
-                                setTecladoAbierto(true); // 🚀 Refuerzo visual inmediato
+                                if (!esModoListaScroll) {
+                                    setTecladoAbierto(true); // 🚀 Refuerzo visual inmediato
+                                }
                                 // NO hacer scroll automático - el usuario hace scroll manual si necesita
                             }}
                             onBlur={() => {
@@ -4103,7 +4269,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 </View>
             </View>
         );
-    }, [carrito, stockCargue, clienteSeleccionado, pedidoClienteSeleccionado, modoEdicionPedido, tecladoAbierto, productosFiltrados.length, actualizarCantidad, asegurarVisibilidadInputCantidad, preAjusteListaAntesDeTecladoCantidad]);
+    }, [carrito, stockCargue, clienteSeleccionado, pedidoClienteSeleccionado, modoEdicionPedido, tecladoAbierto, productosFiltrados.length, actualizarCantidad, asegurarVisibilidadInputCantidad, preAjusteListaAntesDeTecladoCantidad, esModoListaScroll]);
 
     // 🆕 Handler para cuando se guarda una nota
     const handleNotaGuardada = async (nota) => {
@@ -4387,7 +4553,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 {/* Buscador: Se oculta cuando el teclado de cantidad de productos está abierto (salvo si hay filtro activo) */}
                 {(!tecladoAbierto || inputBuscadorEnFoco || busquedaProducto.length > 0) && (
                     <View style={styles.busquedaContainer}>
-                        <Ionicons name="search" size={20} color="#666" style={styles.iconoBusqueda} />
+                        <TouchableOpacity
+                            onPress={abrirOpcionesModoListaProductos}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            style={styles.botonModoLista}
+                        >
+                            <Ionicons name="search" size={20} color="#666" style={styles.iconoBusqueda} />
+                        </TouchableOpacity>
                         <TextInput
                             ref={buscadorRef}
                             style={styles.inputBusqueda}
@@ -4428,7 +4600,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 style={styles.listaProductos}
                 contentContainerStyle={[
                     styles.listaContent,
-                    tecladoAbierto
+                    (tecladoAbierto && !esModoListaScroll)
                         ? styles.listaContentConTeclado
                         : styles.listaContentNormal
                 ]}
@@ -4865,12 +5037,15 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 <View style={[styles.modalOverlay, { justifyContent: 'flex-end' }]}>
                     <View style={[styles.modalContent, { maxHeight: '80%', width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, backgroundColor: 'transparent', borderWidth: 0, shadowOpacity: 0, elevation: 0 }]}>
                         {(() => {
+                            const fuenteResumen = (cargandoHistorial && historialReimpresion.length === 0)
+                                ? historialResumenPreview
+                                : historialReimpresion;
                             // Separamos las listas y calculamos totales y cantidades
-                            const ventasRegulares = historialReimpresion.filter(v => v.estado !== 'ANULADA');
+                            const ventasRegulares = fuenteResumen.filter(v => v.estado !== 'ANULADA');
                             const totalVentasHistorial = ventasRegulares.reduce((suma, v) => suma + (parseFloat(v.total) || 0), 0);
                             const qtyVentas = ventasRegulares.length;
 
-                            const ventasAnuladas = historialReimpresion.filter(v => v.estado === 'ANULADA');
+                            const ventasAnuladas = fuenteResumen.filter(v => v.estado === 'ANULADA');
                             const totalAnuladas = ventasAnuladas.reduce((suma, v) => suma + (parseFloat(v.total) || 0), 0);
                             const qtyAnuladas = ventasAnuladas.length;
 
@@ -4972,14 +5147,34 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         })()}
 
                         <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
-                            {cargandoHistorial && (
-                                <Text style={{ textAlign: 'center', color: '#666', marginBottom: 10 }}>Cargando historial...</Text>
-                            )}
+                            {(() => {
+                                const usandoVistaPreviaHistorial = cargandoHistorial
+                                    && historialReimpresion.length === 0
+                                    && historialResumenPreview.length > 0;
+
+                                if (cargandoHistorial) {
+                                    return (
+                                        <Text style={{ textAlign: 'center', color: '#666', marginBottom: 10 }}>
+                                            {usandoVistaPreviaHistorial
+                                                ? 'Actualizando historial...'
+                                                : 'Cargando historial...'}
+                                        </Text>
+                                    );
+                                }
+
+                                return null;
+                            })()}
 
                             {(() => {
+                                const usandoVistaPreviaHistorial = cargandoHistorial
+                                    && historialReimpresion.length === 0
+                                    && historialResumenPreview.length > 0;
+                                const fuenteListado = usandoVistaPreviaHistorial
+                                    ? historialResumenPreview
+                                    : historialReimpresion;
                                 const ventasAMostrar = mostrarSoloAnuladas
-                                    ? historialReimpresion.filter(v => v.estado === 'ANULADA')
-                                    : historialReimpresion.filter(v => v.estado !== 'ANULADA'); // <-- Excluir aquí las anuladas de la vista normal
+                                    ? fuenteListado.filter(v => v.estado === 'ANULADA')
+                                    : fuenteListado.filter(v => v.estado !== 'ANULADA'); // <-- Excluir aquí las anuladas de la vista normal
 
                                 if (ventasAMostrar.length === 0) {
                                     return (
@@ -4993,7 +5188,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                     const esAnulada = venta.estado === 'ANULADA';
                                     const yaModificada = ventaYaFueModificada(venta);
                                     const metodoPagoCard = normalizarMetodoPagoEdicion(venta?.metodo_pago);
-                                    const puedeCambiarMetodoDesdeCard = !esAnulada && !yaModificada;
+                                    const accionesBloqueadasPorPreview = usandoVistaPreviaHistorial;
+                                    const puedeCambiarMetodoDesdeCard = !accionesBloqueadasPorPreview && !esAnulada && !yaModificada;
                                     const vecesEditada = Number(venta?.veces_editada || 0);
                                     const horaUltimaEdicion = formatearHoraEdicion(venta?.fecha_ultima_edicion);
                                     return (
@@ -5014,6 +5210,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                             opacity: esAnulada ? 0.65 : 1,
                                         }}>
                                             <View style={{ flex: 1 }}>
+                                                {accionesBloqueadasPorPreview && (
+                                                    <View style={{ alignSelf: 'flex-start', backgroundColor: '#e0f2fe', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, marginBottom: 6 }}>
+                                                        <Text style={{ color: '#0369a1', fontSize: 10, fontWeight: 'bold' }}>
+                                                            SINCRONIZANDO...
+                                                        </Text>
+                                                    </View>
+                                                )}
                                                 {/* Badges */}
                                                 <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
                                                     {esAnulada && (
@@ -5078,7 +5281,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                             {/* Botones: Anular + Editar + Imprimir */}
                                             <View style={{ flexDirection: 'row', gap: 6, marginLeft: 10, alignItems: 'center' }}>
                                                 {/* Botón anular — solo si es de ruta, tiene ID real y no está anulada */}
-                                                {venta.origen !== 'PEDIDO_FACTURADO' && !esAnulada && venta.id && !String(venta._key || '').startsWith('local-') && (
+                                                {!accionesBloqueadasPorPreview && venta.origen !== 'PEDIDO_FACTURADO' && !esAnulada && venta.id && !String(venta._key || '').startsWith('local-') && (
                                                     <TouchableOpacity
                                                         style={{ backgroundColor: '#dc3545', padding: 8, borderRadius: 8 }}
                                                         onPress={() => anularVentaRuta(venta)}
@@ -5087,7 +5290,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                                     </TouchableOpacity>
                                                 )}
                                                 {/* Botón editar — solo si tiene detalles, no es pedido y no está anulada */}
-                                                {venta.origen !== 'PEDIDO_FACTURADO' && !esAnulada && !yaModificada && (
+                                                {!accionesBloqueadasPorPreview && venta.origen !== 'PEDIDO_FACTURADO' && !esAnulada && !yaModificada && (
                                                     <TouchableOpacity
                                                         style={{ backgroundColor: '#f39c12', padding: 8, borderRadius: 8 }}
                                                         onPress={() => abrirEdicionVenta(venta)}
@@ -5918,6 +6121,12 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: 'white',
         elevation: 0, // Asegurar que no haya sombra
+    },
+    botonModoLista: {
+        padding: 4,
+        marginRight: 2,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     iconoBusqueda: {
         marginRight: 6,
