@@ -3311,20 +3311,20 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 const nuevoStock = { ...stockCargue };
 
                 // 1. Restar productos vendidos
-                Object.keys(carrito).forEach(productoId => {
-                    const producto = productos.find(p => p.id === parseInt(productoId));
-                    if (producto) {
-                        const nombreProducto = producto.nombre.toUpperCase();
-                        const cantidadVendida = carrito[productoId];
-                        const stockActual = nuevoStock[nombreProducto] || 0;
-                        nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVendida);
-                        console.log(`📉 Vendido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
-                    }
+                (ventaConDatos.productos || []).forEach(item => {
+                    const nombreProducto = (item.nombre || '').toUpperCase();
+                    const cantidadVendida = item.cantidad || 0;
+
+                    if (!nombreProducto || cantidadVendida <= 0) return;
+
+                    const stockActual = nuevoStock[nombreProducto] || 0;
+                    nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVendida);
+                    console.log(`📉 Vendido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
                 });
 
                 // 2. Restar productos vencidos (también salen del stock si es cambio mano a mano)
-                if (vencidas && vencidas.length > 0) {
-                    vencidas.forEach(item => {
+                if (ventaConDatos.vencidas && ventaConDatos.vencidas.length > 0) {
+                    ventaConDatos.vencidas.forEach(item => {
                         const nombreProducto = item.nombre.toUpperCase();
                         const cantidadVencida = item.cantidad || 0;
                         const stockActual = nuevoStock[nombreProducto] || 0;
