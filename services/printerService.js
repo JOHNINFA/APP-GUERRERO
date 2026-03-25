@@ -7,6 +7,10 @@ import { API_URL } from '../config';
 
 const IMPRESION_CONFIG_CACHE_KEY = 'impresion_config_cache_v1';
 
+export const precalentarConfigImpresion = async () => {
+  return obtenerConfigImpresionConCache();
+};
+
 const obtenerConfigImpresionConCache = async () => {
   let config = null;
 
@@ -147,16 +151,20 @@ export const generarTicketHTML = (venta, config = null, logoBase64 = null) => {
     </tr>
   `}).join('');
 
+  const vencidasTicket = Array.isArray(vencidas) && vencidas.length > 0
+    ? vencidas
+    : (Array.isArray(venta?.productos_vencidos) ? venta.productos_vencidos : []);
+
   let vencidasHTML = '';
-  if (vencidas && vencidas.length > 0) {
+  if (vencidasTicket.length > 0) {
     vencidasHTML = `
       <div style="margin: 5px 0;">
         <div style="font-weight: bold; font-size: ${tamanioInfo}px; margin-bottom: 5px;">Cambios Realizados</div>
         <table style="width: 100%; font-size: ${tamanioTabla - 1}px;">
-          ${vencidas.map(v => `
+          ${vencidasTicket.map(v => `
             <tr>
               <td>${v.cantidad}</td>
-              <td>${v.nombre}</td>
+              <td>${v.nombre || v.producto || 'PRODUCTO'}</td>
               <td style="text-align: right;">$ 0</td>
             </tr>
           `).join('')}

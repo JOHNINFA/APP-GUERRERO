@@ -72,10 +72,69 @@ export const sincronizarClientesPendientes = async () => {
     }
 };
 
+// Sincronizar clientes ocasionales pendientes
+export const sincronizarClientesOcasionalesPendientes = async () => {
+    try {
+        const pendientes = JSON.parse(await AsyncStorage.getItem('clientes_ocasionales_pendientes') || '[]');
+
+        if (pendientes.length === 0) {
+            console.log('✅ No hay clientes ocasionales pendientes de sincronizar');
+            return { success: true, sincronizados: 0 };
+        }
+
+        console.log(`🔄 Sincronizando ${pendientes.length} clientes ocasionales pendientes...`);
+
+        const sincronizados = [];
+        const fallidos = [];
+
+        for (const cliente of pendientes) {
+            try {
+                const response = await fetch(`${API_URL}/api/clientes-ocasionales/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vendedor: cliente.vendedor,
+                        nombre: cliente.nombre,
+                        telefono: cliente.telefono || '',
+                        direccion: cliente.direccion || '',
+                    })
+                });
+
+                if (response.ok) {
+                    sincronizados.push(cliente);
+                    console.log(`✅ Cliente ocasional sincronizado: ${cliente.nombre}`);
+                } else {
+                    cliente.intentos = (cliente.intentos || 0) + 1;
+                    fallidos.push(cliente);
+                    console.log(`❌ Fallo al sincronizar cliente ocasional: ${cliente.nombre}`);
+                }
+            } catch (error) {
+                cliente.intentos = (cliente.intentos || 0) + 1;
+                fallidos.push(cliente);
+                console.error('❌ Error sincronizando cliente ocasional:', error);
+            }
+        }
+
+        await AsyncStorage.setItem('clientes_ocasionales_pendientes', JSON.stringify(fallidos));
+
+        console.log(`✅ Sincronización clientes ocasionales: ${sincronizados.length} exitosos, ${fallidos.length} fallidos`);
+
+        return {
+            success: true,
+            sincronizados: sincronizados.length,
+            fallidos: fallidos.length
+        };
+
+    } catch (error) {
+        console.error('❌ Error en sincronización de clientes ocasionales:', error);
+        return { success: false, error: error.message };
+    }
+};
+
 // Sincronizar ventas pendientes
 export const sincronizarVentasPendientes = async () => {
     try {
-        const pendientes = JSON.parse(await AsyncStorage.getItem('ventas_pendientes') || '[]');
+        const pendientes = JSON.parse(await AsyncStorage.getItem('ventas_pendientes_sync') || '[]');
 
         if (pendientes.length === 0) {
             console.log('✅ No hay ventas pendientes de sincronizar');
@@ -111,7 +170,7 @@ export const sincronizarVentasPendientes = async () => {
         }
 
         // Actualizar lista de pendientes (solo los que fallaron)
-        await AsyncStorage.setItem('ventas_pendientes', JSON.stringify(fallidos));
+        await AsyncStorage.setItem('ventas_pendientes_sync', JSON.stringify(fallidos));
 
         console.log(`✅ Sincronización completada: ${sincronizados.length} exitosos, ${fallidos.length} fallidos`);
 
@@ -201,16 +260,18 @@ export const sincronizarPedidosAccionesPendientes = async () => {
     }
 };
 
-// Sincronizar todo (clientes + ventas + pedidos)
+// Sincronizar todo (clientes + clientes ocasionales + ventas + pedidos)
 export const sincronizarTodo = async () => {
     console.log('🔄 Iniciando sincronización completa...');
 
     const resultadoClientes = await sincronizarClientesPendientes();
+    const resultadoClientesOcasionales = await sincronizarClientesOcasionalesPendientes();
     const resultadoVentas = await sincronizarVentasPendientes();
     const resultadoPedidos = await sincronizarPedidosAccionesPendientes();
 
     return {
         clientes: resultadoClientes,
+        clientesOcasionales: resultadoClientesOcasionales,
         ventas: resultadoVentas,
         pedidos: resultadoPedidos
     };
@@ -220,17 +281,19 @@ export const sincronizarTodo = async () => {
 export const obtenerCantidadPendientes = async () => {
     try {
         const clientes = JSON.parse(await AsyncStorage.getItem('clientes_pendientes') || '[]');
-        const ventas = JSON.parse(await AsyncStorage.getItem('ventas_pendientes') || '[]');
+        const clientesOcasionales = JSON.parse(await AsyncStorage.getItem('clientes_ocasionales_pendientes') || '[]');
+        const ventas = JSON.parse(await AsyncStorage.getItem('ventas_pendientes_sync') || '[]');
         const pedidos = JSON.parse(await AsyncStorage.getItem('pedidos_acciones_pendientes') || '[]');
 
         return {
             clientes: clientes.length,
+            clientesOcasionales: clientesOcasionales.length,
             ventas: ventas.length,
             pedidos: pedidos.length,
-            total: clientes.length + ventas.length + pedidos.length
+            total: clientes.length + clientesOcasionales.length + ventas.length + pedidos.length
         };
     } catch (error) {
         console.error('Error obteniendo pendientes:', error);
-        return { clientes: 0, ventas: 0, total: 0 };
+        return { clientes: 0, clientesOcasionales: 0, ventas: 0, total: 0 };
     }
 };

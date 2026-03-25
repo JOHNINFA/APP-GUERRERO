@@ -8,12 +8,12 @@ import {
     StyleSheet,
     Alert,
     ActivityIndicator,
-    KeyboardAvoidingView,
     Platform,
     Keyboard,
     Dimensions
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL } from '../../config';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('screen');
@@ -23,13 +23,28 @@ const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('screen');
  * 3 campos: Nombre, Teléfono, Dirección.
  * Crea el registro en /api/clientes-ocasionales/ y selecciona automáticamente.
  */
-const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId }) => {
+const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId, topeVentaRutaOcasional = 60000 }) => {
     const [nombre, setNombre] = useState('');
     const [telefono, setTelefono] = useState('');
     const [direccion, setDireccion] = useState('');
     const [guardando, setGuardando] = useState(false);
-    const [tecladoActivo, setTecladoActivo] = useState(false);
     const nombreRef = useRef(null);
+
+    const construirClienteOcasionalLocal = () => ({
+        id: `ocasional_local_${Date.now()}`,
+        nombre: nombre.trim(),
+        negocio: `${nombre.trim()} (Ocasional)`,
+        celular: telefono.trim() || '',
+        direccion: direccion.trim() || '',
+        dia_visita: '',
+        nota: 'CLIENTE OCASIONAL LOCAL',
+        tipo_negocio: 'OCASIONAL',
+        esDeRuta: false,
+        esOcasional: true,
+        clienteOcasionalId: null,
+        clienteOcasionalLocal: true,
+        tope_venta: parseFloat(topeVentaRutaOcasional || 60000)
+    });
 
     useEffect(() => {
         if (visible) {
@@ -40,16 +55,6 @@ const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId }) =>
             setTimeout(() => nombreRef.current?.focus(), 300);
         }
     }, [visible]);
-
-    useEffect(() => {
-        const showSubscription = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => setTecladoActivo(true));
-        const hideSubscription = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setTecladoActivo(false));
-
-        return () => {
-            showSubscription.remove();
-            hideSubscription.remove();
-        };
-    }, []);
 
     const handleGuardar = async () => {
         if (!nombre.trim()) {
@@ -77,6 +82,7 @@ const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId }) =>
                     nombre: nombre.trim(),
                     telefono: telefono.trim() || '',
                     direccion: direccion.trim() || '',
+                    tope_venta: parseFloat(topeVentaRutaOcasional || 60000),
                 })
             });
 
@@ -97,7 +103,7 @@ const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId }) =>
                     esDeRuta: false,
                     esOcasional: true,
                     clienteOcasionalId: clienteCreado.id,
-                    tope_venta: parseFloat(clienteCreado.tope_venta || 60000)
+                    tope_venta: parseFloat(clienteCreado.tope_venta || topeVentaRutaOcasional || 60000)
                 };
 
                 onClienteCreado(clienteFormateado);
@@ -107,8 +113,43 @@ const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId }) =>
                 Alert.alert('Error', errorData.detail || 'No se pudo crear el cliente ocasional.');
             }
         } catch (error) {
-            console.error('❌ Error creando cliente ocasional:', error);
-            Alert.alert('Error de conexión', 'No se pudo conectar al servidor. Verifica tu conexión.');
+            console.warn('⚠️ Cliente ocasional sin conexión, se podrá guardar pendiente:', error?.message || error);
+            const clienteLocal = construirClienteOcasionalLocal();
+            const clientePendiente = {
+                id_local: clienteLocal.id,
+                vendedor: String(userId).toUpperCase().startsWith('ID')
+                    ? String(userId).toUpperCase()
+                    : `ID${userId}`,
+                nombre: nombre.trim(),
+                telefono: telefono.trim() || '',
+                direccion: direccion.trim() || '',
+                timestamp: Date.now(),
+                intentos: 0
+            };
+
+            Alert.alert(
+                'Modo offline',
+                'No hubo conexión para registrar el cliente ocasional en el servidor.\n\nSe usará un cliente temporal local para que puedas hacer la venta y sincronizarla después.',
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    {
+                        text: 'Continuar',
+                        onPress: async () => {
+                            try {
+                                const pendientes = JSON.parse(await AsyncStorage.getItem('clientes_ocasionales_pendientes') || '[]');
+                                pendientes.push(clientePendiente);
+                                await AsyncStorage.setItem('clientes_ocasionales_pendientes', JSON.stringify(pendientes));
+                                console.log('📝 Cliente ocasional agregado a cola local:', clientePendiente.nombre);
+                            } catch (queueError) {
+                                console.warn('⚠️ No se pudo guardar cliente ocasional en cola local:', queueError?.message || queueError);
+                            }
+
+                            onClienteCreado(clienteLocal);
+                            onClose();
+                        }
+                    }
+                ]
+            );
         } finally {
             setGuardando(false);
         }
@@ -129,10 +170,7 @@ const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId }) =>
                     onPress={() => Keyboard.dismiss()} 
                 />
                 
-                <View style={[
-                    styles.container,
-                    (Platform.OS === 'android' && tecladoActivo) && { transform: [{ translateY: -110 }] }
-                ]}>
+                <View style={styles.container}>
                     {/* Header */}
                     <View style={styles.header}>
                         <View style={styles.headerLeft}>
@@ -228,14 +266,19 @@ const ClienteOcasionalModal = ({ visible, onClose, onClienteCreado, userId }) =>
 
 const styles = StyleSheet.create({
     overlay: {
-        width: SCREEN_WIDTH,
-        height: SCREEN_HEIGHT + 100, // Margen extra para asegurar cobertura total
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
         backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        justifyContent: 'center',
+        justifyContent: 'flex-start',
         alignItems: 'center',
+        paddingTop: Platform.OS === 'android' ? 96 : 120,
     },
     container: {
         width: '90%',
+        maxWidth: 420,
         backgroundColor: 'white',
         borderRadius: 20,
         padding: 20,
@@ -244,7 +287,7 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 10,
-        elevation: 50, // Elevación super alta exclusiva para aislarlo
+        elevation: 50,
     },
     header: {
         flexDirection: 'row',

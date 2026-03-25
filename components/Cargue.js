@@ -234,6 +234,15 @@ const Cargue = ({ userId }) => {
     const cantidad = parseInt(quantitiesRef.current[productName] || '0');
     const checkD = estadoActual.D || false;
 
+    // 🔒 BLOQUEO: Si el check V ya está marcado, NO permitir desmarcarlo
+    if (estadoActual.V && !nuevoValorV) {
+      Alert.alert(
+        '🔒 Check Bloqueado',
+        'Una vez marcado el check de Vendedor, no se puede desmarcar.\n\nEsto garantiza que recibiste el producto.'
+      );
+      return;
+    }
+
     // Validaciones antes de marcar V
     if (nuevoValorV) {
       if (!checkD) {
@@ -262,17 +271,17 @@ const Cargue = ({ userId }) => {
       }
     }));
     
-    // Pequeña vibración en cada toque
-    Vibration.vibrate(10);
+    // Vibración instantánea (reducida a 8ms para ser más rápida)
+    Vibration.vibrate(8);
 
-    // 🔄 Actualizar en el servidor en segundo plano (con timeout)
+    // 🔄 Actualizar en el servidor en segundo plano (sin bloquear UI)
     // Cancelar request anterior DEL MISMO PRODUCTO si existe
     if (checkControllersRef.current[productName]) {
       checkControllersRef.current[productName].abort();
     }
     const controller = new AbortController();
     checkControllersRef.current[productName] = controller;
-    const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 segundos
+    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 segundos (reducido)
 
     fetch(ENDPOINTS.ACTUALIZAR_CHECK_VENDEDOR, {
       method: 'POST',
@@ -288,10 +297,8 @@ const Cargue = ({ userId }) => {
     })
       .then(response => {
         clearTimeout(timeoutId);
-        // Limpiar referencia si fue exitoso
-        if (checkControllersRef.current[productName] === controller) {
-          delete checkControllersRef.current[productName];
-        }
+        // Limpiar referencia inmediatamente
+        delete checkControllersRef.current[productName];
         return response.json();
       })
       .then(result => {
@@ -300,33 +307,32 @@ const Cargue = ({ userId }) => {
       .catch(error => {
         clearTimeout(timeoutId);
         const esTimeout = error.name === 'AbortError';
+        const fueReemplazado = controller !== checkControllersRef.current[productName];
 
-        // Si fue cancelado por otro check rápido en el MISMO producto, NO revertir
-        if (esTimeout && controller !== checkControllersRef.current[productName]) {
-          console.log(`⏭️ Check ${productName} cancelado por nuevo click, no revertir`);
+        // Si fue cancelado por otro click rápido, NO hacer nada (el nuevo request se encarga)
+        if (fueReemplazado) {
+          console.log(`⏭️ Check ${productName} reemplazado por click rápido`);
           return;
         }
 
-        // Si hubo timeout real, conservar el valor local para no bloquear marcaciones rápidas.
-        if (esTimeout && controller === checkControllersRef.current[productName]) {
+        // Si fue timeout, mantener el cambio local (no bloquear al usuario)
+        if (esTimeout) {
           delete checkControllersRef.current[productName];
-          console.warn(`⏱️ Timeout actualizando check ${productName}. Se mantiene cambio local.`);
+          console.warn(`⏱️ Timeout en ${productName}. Cambio guardado localmente.`);
           return;
         }
 
-        // En errores reales de red/servidor, sí revertimos para no desalinear el estado.
-        if (controller === checkControllersRef.current[productName] || (!esTimeout && !controller.signal.aborted)) {
-          console.error('Error actualizando check:', error.message);
-          setCheckedItems(prev => ({
-            ...prev,
-            [productName]: {
-              ...prev[productName],
-              V: !nuevoValorV
-            }
-          }));
-          delete checkControllersRef.current[productName];
-          console.warn(`❌ Error actualizando check ${productName}: ${error.message}`);
-        }
+        // Solo revertir en errores de red reales (no timeout ni cancelación)
+        console.error(`❌ Error en ${productName}:`, error.message);
+        setCheckedItems(prev => ({
+          ...prev,
+          [productName]: {
+            ...prev[productName],
+            V: !nuevoValorV
+          }
+        }));
+        delete checkControllersRef.current[productName];
+        Alert.alert('Error', `No se pudo actualizar ${productName}. Intenta de nuevo.`);
       });
   }, [userId, selectedDay, selectedDate]);
 
@@ -368,26 +374,28 @@ const Cargue = ({ userId }) => {
   // 🚀 OPTIMIZACIÓN: useCallback para evitar recrear función en cada render
   const renderProduct = useCallback(({ item }) => {
     const cantidad = quantities[item] || '0';
+    const checkV = checkedItems[item]?.V || false;
+    const checkD = checkedItems[item]?.D || false;
 
     return (
       <View style={styles.productContainer}>
         {/* Checkbox V (Vendedor) */}
         <View style={{ width: 30, alignItems: 'center' }}>
           <Checkbox
-            value={checkedItems[item]?.V || false}
+            value={checkV}
             onValueChange={() => handleCheckChange(item, 'V')}
             style={styles.checkbox}
-            color={checkedItems[item]?.V ? '#28a745' : undefined}
+            color={checkV ? '#28a745' : undefined}
           />
         </View>
 
         {/* Checkbox D (Despachador - Solo Lectura) */}
         <View style={{ width: 30, alignItems: 'center' }}>
           <Checkbox
-            value={checkedItems[item]?.D || false}
+            value={checkD}
             onValueChange={() => handleCheckChange(item, 'D')}
             style={styles.checkbox}
-            color={checkedItems[item]?.D ? '#28a745' : '#ccc'}
+            color={checkD ? '#28a745' : '#ccc'}
             disabled={true}
           />
         </View>

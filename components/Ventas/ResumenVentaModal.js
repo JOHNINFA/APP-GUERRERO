@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     View,
     Text,
@@ -33,6 +33,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
     const [correoDestino, setCorreoDestino] = useState('');
     const [nota, setNota] = useState(''); // 🆕 Estado para nota
     const [enviando, setEnviando] = useState(false); // 🆕 Estado para deshabilitar botón
+    const enviandoRef = useRef(false);
 
     // Resetear valores cuando se abre el modal
     useEffect(() => {
@@ -47,6 +48,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
             setCorreoDestino('');
             setNota(''); // 🆕 Limpiar nota
             setEnviando(false); // 🆕 Resetear estado
+            enviandoRef.current = false;
         }
     }, [visible]);
 
@@ -81,17 +83,26 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
     };
 
     // Confirmar con la fecha y método de pago seleccionados
-    const handleConfirmar = () => {
-        if (enviando) return; // Evitar doble clic
-        
+    const handleConfirmar = async () => {
+        if (enviandoRef.current) return; // Evitar doble toque inmediato antes del re-render
+
+        enviandoRef.current = true;
         setEnviando(true);
-        const opcionesEnvio = {
-            whatsapp: enviarWhatsApp ? numeroWhatsApp : null,
-            correo: enviarCorreo ? correoDestino : null
-        };
-        onConfirmar(fechaVenta, metodoPago, opcionesEnvio, nota); // 🆕 Pasar nota
-        
-        // Nota: setEnviando(false) se hará cuando se cierre el modal
+
+        try {
+            const opcionesEnvio = {
+                whatsapp: enviarWhatsApp ? numeroWhatsApp : null,
+                correo: enviarCorreo ? correoDestino : null
+            };
+            await onConfirmar(fechaVenta, metodoPago, opcionesEnvio, nota); // 🆕 Pasar nota
+        } finally {
+            // Si el modal sigue abierto (error/cancelación), liberar el botón.
+            // Si se cerró por éxito, el useEffect al abrirlo de nuevo ya lo reseteará.
+            if (visible) {
+                enviandoRef.current = false;
+                setEnviando(false);
+            }
+        }
     };
 
     return (
@@ -308,7 +319,8 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
                     <View style={styles.footer}>
                         <TouchableOpacity
                             style={styles.btnEditar}
-                            onPress={onClose}
+                            onPress={enviando ? undefined : onClose}
+                            disabled={enviando}
                         >
                             <Ionicons name="create-outline" size={20} color="#003d88" />
                             <Text style={styles.btnEditarTexto}>Editar</Text>

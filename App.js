@@ -129,7 +129,10 @@ const App = () => {
       const { sincronizarTodo } = await import('./services/syncService');
       const resultado = await sincronizarTodo();
       
-      const totalSincronizados = (resultado.clientes?.sincronizados || 0) + (resultado.ventas?.sincronizados || 0);
+      const totalSincronizados =
+        (resultado.clientes?.sincronizados || 0) +
+        (resultado.clientesOcasionales?.sincronizados || 0) +
+        (resultado.ventas?.sincronizados || 0);
       
       if (totalSincronizados > 0) {
         console.log(`✅ Sincronizados: ${totalSincronizados} registros`);

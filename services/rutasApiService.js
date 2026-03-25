@@ -1,6 +1,30 @@
 import { API_URL } from '../config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const construirErrorHttp = (status, rawText = '') => {
+    let payload = null;
+    try {
+        payload = rawText ? JSON.parse(rawText) : null;
+    } catch (e) {
+        payload = null;
+    }
+
+    const mensaje =
+        payload?.error ||
+        payload?.detail ||
+        payload?.mensaje ||
+        rawText ||
+        `HTTP ${status}`;
+
+    return {
+        success: false,
+        status,
+        code: payload?.codigo || payload?.code || `HTTP_${status}`,
+        payload,
+        error: `HTTP ${status}: ${mensaje}`,
+    };
+};
+
 const API_BASE = `${API_URL}/api`;
 
 export const obtenerAuthHeaders = async (headersBase = {}) => {
@@ -118,7 +142,7 @@ export const enviarVentaRuta = async (ventaData) => {
             }
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 segundos (backend necesita optimización)
+            const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 segundos (fotos son pesadas)
 
             try {
                 const headersAuth = await obtenerAuthHeaders();
@@ -155,7 +179,7 @@ export const enviarVentaRuta = async (ventaData) => {
 
                 const errorText = await response.text();
                 console.error('❌ Error respuesta servidor:', errorText);
-                return { success: false, error: `Error servidor: ${response.status} ${errorText}` };
+                return construirErrorHttp(response.status, errorText);
 
             } catch (fetchError) {
                 clearTimeout(timeoutId);
@@ -169,7 +193,7 @@ export const enviarVentaRuta = async (ventaData) => {
         } else {
             // 🆕 Sin fotos: usar JSON (más rápido)
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 segundos (backend necesita optimización)
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 segundos (JSON es rápido)
 
             try {
                 const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
@@ -200,7 +224,7 @@ export const enviarVentaRuta = async (ventaData) => {
 
                 const errorText = await response.text();
                 console.warn('⚠️ HTTP rechazada:', response.status, errorText);
-                return { success: false, error: `HTTP ${response.status}: ${errorText}` };
+                return construirErrorHttp(response.status, errorText);
             } catch (jsonError) {
                 clearTimeout(timeoutId);
                 let msj = jsonError.message;
@@ -287,36 +311,58 @@ export const actualizarPedido = async (pedidoId, datos) => {
  * @param {object} datosActualizados - { detalles, total, metodo_pago, ... }
  */
 export const editarVentaRuta = async (ventaId, datosActualizados) => {
-    const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
-    const response = await fetch(`${API_BASE}/ventas-ruta/${ventaId}/editar/`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify(datosActualizados),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 segundos (editar es pesado en el servidor)
 
-    if (!response.ok) {
-        let payload = null;
-        try {
-            payload = await response.json();
-        } catch (_) {
-            payload = null;
+    try {
+        const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
+        const response = await fetch(`${API_BASE}/ventas-ruta/${ventaId}/editar/`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify(datosActualizados),
+            signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            let payload = null;
+            try {
+                payload = await response.json();
+            } catch (_) {
+                payload = null;
+            }
+
+            const backendMessage =
+                payload?.error ||
+                payload?.detail ||
+                payload?.mensaje ||
+                `Error al editar venta (${response.status})`;
+
+            // 🆕 Guardar código de error para que la lógica de sincronización sepa cómo actuar
+            if (typeof window !== 'undefined') {
+                window.__ultimoErrorEdicion = payload?.codigo || payload?.code || null;
+            }
+
+            const error = new Error(backendMessage);
+            error.code = payload?.codigo || payload?.code || `HTTP_${response.status}`;
+            error.status = response.status;
+            error.payload = payload;
+            throw error;
         }
 
-        const backendMessage =
-            payload?.error ||
-            payload?.detail ||
-            payload?.mensaje ||
-            `Error al editar venta (${response.status})`;
-
-        const error = new Error(backendMessage);
-        error.code = payload?.codigo || payload?.code || `HTTP_${response.status}`;
-        error.status = response.status;
-        error.payload = payload;
+        return await response.json();
+    } catch (error) {
+        clearTimeout(timeoutId);
+        if (error?.name === 'AbortError') {
+            const timeoutError = new Error('Timeout editando venta. Intenta nuevamente.');
+            timeoutError.code = 'TIMEOUT_EDITAR_VENTA';
+            throw timeoutError;
+        }
         throw error;
     }
-
-    return await response.json();
 };
+
 
 export default {
     obtenerRutasPorUsuario,

@@ -4,7 +4,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
-import { enviarVentaRuta } from './rutasApiService';
+import { enviarVentaRuta, editarVentaRuta, actualizarPedido } from './rutasApiService';
 import { API_URL } from '../config';
 import * as Device from 'expo-device';  // 🆕 Para obtener info del dispositivo
 import Constants from 'expo-constants';  // 🆕 Para info adicional
@@ -92,6 +92,147 @@ const mutarColaPendientes = async (mutator) => {
     const operacion = colaPendientesLock.then(ejecutar, ejecutar);
     colaPendientesLock = operacion.then(() => undefined, () => undefined);
     return operacion;
+};
+
+const esVentaPendienteEnRevision = (ventaPendiente) => (
+    ventaPendiente?.requiere_revision === true ||
+    String(ventaPendiente?.estado_sync || '').trim().toUpperCase() === 'REVISION'
+);
+
+export const obtenerVentasEnRevision = async () => {
+    const pendientes = await obtenerVentasPendientes();
+    return pendientes.filter(esVentaPendienteEnRevision);
+};
+
+export const descartarVentaEnRevision = async (ventaId) => {
+    const idObjetivo = String(ventaId || '');
+    if (!idObjetivo) return false;
+
+    await mutarColaPendientes(async (pendientes) => ({
+        cola: pendientes.filter((item) => {
+            const idActual = String(item?.id || item?.data?.id_local || item?.data?.id || '');
+            return idActual !== idObjetivo;
+        })
+    }));
+
+    try {
+        const ventas = await obtenerVentas();
+        const ventasActualizadas = ventas.filter((venta) => String(venta?.id || '') !== idObjetivo);
+        await AsyncStorage.setItem('ventas', JSON.stringify(ventasActualizadas));
+    } catch (error) {
+        console.warn('⚠️ No se pudo limpiar la venta local en revisión:', error?.message || error);
+    }
+
+    return true;
+};
+
+const esErrorPermanenteDeSincronizacion = (resultadoEnvio, error) => {
+    const payload = resultadoEnvio && typeof resultadoEnvio.payload === 'object' ? resultadoEnvio.payload : null;
+    const detalle = Array.isArray(payload?.detalle) ? payload.detalle : [];
+    const codigoPrincipal = String(
+        resultadoEnvio?.code ||
+        error?.code ||
+        payload?.codigo ||
+        payload?.code ||
+        ''
+    ).toUpperCase();
+
+    if (codigoPrincipal.includes('STOCK_CARGUE_INSUFICIENTE') || codigoPrincipal.includes('STOCK_INSUFICIENTE_CARGUE')) {
+        return true;
+    }
+
+    if (detalle.some((item) => String(item?.codigo || '').toUpperCase() === 'STOCK_INSUFICIENTE_CARGUE')) {
+        return true;
+    }
+
+    const texto = [
+        resultadoEnvio?.error,
+        error?.message,
+        payload?.error,
+        payload?.mensaje,
+        payload?.detail,
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toUpperCase();
+
+    return texto.includes('STOCK DISPONIBLE DEL CARGUE') || texto.includes('STOCK_INSUFICIENTE_CARGUE');
+};
+
+const construirResumenErrorSync = (resultadoEnvio, error) => {
+    const payload = resultadoEnvio && typeof resultadoEnvio.payload === 'object' ? resultadoEnvio.payload : null;
+    const detalle = Array.isArray(payload?.detalle) ? payload.detalle : [];
+
+    if (detalle.length > 0) {
+        return detalle
+            .map((item) => `${item?.producto || 'Producto'}: ${item?.mensaje || item?.codigo || 'Error'}`)
+            .join(' | ');
+    }
+
+    return String(
+        resultadoEnvio?.error ||
+        error?.message ||
+        payload?.error ||
+        payload?.mensaje ||
+        payload?.detail ||
+        'Error de sincronización'
+    );
+};
+
+const normalizarTextoHuella = (valor) => String(valor || '').trim().toUpperCase();
+
+const normalizarDetallesHuella = (detalles = []) => {
+    if (!Array.isArray(detalles)) return [];
+
+    return detalles
+        .map((item) => ({
+            producto: normalizarTextoHuella(item?.producto || item?.nombre),
+            cantidad: Number(item?.cantidad || 0),
+            precio: Number(item?.precio || item?.precio_unitario || item?.valor_unitario || 0),
+        }))
+        .filter((item) => item.producto && item.cantidad > 0)
+        .sort((a, b) => {
+            if (a.producto === b.producto) {
+                if (a.cantidad === b.cantidad) return a.precio - b.precio;
+                return a.cantidad - b.cantidad;
+            }
+            return a.producto.localeCompare(b.producto);
+        });
+};
+
+const normalizarVencidasHuella = (vencidas = []) => {
+    if (!Array.isArray(vencidas)) return [];
+
+    return vencidas
+        .map((item) => ({
+            producto: normalizarTextoHuella(item?.producto || item?.nombre),
+            cantidad: Number(item?.cantidad || 0),
+            motivo: normalizarTextoHuella(item?.motivo),
+        }))
+        .filter((item) => item.producto && item.cantidad > 0)
+        .sort((a, b) => {
+            if (a.producto === b.producto) {
+                if (a.cantidad === b.cantidad) return a.motivo.localeCompare(b.motivo);
+                return a.cantidad - b.cantidad;
+            }
+            return a.producto.localeCompare(b.producto);
+        });
+};
+
+const construirHuellaVenta = (venta, fechaVenta, dispositivoId) => {
+    const payload = {
+        vendedor: normalizarTextoHuella(venta?.vendedor_id || venta?.vendedor),
+        dispositivo_id: normalizarTextoHuella(dispositivoId || venta?.dispositivo_id),
+        cliente: normalizarTextoHuella(venta?.cliente_nombre),
+        negocio: normalizarTextoHuella(venta?.cliente_negocio || venta?.nombre_negocio),
+        total: Number(venta?.total || 0),
+        metodo_pago: normalizarTextoHuella(venta?.metodo_pago || 'EFECTIVO'),
+        fecha: String(fechaVenta || venta?.fecha || '').slice(0, 10),
+        detalles: normalizarDetallesHuella(venta?.productos || venta?.detalles),
+        vencidas: normalizarVencidasHuella(venta?.vencidas || venta?.productos_vencidos),
+    };
+
+    return JSON.stringify(payload);
 };
 
 /**
@@ -262,27 +403,41 @@ const rehidratarColaDesdeVentasLocales = async () => {
  */
 const verificarVentaExiste = async (ventaId, ventaData) => {
     try {
+        const normalizar = (valor) => String(valor || '').toUpperCase().trim();
+
         // Obtener la fecha de la venta (puede venir como string ISO o como fecha corta)
         let fechaVenta = ventaData.fecha;
         if (fechaVenta && fechaVenta.includes('T')) {
             fechaVenta = fechaVenta.split('T')[0]; // Extraer solo YYYY-MM-DD
         }
 
-        // Buscar ventas del mismo cliente
-        const clienteNombre = encodeURIComponent(ventaData.cliente_nombre || '');
-        const response = await fetch(`${API_BASE}/ventas-ruta/?search=${clienteNombre}`);
+        const negocioVenta = normalizar(ventaData.cliente_negocio || ventaData.nombre_negocio);
+        const nombreVenta = normalizar(ventaData.cliente_nombre);
+        const terminoBusqueda = encodeURIComponent(negocioVenta || nombreVenta || '');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 segundos
+
+        const response = await fetch(`${API_BASE}/ventas-ruta/?search=${terminoBusqueda}`, {
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
 
         if (response.ok) {
             const ventas = await response.json();
 
-            // Buscar coincidencia exacta por: cliente + total + fecha
+            // Buscar coincidencia exacta por cliente/negocio + total + fecha
             const existe = ventas.some(v => {
-                const mismoCliente = v.cliente_nombre?.toUpperCase() === ventaData.cliente_nombre?.toUpperCase();
+                const negocioServidor = normalizar(v.cliente_negocio || v.nombre_negocio);
+                const nombreServidor = normalizar(v.cliente_nombre);
+                const mismoNegocio = negocioVenta && negocioServidor ? negocioVenta === negocioServidor : false;
+                const mismoNombre = !negocioVenta && nombreVenta && nombreServidor ? nombreVenta === nombreServidor : false;
+                const mismoCliente = mismoNegocio || mismoNombre;
                 const mismoTotal = Math.abs(parseFloat(v.total) - parseFloat(ventaData.total)) < 1;
                 const mismaFecha = fechaVenta && v.fecha?.includes(fechaVenta);
 
                 if (mismoCliente && mismoTotal && mismaFecha) {
-                    console.log(`🔍 Encontrada venta existente: ID ${v.id} - ${v.cliente_nombre} - $${v.total}`);
+                    console.log(`🔍 Encontrada venta existente: ID ${v.id} - ${v.cliente_negocio || v.cliente_nombre} - $${v.total}`);
                     return true;
                 }
                 return false;
@@ -292,7 +447,11 @@ const verificarVentaExiste = async (ventaId, ventaData) => {
         }
         return false;
     } catch (error) {
-        console.warn('⚠️ No se pudo verificar si la venta existe:', error.message);
+        if (error.name === 'AbortError') {
+            console.warn('⏱️ Timeout verificando si la venta existe');
+        } else {
+            console.warn('⚠️ No se pudo verificar si la venta existe:', error.message);
+        }
         return false; // En caso de error, asumir que no existe para intentar enviar
     }
 };
@@ -302,7 +461,6 @@ const verificarVentaExiste = async (ventaId, ventaData) => {
  */
 export const sincronizarVentasPendientes = async () => {
     if (sincronizandoCola) {
-
         return { sincronizadas: 0, pendientes: 0 };
     }
 
@@ -319,27 +477,87 @@ export const sincronizarVentasPendientes = async () => {
         // Verificar conexión
         const netInfo = await NetInfo.fetch();
         if (!netInfo.isConnected) {
-
             sincronizandoCola = false;
             const pendientes = await obtenerVentasPendientes();
             return { sincronizadas: 0, pendientes: pendientes.length };
         }
 
         const pendientes = await obtenerVentasPendientes();
-        console.log(`🔄 Sincronizando ${pendientes.length} ventas pendientes...`);
+        const pendientesSincronizables = pendientes.filter((venta) => !esVentaPendienteEnRevision(venta));
+        const ventasEnRevision = pendientes.length - pendientesSincronizables.length;
+        
+        console.log(`🔄 Sincronizando ${pendientesSincronizables.length} ventas pendientes...`);
+        if (ventasEnRevision > 0) {
+            console.log(`🛑 ${ventasEnRevision} venta(s) quedan en revisión y no se reintentan automáticamente.`);
+        }
 
-        for (const venta of pendientes) {
+        for (const venta of pendientesSincronizables) {
             try {
                 // Soporta formato nuevo {id, data, ...} y formato legado (venta directa).
                 const fuenteData = venta?.data || venta;
                 const ventaNormalizada = normalizarVentaParaBackend(fuenteData, dispositivoId);
                 const ventaId = String(venta?.id || ventaNormalizada?.id_local || ventaNormalizada?.id || '');
+                const esPedido = !!fuenteData?._esPedido;
+                const esEdicionVentaPersistida = !esPedido && !!(ventaNormalizada.id && /^\d+$/.test(String(ventaNormalizada.id)));
 
                 if (!ventaNormalizada.id_local && ventaId) {
                     ventaNormalizada.id_local = ventaId;
                 }
 
-                // 🆕 Verificar si la venta ya existe en el servidor
+                // 📦 CASO: ENTREGA DE PEDIDO
+                if (esPedido) {
+                    console.log(`📦 Sincronizando ENTREGA de pedido ${ventaId}...`);
+                    const payloadPedido = { ...fuenteData };
+                    delete payloadPedido._esPedido; // Limpiar flag interno
+
+                    try {
+                        await actualizarPedido(ventaId, payloadPedido);
+                        await eliminarDeColaPendientes(ventaId);
+                        sincronizadas++;
+                        console.log(`✅ Pedido ${ventaId} sincronizado correctamente`);
+                    } catch (pedErr) {
+                        // Si falla, el catch exterior lo manejará (reintento)
+                        throw pedErr;
+                    }
+                    continue;
+                }
+
+                // 🆕 Si ya tiene ID numérico real, es una EDICIÓN de una venta que ya está en el servidor
+                if (esEdicionVentaPersistida) {
+                    console.log(`🔄 Sincronizando EDICIÓN de venta ${ventaNormalizada.id}...`);
+
+                    const payloadEdicionClean = {
+                        detalles: ventaNormalizada.detalles || [],
+                        total: ventaNormalizada.total || 0,
+                        metodo_pago: (ventaNormalizada.metodo_pago || '').toUpperCase(),
+                        dispositivo_id: ventaNormalizada.dispositivo_id || '',
+                        productos_vencidos: ventaNormalizada.productos_vencidos || [],
+                    };
+
+                    if (ventaNormalizada.foto_vencidos && String(ventaNormalizada.foto_vencidos).startsWith('data:')) {
+                        payloadEdicionClean.foto_vencidos = ventaNormalizada.foto_vencidos;
+                    }
+
+                    const resultadoEdicion = await editarVentaRuta(ventaNormalizada.id, payloadEdicionClean);
+                    
+                    if (resultadoEdicion) {
+                        await eliminarDeColaPendientes(ventaId);
+                        await marcarVentaLocalSincronizada(ventaId);
+                        sincronizadas++;
+                        console.log(`✅ Edición de venta ${ventaNormalizada.id} sincronizada`);
+                    } else {
+                        const errorRaw = window.__ultimoErrorEdicion;
+                        if (errorRaw === 'VENTA_YA_MODIFICADA') {
+                            await eliminarDeColaPendientes(ventaId);
+                            await marcarVentaLocalSincronizada(ventaId);
+                            sincronizadas++;
+                            console.log(`🛡️ Venta ${ventaNormalizada.id} ya estaba editada en servidor. Limpiando cola.`);
+                        }
+                    }
+                    continue; // 🚀 SALTAR PROCESO DE VENTA NUEVA (POST)
+                }
+
+                // 🆕 Verificar si la venta (POST) ya existe en el servidor para evitar duplicados
                 const existe = await verificarVentaExiste(ventaId, ventaNormalizada);
                 if (existe) {
                     console.log(`🔍 Venta ${ventaId} ya existe en servidor, eliminando de cola`);
@@ -351,7 +569,12 @@ export const sincronizarVentasPendientes = async () => {
 
                 const resultadoEnvio = await enviarVentaRuta(ventaNormalizada);
                 if (!resultadoEnvio?.success) {
-                    throw new Error(resultadoEnvio?.error || 'Error enviando venta al backend');
+                    const errorEnvio = new Error(resultadoEnvio?.error || 'Error enviando venta al backend');
+                    errorEnvio.code = resultadoEnvio?.code || '';
+                    errorEnvio.payload = resultadoEnvio?.payload || null;
+                    errorEnvio.status = resultadoEnvio?.status || null;
+                    errorEnvio.resultadoEnvio = resultadoEnvio;
+                    throw errorEnvio;
                 }
 
                 await eliminarDeColaPendientes(ventaId);
@@ -364,38 +587,60 @@ export const sincronizarVentasPendientes = async () => {
                     console.log(`✅ Venta ${ventaId} sincronizada`);
                 }
             } catch (error) {
-                const ventaId = String(venta?.id || venta?.data?.id_local || venta?.data?.id || 'SIN-ID');
-                console.warn(`⚠️ Error sincronizando venta ${ventaId}:`, error.message);
+                const ventaIdStr = String(venta?.id || venta?.data?.id_local || venta?.data?.id || 'SIN-ID');
+                console.warn(`⚠️ Error sincronizando venta ${ventaIdStr}:`, error.message);
 
-                // ⚠️ IMPORTANTE: No eliminar ventas con error 400 para evitar pérdida de datos.
-                // Se mantienen en cola para diagnóstico/reenvío manual.
-                if (error.message.includes('400') || error.message.includes('HTTP 400')) {
-                    console.error(`❌ Venta ${ventaId} devolvió 400; se mantiene en cola para revisión.`);
-                }
+                const resultadoEnvio = error?.resultadoEnvio || null;
+                const errorPermanente = esErrorPermanenteDeSincronizacion(resultadoEnvio, error);
+                const resumenError = construirResumenErrorSync(resultadoEnvio, error);
 
-                // Incrementar intentos
                 venta.intentos = (venta.intentos || 0) + 1;
                 try {
                     await mutarColaPendientes(async (pendientesActuales) => ({
                         cola: pendientesActuales.map((v) =>
-                            String(v?.id || v?.data?.id_local || v?.data?.id || '') === ventaId
-                                ? { ...v, intentos: venta.intentos }
+                            String(v?.id || v?.data?.id_local || v?.data?.id || '') === ventaIdStr
+                                ? {
+                                    ...v,
+                                    intentos: venta.intentos,
+                                    ...(errorPermanente ? {
+                                        requiere_revision: true,
+                                        estado_sync: 'REVISION',
+                                        motivo_error: resumenError,
+                                        codigo_error: String(resultadoEnvio?.code || error?.code || 'ERROR_PERMANENTE').toUpperCase(),
+                                        fecha_ultimo_error: new Date().toISOString(),
+                                    } : {}),
+                                }
                                 : v
                         )
                     }));
                 } catch (persistError) {
                     console.warn('⚠️ No se pudo persistir intentos de sincronización:', persistError.message);
                 }
+
+                if (errorPermanente) {
+                    console.error(`❌ Venta ${ventaIdStr} devolvió 400; se mantiene en cola para revisión.`);
+                    continue;
+                }
+
                 if (venta.intentos >= 5) {
-                    console.error(`❌ Venta ${ventaId} falló después de 5 intentos`);
+                    console.error(`❌ Venta ${ventaIdStr} falló después de 5 intentos`);
                 }
             }
         }
 
         const pendientesRestantes = await obtenerVentasPendientes();
-        console.log(`📊 Sincronización completada: ${sincronizadas} nuevas, ${yaExistentes} ya existían, ${pendientesRestantes.length} pendientes`);
+        const pendientesSincronizablesRestantes = pendientesRestantes.filter((venta) => !esVentaPendienteEnRevision(venta));
+        const pendientesEnRevision = pendientesRestantes.length - pendientesSincronizablesRestantes.length;
 
-        return { sincronizadas, pendientes: pendientesRestantes.length, yaExistentes };
+        console.log(`📊 Sincronización completada: ${sincronizadas} nuevas, ${yaExistentes} ya existían, ${pendientesSincronizablesRestantes.length} pendientes, ${pendientesEnRevision} en revisión`);
+
+        return {
+            sincronizadas,
+            pendientes: pendientesSincronizablesRestantes.length,
+            pendientes_totales: pendientesRestantes.length,
+            en_revision: pendientesEnRevision,
+            yaExistentes,
+        };
     } catch (error) {
         console.error('Error en sincronización:', error);
         return { sincronizadas: 0, pendientes: 0, error: error.message };
@@ -791,6 +1036,12 @@ export const guardarVenta = async (venta) => {
         // Usar la fecha que viene en la venta, o la fecha actual si no viene
         const fechaVenta = venta.fecha || new Date().toISOString();
 
+        // ⚠️ La huella solo queda para trazabilidad/diagnóstico.
+        // No debemos reutilizar ventas locales "parecidas", porque una segunda venta
+        // legítima al mismo cliente puede ocurrir segundos después.
+        const dispositivoId = await obtenerDispositivoId();
+        const huellaVenta = construirHuellaVenta(venta, fechaVenta, dispositivoId);
+
         // 🆕 Generar ID único con vendedorId
         const idVenta = await generarIdVenta(venta.vendedor_id || venta.vendedor);
 
@@ -801,9 +1052,6 @@ export const guardarVenta = async (venta) => {
             cantidad: item.cantidad,
             motivo: item.motivo || 'No especificado'
         }));
-
-        // 🆕 2. Obtener dispositivo_id para tracking
-        const dispositivoId = await obtenerDispositivoId();
 
         // 🆕 3. Convertir fotoVencidas a base64 ANTES de guardar en cola local
         let fotosBase64 = null;
@@ -817,6 +1065,7 @@ export const guardarVenta = async (venta) => {
             productos_vencidos: productosVencidosFormateados, // 🚀 Guardar ya formateado
             foto_vencidos: fotosBase64, // 🚀 Guardar fotos en base64 para que no se pierdan al cerrar app
             dispositivo_id: dispositivoId,
+            huella_duplicado: huellaVenta,
             fecha: fechaVenta,
             estado: 'completada',
             sincronizada: false
@@ -862,10 +1111,14 @@ export const guardarVenta = async (venta) => {
                         if (resultado.success) {
                             console.log('✅ Venta sincronizada con servidor');
 
-                            // Marcar como sincronizada
+                            // Marcar como sincronizada y guardar el ID real del backend
                             nuevaVenta.sincronizada = true;
+                            if (resultado.data?.id) {
+                                nuevaVenta.id = resultado.data.id;
+                            }
+
                             const ventasActuales = await obtenerVentas();
-                            const ventasActualizadas = ventasActuales.map(v => v.id === nuevaVenta.id ? { ...v, sincronizada: true } : v);
+                            const ventasActualizadas = ventasActuales.map(v => v.id === ventaBackend.id_local ? { ...v, ...nuevaVenta } : v);
                             await AsyncStorage.setItem('ventas', JSON.stringify(ventasActualizadas));
 
                             // 🆕 Manejar duplicados
@@ -969,6 +1222,8 @@ export default {
 
     // Cola offline
     obtenerVentasPendientes,
+    obtenerVentasEnRevision,
+    descartarVentaEnRevision,
     sincronizarVentasPendientes,
     hayConexion,
 

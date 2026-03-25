@@ -392,7 +392,7 @@ const styles = StyleSheet.create({
   },
   scrollContainer: {
     padding: 10,
-    paddingBottom: 220, // Espacio extra para que el teclado nunca tape el último producto
+    paddingBottom: 260, // Espacio extra para que el teclado nunca tape el último producto (260 normal, igual que Ventas)
   },
   loadingContainer: {
     flex: 1,

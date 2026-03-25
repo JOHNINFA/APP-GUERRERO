@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     View,
     Text,
@@ -12,7 +12,8 @@ import {
     KeyboardAvoidingView,
     Keyboard,
     Platform,
-    Alert
+    Alert,
+    ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -21,7 +22,7 @@ import { obtenerProductos, formatearMoneda } from '../../services/ventasService'
 import { API_URL } from '../../config'; // 🆕 Import estático en lugar de dinámico
 import { obtenerAuthHeaders } from '../../services/rutasApiService';
 
-const DevolucionesVencidas = ({
+const DevolucionesVencidas = React.memo(({
     visible,
     onClose,
     onGuardar,
@@ -32,13 +33,21 @@ const DevolucionesVencidas = ({
     fechaSeleccionada,
     modoSoloRegistro = false, // 🆕 Modo directo sin "completar venta"
     clienteId = null, // 🆕 ID del cliente para modo registro directo
-    onVencidasRegistradas = null // 🆕 Callback cuando se completa registro directo
+    onVencidasRegistradas = null, // 🆕 Callback cuando se completa registro directo
+    obtenerAdvertenciasStock = null,
+    obtenerStockDisponibleProducto = null,
 }) => {
     const [cantidades, setCantidades] = useState({});
     const [fotos, setFotos] = useState({}); // { productoId: [uri1, uri2, ...] }
     const [busquedaProducto, setBusquedaProducto] = useState('');
     const [tecladoVisible, setTecladoVisible] = useState(false);
-    const productos = obtenerProductos().filter((p) => p?.disponible_app_ventas !== false);
+    const [guardando, setGuardando] = useState(false);
+    
+    // 🚀 Optimización: Cargar productos solo cuando el modal es visible
+    const productos = useMemo(() => {
+        if (!visible) return [];
+        return obtenerProductos().filter((p) => p?.disponible_app_ventas !== false);
+    }, [visible]);
 
     const productosFiltrados = useMemo(() => {
         const query = (busquedaProducto || '').trim().toUpperCase();
@@ -60,13 +69,9 @@ const DevolucionesVencidas = ({
             // Cargar fotos guardadas
             setFotos(fotosGuardadas || {});
 
-            // 🆕 Solicitar permisos de cámara anticipadamente
-            (async () => {
-                const { status } = await ImagePicker.requestCameraPermissionsAsync();
-                if (status !== 'granted') {
-                    console.log('⚠️ Permiso de cámara no otorgado');
-                }
-            })();
+            // No pedir permisos de cámara al abrir el modal.
+            // Se solicitan solo cuando el usuario realmente va a tomar la foto,
+            // para que la apertura de Vencidas se sienta inmediata.
         }
     }, [visible, datosGuardados, fotosGuardadas]);
 
@@ -195,177 +200,213 @@ const DevolucionesVencidas = ({
         }
     };
 
+    const confirmarContinuarConAdvertenciasStock = async (productosObjetivo = []) => {
+        const advertencias = typeof obtenerAdvertenciasStock === 'function'
+            ? (obtenerAdvertenciasStock(productosObjetivo) || [])
+            : [];
+
+        if (!advertencias.length) return true;
+
+        return await new Promise((resolve) => {
+            Alert.alert(
+                '⚠️ Cambio sin stock',
+                advertencias.join('\n') + '\n\n¿Deseas continuar de todas formas?',
+                [
+                    {
+                        text: 'Cancelar',
+                        style: 'cancel',
+                        onPress: () => resolve(false),
+                    },
+                    {
+                        text: 'Continuar',
+                        onPress: () => resolve(true),
+                    }
+                ]
+            );
+        });
+    };
+
     const handleGuardar = async () => {
-        // Filtrar solo productos con cantidad > 0
-        const productosConCantidad = Object.keys(cantidades)
-            .filter(id => cantidades[id] > 0)
-            .map(id => {
-                const producto = productos.find(p => p.id === parseInt(id));
-                return {
-                    id: producto.id,
-                    nombre: producto.nombre,
-                    cantidad: cantidades[id]
-                };
-            });
+        if (guardando) return;
+        setGuardando(true);
 
-        // Si es vencidas, validar que haya al menos UNA foto en general, no es necesario una por cada producto
-        // para agilizar el registro cuando son muchos productos juntos.
-        let fotosFinales = { ...fotos };
+        try {
+            // Filtrar solo productos con cantidad > 0
+            const productosConCantidad = Object.keys(cantidades)
+                .filter(id => cantidades[id] > 0)
+                .map(id => {
+                    const producto = productos.find(p => p.id === parseInt(id));
+                    return {
+                        id: producto.id,
+                        nombre: producto.nombre,
+                        cantidad: cantidades[id]
+                    };
+                });
 
-        if (tipo === 'vencidas' && productosConCantidad.length > 0) {
-            const tieneAlgunaFoto = Object.values(fotosFinales).some(uris => uris.length > 0);
-            if (!tieneAlgunaFoto) {
-                // Abrir cámara y luego proceder a guardar
-                const nuevaUri = await tomarFotoDirecta();
-                if (!nuevaUri) return; // Si el usuario cancela la cámara, detener guardado.
+            // Si es vencidas, validar que haya al menos UNA foto en general, no es necesario una por cada producto
+            // para agilizar el registro cuando son muchos productos juntos.
+            let fotosFinales = { ...fotos };
 
-                fotosFinales['general'] = [nuevaUri];
-                setFotos(fotosFinales); // Actualizar estado visual por si acaso
+            if (tipo === 'vencidas' && productosConCantidad.length > 0) {
+                const puedeContinuarPorStock = await confirmarContinuarConAdvertenciasStock(productosConCantidad);
+                if (!puedeContinuarPorStock) return;
 
-                // 🆕 FIX: En vez de dejar que el evento muera aquí, si es modo normal, cerrar y guardar directo (sin alerta que bloquea modales en Android).
-                if (!modoSoloRegistro) {
-                    onGuardar(productosConCantidad, fotosFinales);
-                    setCantidades({});
-                    setFotos({});
-                    setBusquedaProducto('');
-                    onClose();
-                    return; // Terminar aquí para este flujo
+                const tieneAlgunaFoto = Object.values(fotosFinales).some(uris => uris.length > 0);
+                if (!tieneAlgunaFoto) {
+                    // Abrir cámara y luego proceder a guardar
+                    const nuevaUri = await tomarFotoDirecta();
+                    if (!nuevaUri) return; // Si el usuario cancela la cámara, detener guardado.
+
+                    fotosFinales['general'] = [nuevaUri];
+                    setFotos(fotosFinales); // Actualizar estado visual por si acaso
+
+                    // 🆕 FIX: En vez de dejar que el evento muera aquí, si es modo normal, cerrar y guardar directo (sin alerta que bloquea modales en Android).
+                    if (!modoSoloRegistro) {
+                        onGuardar(productosConCantidad, fotosFinales);
+                        setCantidades({});
+                        setFotos({});
+                        setBusquedaProducto('');
+                        onClose();
+                        return; // Terminar aquí para este flujo
+                    }
                 }
-            }
 
-            // 🆕 MODO SOLO REGISTRO: Enviar directamente al backend
-            if (modoSoloRegistro) {
-                try {
-                    console.log(`📤 Enviando vencidas directamente (${productosConCantidad.length} productos)`);
+                // 🆕 MODO SOLO REGISTRO: Enviar directamente al backend
+                if (modoSoloRegistro) {
+                    try {
+                        console.log(`📤 Enviando vencidas directamente (${productosConCantidad.length} productos)`);
 
-                    // Format productos vencidos para el backend
-                    const productosVencidosFormateados = productosConCantidad.map(item => ({
-                        id: item.id,
-                        producto: item.nombre,
-                        cantidad: item.cantidad,
-                        motivo: 'Devolución al entregar pedido'
-                    }));
+                        // Format productos vencidos para el backend
+                        const productosVencidosFormateados = productosConCantidad.map(item => ({
+                            id: item.id,
+                            producto: item.nombre,
+                            cantidad: item.cantidad,
+                            motivo: 'Devolución al entregar pedido'
+                        }));
 
-                    // 🆕 Convertir fotos a base64 para el backend
-                    const fotosBase64 = {};
-                    for (const [prodId, uris] of Object.entries(fotosFinales)) {
-                        fotosBase64[prodId] = [];
-                        for (const uri of uris) {
-                            try {
-                                // Leer archivo y convertir a base64
-                                const response = await fetch(uri);
-                                const blob = await response.blob();
-                                const base64 = await new Promise((resolve, reject) => {
-                                    const reader = new FileReader();
-                                    reader.onloadend = () => resolve(reader.result);
-                                    reader.onerror = reject;
-                                    reader.readAsDataURL(blob);
-                                });
-                                fotosBase64[prodId].push(base64);
-                            } catch (error) {
-                                console.error('Error convirtiendo foto a base64:', error);
+                        // 🆕 Convertir fotos a base64 para el backend
+                        const fotosBase64 = {};
+                        for (const [prodId, uris] of Object.entries(fotosFinales)) {
+                            fotosBase64[prodId] = [];
+                            for (const uri of uris) {
+                                try {
+                                    // Leer archivo y convertir a base64
+                                    const response = await fetch(uri);
+                                    const blob = await response.blob();
+                                    const base64 = await new Promise((resolve, reject) => {
+                                        const reader = new FileReader();
+                                        reader.onloadend = () => resolve(reader.result);
+                                        reader.onerror = reject;
+                                        reader.readAsDataURL(blob);
+                                    });
+                                    fotosBase64[prodId].push(base64);
+                                } catch (error) {
+                                    console.error('Error convirtiendo foto a base64:', error);
+                                }
                             }
                         }
+
+                        // Crear venta ficticia de $0 solo con vencidas
+                        const ventaVencidas = {
+                            id_local: `VENC-${Date.now()}`, // ID único
+                            vendedor: userId,
+                            cliente_nombre: clienteId ? `Cliente ID ${clienteId}` : 'Sin cliente',
+                            nombre_negocio: '',
+                            total: 0, // Sin venta, solo vencidas
+                            detalles: [], // Sin productos vendidos
+                            metodo_pago: 'N/A',
+                            productos_vencidos: productosVencidosFormateados,
+                            foto_vencidos: fotosBase64, // 🆕 Fotos en base64
+                            fecha: fechaSeleccionada.toISOString()
+                        };
+
+                        const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
+                        const response = await fetch(`${API_URL}/api/ventas-ruta/`, {
+                            method: 'POST',
+                            headers,
+                            body: JSON.stringify(ventaVencidas),
+                        });
+
+                        console.log('📡 Response status:', response.status);
+                        console.log('📡 Response headers:', response.headers);
+
+                        // Leer respuesta como texto primero para ver qué devuelve
+                        const responseText = await response.text();
+                        console.log('📡 Response text:', responseText.substring(0, 500)); // Primeros 500 caracteres
+
+                        let data;
+                        try {
+                            data = JSON.parse(responseText);
+                        } catch (parseError) {
+                            console.error('❌ Error parseando JSON:', parseError);
+                            console.error('📄 Respuesta completa:', responseText);
+                            throw new Error('El servidor no devolvió JSON válido');
+                        }
+
+
+                        if (response.ok) {
+                            Alert.alert(
+                                '✅ Vencidas Registradas',
+                                `${productosConCantidad.length} producto(s) registrados correctamente.`,
+                                [{
+                                    text: 'OK', onPress: () => {
+                                        setCantidades({});
+                                        setFotos({});
+                                        setBusquedaProducto('');
+                                        onClose();
+                                        if (onGuardar) onGuardar([], {}); // Limpiar en padre
+                                        // 🆕 Llamar callback para completar flujo (marcar pedido como entregado)
+                                        if (onVencidasRegistradas) onVencidasRegistradas();
+                                    }
+                                }]
+                            );
+                        } else {
+                            throw new Error(data.error || 'Error al registrar vencidas');
+                        }
+                    } catch (error) {
+                        console.error('❌ Error enviando vencidas:', error);
+                        Alert.alert('Error', 'No se pudieron registrar las vencidas. Intenta de nuevo.');
                     }
-
-                    // Crear venta ficticia de $0 solo con vencidas
-                    const ventaVencidas = {
-                        id_local: `VENC-${Date.now()}`, // ID único
-                        vendedor: userId,
-                        cliente_nombre: clienteId ? `Cliente ID ${clienteId}` : 'Sin cliente',
-                        nombre_negocio: '',
-                        total: 0, // Sin venta, solo vencidas
-                        detalles: [], // Sin productos vendidos
-                        metodo_pago: 'N/A',
-                        productos_vencidos: productosVencidosFormateados,
-                        foto_vencidos: fotosBase64, // 🆕 Fotos en base64
-                        fecha: fechaSeleccionada.toISOString()
-                    };
-
-                    const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
-                    const response = await fetch(`${API_URL}/api/ventas-ruta/`, {
-                        method: 'POST',
-                        headers,
-                        body: JSON.stringify(ventaVencidas),
-                    });
-
-                    console.log('📡 Response status:', response.status);
-                    console.log('📡 Response headers:', response.headers);
-
-                    // Leer respuesta como texto primero para ver qué devuelve
-                    const responseText = await response.text();
-                    console.log('📡 Response text:', responseText.substring(0, 500)); // Primeros 500 caracteres
-
-                    let data;
-                    try {
-                        data = JSON.parse(responseText);
-                    } catch (parseError) {
-                        console.error('❌ Error parseando JSON:', parseError);
-                        console.error('📄 Respuesta completa:', responseText);
-                        throw new Error('El servidor no devolvió JSON válido');
-                    }
-
-
-                    if (response.ok) {
-                        Alert.alert(
-                            '✅ Vencidas Registradas',
-                            `${productosConCantidad.length} producto(s) registrados correctamente.`,
-                            [{
-                                text: 'OK', onPress: () => {
-                                    setCantidades({});
-                                    setFotos({});
-                                    setBusquedaProducto('');
-                                    onClose();
-                                    if (onGuardar) onGuardar([], {}); // Limpiar en padre
-                                    // 🆕 Llamar callback para completar flujo (marcar pedido como entregado)
-                                    if (onVencidasRegistradas) onVencidasRegistradas();
-                                }
-                            }]
-                        );
-                    } else {
-                        throw new Error(data.error || 'Error al registrar vencidas');
-                    }
-                } catch (error) {
-                    console.error('❌ Error enviando vencidas:', error);
-                    Alert.alert('Error', 'No se pudieron registrar las vencidas. Intenta de nuevo.');
+                    return;
                 }
+
+                // MODO NORMAL: Solo guardar localmente
+                console.log(`📝 Vencidas registradas localmente (${productosConCantidad.length} productos)`);
+                onGuardar(productosConCantidad, fotosFinales);
+                setCantidades({});
+                setFotos({});
+                setBusquedaProducto('');
+                onClose();
+                return; // Termina la función.
+            }
+
+            // Si no hay productos (limpiando), mostrar mensaje diferente
+            if (productosConCantidad.length === 0 && datosGuardados.length > 0) {
+                Alert.alert(
+                    'Listo',
+                    'Vencidas eliminadas',
+                    [{
+                        text: 'OK', onPress: () => {
+                            onGuardar([], {});
+                            setCantidades({});
+                            setFotos({});
+                            setBusquedaProducto('');
+                            onClose();
+                        }
+                    }]
+                );
                 return;
             }
 
-            // MODO NORMAL: Solo guardar localmente
-            console.log(`📝 Vencidas registradas localmente (${productosConCantidad.length} productos)`);
+            // Caso donde no es vencidas o no hay productos y no había datos
             onGuardar(productosConCantidad, fotosFinales);
             setCantidades({});
             setFotos({});
             setBusquedaProducto('');
             onClose();
-            return; // Termina la función.
+        } finally {
+            setGuardando(false);
         }
-
-        // Si no hay productos (limpiando), mostrar mensaje diferente
-        if (productosConCantidad.length === 0 && datosGuardados.length > 0) {
-            Alert.alert(
-                'Listo',
-                'Vencidas eliminadas',
-                [{
-                    text: 'OK', onPress: () => {
-                        onGuardar([], {});
-                        setCantidades({});
-                        setFotos({});
-                        setBusquedaProducto('');
-                        onClose();
-                    }
-                }]
-            );
-            return;
-        }
-
-        // Caso donde no es vencidas o no hay productos y no había datos
-        onGuardar(productosConCantidad, fotosFinales);
-        setCantidades({});
-        setFotos({});
-        setBusquedaProducto('');
-        onClose();
     };
 
     const handleCancelar = () => {
@@ -398,15 +439,44 @@ const DevolucionesVencidas = ({
 
     const totalProductos = Object.values(cantidades).reduce((sum, val) => sum + (val || 0), 0);
 
-    const renderProducto = ({ item }) => {
+    // 🚀 Optimización: Pre-calcular stocks disponibles para todos los productos de una vez
+    const stocksDisponibles = useMemo(() => {
+        const stocks = {};
+        productos.forEach(producto => {
+            const cantidad = cantidades[producto.id] || 0;
+            const stockDisponibleRaw = typeof obtenerStockDisponibleProducto === 'function'
+                ? obtenerStockDisponibleProducto(producto?.nombre || '')
+                : null;
+            
+            const stockDisponibleBase = Number.isFinite(Number(stockDisponibleRaw))
+                ? Math.max(0, parseInt(stockDisponibleRaw, 10) || 0)
+                : null;
+            
+            stocks[producto.id] = stockDisponibleBase !== null 
+                ? Math.max(0, stockDisponibleBase - cantidad)
+                : null;
+        });
+        return stocks;
+    }, [productos, cantidades, obtenerStockDisponibleProducto]);
+
+    const renderProducto = useCallback(({ item }) => {
         const cantidad = cantidades[item.id] || 0;
         const fotosProducto = fotos[item.id] || [];
+        const stockDisponible = stocksDisponibles[item.id];
 
         return (
             <View style={styles.productoItem}>
                 <View style={styles.productoHeader}>
                     <View style={styles.productoInfo}>
                         <Text style={styles.productoNombre}>{item.nombre}</Text>
+                        {stockDisponible !== null && (
+                            <Text style={[
+                                styles.productoStockDisponible,
+                                stockDisponible <= 0 && styles.productoStockAgotado,
+                            ]}>
+                                {`Stock disponible: ${stockDisponible}`}
+                            </Text>
+                        )}
                     </View>
 
                     <View style={styles.cantidadControl}>
@@ -439,7 +509,7 @@ const DevolucionesVencidas = ({
                 </View>
             </View>
         );
-    };
+    }, [cantidades, fotos, stocksDisponibles]);
 
     // 🆕 Renderizar panel general de fotos para Vencidas
     const renderPanelFotosGenerales = () => {
@@ -484,87 +554,124 @@ const DevolucionesVencidas = ({
     return (
         <Modal
             visible={visible}
-            animationType="slide"
-            transparent={false}
+            animationType="fade"
+            transparent={true}
             onRequestClose={handleCancelar}
         >
             <KeyboardAvoidingView
-                style={styles.container}
+                style={{
+                    flex: 1,
+                    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                    justifyContent: 'flex-start',
+                    paddingTop: Platform.OS === 'android' ? 8 : 20,
+                    paddingHorizontal: 8,
+                    paddingBottom: Platform.OS === 'android' ? 8 : 20,
+                }}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+                enabled={Platform.OS === 'ios'}
             >
-                {/* Header */}
-                <View style={[styles.header, tecladoVisible && styles.headerCompacto]}>
-                    <TouchableOpacity onPress={handleCancelar} style={styles.btnCerrar}>
-                        <Ionicons name="close" size={28} color="#333" />
-                    </TouchableOpacity>
-                    <Text style={[styles.titulo, tecladoVisible && styles.tituloCompacto]}>
-                        {tipo === 'devoluciones' ? 'Devoluciones' : 'Productos Vencidos'}
-                    </Text>
-                    <TouchableOpacity onPress={handleLimpiarTodo} style={styles.btnLimpiarTodo}>
-                        <Ionicons name="trash-outline" size={22} color="#d32f2f" />
-                    </TouchableOpacity>
-                </View>
-
-                {/* Buscador fijo (sticky) */}
-                <View style={[styles.busquedaContainer, tecladoVisible && styles.busquedaContainerCompacto]}>
-                    <Ionicons name="search" size={18} color="#666" style={styles.iconoBusqueda} />
-                    <TextInput
-                        style={styles.inputBusqueda}
-                        placeholder="Buscar producto..."
-                        value={busquedaProducto}
-                        onChangeText={setBusquedaProducto}
-                        autoCapitalize="characters"
-                    />
-                    {busquedaProducto.length > 0 && (
-                        <TouchableOpacity onPress={() => setBusquedaProducto('')}>
-                            <Ionicons name="close-circle" size={18} color="#666" />
+                <View style={{
+                    backgroundColor: '#fff',
+                    borderRadius: 20,
+                    width: '100%',
+                    maxHeight: Platform.OS === 'android' ? '98%' : '95%',
+                    minHeight: Platform.OS === 'android' ? '70%' : '75%',
+                    flexShrink: 1,
+                    overflow: 'hidden',
+                    flex: 1,
+                }}>
+                    {/* Header */}
+                    <View style={[styles.header, tecladoVisible && styles.headerCompacto]}>
+                        <TouchableOpacity onPress={handleCancelar} style={styles.btnCerrar}>
+                            <Ionicons name="close" size={28} color="#333" />
                         </TouchableOpacity>
-                    )}
-                </View>
-
-                {/* Lista de productos */}
-                <FlatList
-                    data={productosFiltrados}
-                    renderItem={renderProducto}
-                    keyExtractor={(item) => String(item.id)}
-                    style={styles.lista}
-                    contentContainerStyle={[styles.listaContent, tecladoVisible && styles.listaContentCompacto]}
-                    keyboardShouldPersistTaps="always"
-                    ListFooterComponent={renderPanelFotosGenerales}
-                    ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <Ionicons name="search-outline" size={28} color="#bbb" />
-                            <Text style={styles.emptyText}>No hay productos para esa búsqueda</Text>
-                        </View>
-                    }
-                />
-
-                {/* Footer con botones */}
-                <View style={[styles.footer, tecladoVisible && styles.footerCompacto]}>
-                    <TouchableOpacity
-                        style={styles.btnCancelar}
-                        onPress={handleCancelar}
-                    >
-                        <Text style={styles.btnCancelarTexto}>Cancelar</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={styles.btnGuardar}
-                        onPress={handleGuardar}
-                    >
-                        <Ionicons name="checkmark-circle" size={20} color="white" />
-                        <Text style={styles.btnGuardarTexto}>
-                            {modoSoloRegistro
-                                ? (totalProductos > 0 ? `Registrar Vencidas (${totalProductos})` : 'Guardar')
-                                : (totalProductos > 0 ? `Guardar (${totalProductos})` : 'Guardar')}
+                        <Text style={[styles.titulo, tecladoVisible && styles.tituloCompacto]}>
+                            {tipo === 'devoluciones' ? 'Devoluciones' : 'Productos Vencidos'}
                         </Text>
-                    </TouchableOpacity>
+                        <TouchableOpacity onPress={handleLimpiarTodo} style={styles.btnLimpiarTodo}>
+                            <Ionicons name="trash-outline" size={22} color="#d32f2f" />
+                        </TouchableOpacity>
+                    </View>
+
+                    {guardando && (
+                        <View style={styles.guardandoContainer}>
+                            <ActivityIndicator size="small" color="#003d88" />
+                            <Text style={styles.guardandoTexto}>
+                                {modoSoloRegistro ? 'Registrando vencidas...' : 'Guardando...'}
+                            </Text>
+                        </View>
+                    )}
+
+                    {/* Buscador fijo (sticky) */}
+                    <View style={[styles.busquedaContainer, tecladoVisible && styles.busquedaContainerCompacto]}>
+                        <Ionicons name="search" size={18} color="#666" style={styles.iconoBusqueda} />
+                        <TextInput
+                            style={styles.inputBusqueda}
+                            placeholder="Buscar producto..."
+                            value={busquedaProducto}
+                            onChangeText={setBusquedaProducto}
+                            autoCapitalize="characters"
+                        />
+                        {busquedaProducto.length > 0 && (
+                            <TouchableOpacity onPress={() => setBusquedaProducto('')}>
+                                <Ionicons name="close-circle" size={18} color="#666" />
+                            </TouchableOpacity>
+                        )}
+                    </View>
+
+                    {/* Lista de productos */}
+                    <FlatList
+                        data={productosFiltrados}
+                        renderItem={renderProducto}
+                        keyExtractor={(item) => String(item.id)}
+                        style={styles.lista}
+                        contentContainerStyle={[styles.listaContent, tecladoVisible && styles.listaContentCompacto]}
+                        keyboardShouldPersistTaps="always"
+                        ListFooterComponent={renderPanelFotosGenerales}
+                        ListEmptyComponent={
+                            <View style={styles.emptyContainer}>
+                                <Ionicons name="search-outline" size={28} color="#bbb" />
+                                <Text style={styles.emptyText}>No hay productos para esa búsqueda</Text>
+                            </View>
+                        }
+                    />
+
+                    {/* Footer con botones */}
+                    <View style={[styles.footer, tecladoVisible && styles.footerCompacto]}>
+                        <TouchableOpacity
+                            style={[styles.btnCancelar, guardando && styles.btnAccionDeshabilitado]}
+                            onPress={handleCancelar}
+                            disabled={guardando}
+                        >
+                            <Text style={styles.btnCancelarTexto}>Cancelar</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.btnGuardar, guardando && styles.btnGuardarDeshabilitado]}
+                            onPress={handleGuardar}
+                            disabled={guardando}
+                        >
+                            {guardando ? (
+                                <ActivityIndicator size="small" color="white" />
+                            ) : (
+                                <Ionicons name="checkmark-circle" size={20} color="white" />
+                            )}
+                            <Text style={styles.btnGuardarTexto}>
+                                {guardando
+                                    ? (modoSoloRegistro ? 'Registrando...' : 'Guardando...')
+                                    : (
+                                        modoSoloRegistro
+                                            ? (totalProductos > 0 ? `Registrar Vencidas (${totalProductos})` : 'Guardar')
+                                            : (totalProductos > 0 ? `Guardar (${totalProductos})` : 'Guardar')
+                                    )}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
                 </View>
             </KeyboardAvoidingView>
         </Modal>
     );
-};
+});
 
 const styles = StyleSheet.create({
     container: {
@@ -602,6 +709,24 @@ const styles = StyleSheet.create({
     },
     tituloCompacto: {
         fontSize: 18,
+    },
+    guardandoContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#e8f1ff',
+        marginHorizontal: 15,
+        marginTop: 8,
+        paddingVertical: 10,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#cfe0ff',
+    },
+    guardandoTexto: {
+        marginLeft: 8,
+        fontSize: 13,
+        color: '#003d88',
+        fontWeight: '600',
     },
     busquedaContainer: {
         flexDirection: 'row',
@@ -659,6 +784,15 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: 'bold',
         color: '#333',
+    },
+    productoStockDisponible: {
+        marginTop: 3,
+        fontSize: 13,
+        color: '#1d4ed8',
+        fontWeight: '700',
+    },
+    productoStockAgotado: {
+        color: '#dc2626',
     },
     cantidadControl: {
         flexDirection: 'row',
@@ -768,6 +902,9 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         color: '#666',
     },
+    btnAccionDeshabilitado: {
+        opacity: 0.65,
+    },
     btnGuardar: {
         flex: 1,
         flexDirection: 'row',
@@ -776,6 +913,9 @@ const styles = StyleSheet.create({
         backgroundColor: '#00ad53',
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    btnGuardarDeshabilitado: {
+        backgroundColor: '#7fb892',
     },
     btnGuardarTexto: {
         fontSize: 16,

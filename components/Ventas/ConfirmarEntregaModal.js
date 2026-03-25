@@ -51,7 +51,11 @@ export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido })
                         </TouchableOpacity>
                     </View>
 
-                    <ScrollView style={styles.scrollView}>
+                    <ScrollView
+                        style={styles.scrollView}
+                        contentContainerStyle={styles.scrollContent}
+                        keyboardShouldPersistTaps="handled"
+                    >
                         {/* Cliente */}
                         <View style={styles.seccion}>
                             <Text style={styles.label}>Cliente:</Text>
@@ -71,7 +75,7 @@ export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido })
                                             <View style={{ flex: 1 }}>
                                                 <Text style={styles.itemNombre}>{p.producto_nombre}</Text>
                                                 <Text style={styles.itemDetalle}>
-                                                    {p.cantidad} x {formatearMoneda(p.precio_unitario)}
+                                                    {p.cantidad} x {formatearMoneda(Math.round(parseFloat(p.precio_unitario || 0)))}
                                                 </Text>
                                             </View>
                                             <Text style={styles.itemTotal}>
@@ -236,6 +240,7 @@ const styles = StyleSheet.create({
         borderRadius: 15,
         width: '100%',
         maxHeight: '80%',
+        minHeight: '68%',
         elevation: 5,
     },
     header: {
@@ -257,7 +262,13 @@ const styles = StyleSheet.create({
         marginTop: 2,
     },
     scrollView: {
+        flexGrow: 0,
+        flexShrink: 1,
+    },
+    scrollContent: {
         padding: 15,
+        paddingBottom: 10,
+        flexGrow: 1,
     },
     seccion: {
         marginBottom: 10,

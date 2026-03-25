@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Pressable, FlatList, StyleSheet, Alert, SafeAreaView, StatusBar, Platform, RefreshControl, Modal, Linking, ScrollView, Keyboard, KeyboardAvoidingView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Pressable, FlatList, StyleSheet, Alert, SafeAreaView, StatusBar, Platform, RefreshControl, Modal, Linking, ScrollView, Keyboard, KeyboardAvoidingView, AppState } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker'; // 🆕 Import DatePicker
 import ClienteSelector from './ClienteSelector';
@@ -18,12 +18,14 @@ import {
     sincronizarProductos,
     sincronizarVentasPendientes,
     obtenerVentasPendientes,
+    obtenerVentasEnRevision,
+    descartarVentaEnRevision,
     obtenerVentas,  // 🆕 Agregar para contar ventas del día
     limpiarVentasLocales, // 🆕 Limpiar al cerrar turno
     convertirFotosABase64, // 🆕 Helper para fotos
     obtenerDispositivoId,
 } from '../../services/ventasService';
-import { imprimirTicket } from '../../services/printerService';
+import { imprimirTicket, precalentarConfigImpresion } from '../../services/printerService';
 import { sincronizarPedidosAccionesPendientes } from '../../services/syncService';
 import { ENDPOINTS, API_URL } from '../../config';
 import { actualizarPedido, editarVentaRuta, obtenerAuthHeaders } from '../../services/rutasApiService';
@@ -87,14 +89,17 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [historialReimpresion, setHistorialReimpresion] = useState([]); // 🆕 Historial unificado (backend + local fallback)
     const [cargandoHistorial, setCargandoHistorial] = useState(false);
     const [historialResumenPreview, setHistorialResumenPreview] = useState([]); // 🆕 Solo para resumen mientras carga backend
+    const ultimaVentaHistorialRef = useRef(null);
     const [modalMetodoPagoCardVisible, setModalMetodoPagoCardVisible] = useState(false);
     const [ventaMetodoPagoCard, setVentaMetodoPagoCard] = useState(null);
     const [metodoPagoCardSeleccionado, setMetodoPagoCardSeleccionado] = useState('EFECTIVO');
     const [guardandoMetodoPagoCard, setGuardandoMetodoPagoCard] = useState(false);
+    const guardandoMetodoPagoCardRef = useRef(false);
     const [inputBuscadorEnFoco, setInputBuscadorEnFoco] = useState(false); // 🆕 Rastrear foco del buscador
     const [forzarMostrarTurno, setForzarMostrarTurno] = useState(false); // 🆕 Para ver el turno bajo demanda (peeking)
     const [compensacionBloqueSuperior, setCompensacionBloqueSuperior] = useState(0);
     const [modoListaProductos, setModoListaProductos] = useState('scroll'); // normal | scroll
+    const [cargandoAnulacion, setCargandoAnulacion] = useState(false); // 🆕 Estado para evitar doble toque al anular
 
     // 🆕 Estados para edición de venta desde historial
     const [ventaEnEdicion, setVentaEnEdicion] = useState(null); // venta completa que se está editando
@@ -103,38 +108,119 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
     // 🚀 OPTIMIZACIÓN: Memoizar flags del cliente seleccionado para evitar cálculos en render
     const norm = useCallback((str) => str ? str.toString().toUpperCase().trim() : '', []);
+    const normTelefono = useCallback((valor) => String(valor || '').replace(/\D/g, ''), []);
+
+    const obtenerIdentidadCliente = useCallback((cliente) => {
+        const id = String(cliente?.id ?? cliente?.cliente_id ?? cliente?.cliente ?? '').trim();
+        const negocio = norm(cliente?.negocio || cliente?.cliente_negocio || cliente?.nombre_negocio || cliente?.destinatario);
+        const nombre = norm(cliente?.nombre || cliente?.cliente_nombre || cliente?.destinatario);
+        const telefono = normTelefono(cliente?.celular || cliente?.telefono || cliente?.cliente_celular);
+        const direccion = norm(cliente?.direccion || cliente?.direccion_entrega);
+
+        return { id, negocio, nombre, telefono, direccion };
+    }, [norm, normTelefono]);
+
+    const coincideCliente = useCallback((clienteA, clienteB) => {
+        if (!clienteA || !clienteB) return false;
+
+        const identidadA = obtenerIdentidadCliente(clienteA);
+        const identidadB = obtenerIdentidadCliente(clienteB);
+
+        if (identidadA.id && identidadB.id) return identidadA.id === identidadB.id;
+
+        if (identidadA.negocio && identidadB.negocio) {
+            return identidadA.negocio === identidadB.negocio;
+        }
+
+        if (identidadA.negocio || identidadB.negocio) {
+            const negocio = identidadA.negocio || identidadB.negocio;
+            const nombre = identidadA.negocio ? identidadB.nombre : identidadA.nombre;
+            const nombreCorrespondeAlNegocio = negocio && nombre && negocio === nombre;
+            const mismoTelefono = identidadA.telefono && identidadB.telefono && identidadA.telefono === identidadB.telefono;
+            const mismaDireccion = identidadA.direccion && identidadB.direccion && identidadA.direccion === identidadB.direccion;
+
+            if (!nombreCorrespondeAlNegocio) return false;
+            if (mismoTelefono || mismaDireccion) return true;
+
+            return !identidadA.telefono && !identidadB.telefono && !identidadA.direccion && !identidadB.direccion;
+        }
+
+        if (identidadA.nombre && identidadB.nombre) {
+            if (identidadA.nombre !== identidadB.nombre) return false;
+            if (identidadA.telefono && identidadB.telefono) return identidadA.telefono === identidadB.telefono;
+            if (identidadA.direccion && identidadB.direccion) return identidadA.direccion === identidadB.direccion;
+            return !identidadA.telefono && !identidadB.telefono && !identidadA.direccion && !identidadB.direccion;
+        }
+
+        return false;
+    }, [obtenerIdentidadCliente]);
+
+    const obtenerClavesCoincidenciaCliente = useCallback((cliente) => {
+        const identidad = obtenerIdentidadCliente(cliente);
+        if (identidad.negocio) return [`neg:${identidad.negocio}`];
+        if (identidad.nombre) return [`nom:${identidad.nombre}`];
+        return [];
+    }, [obtenerIdentidadCliente]);
+
+    const ventasPorCliente = useMemo(() => {
+        const mapa = new Map();
+        const anuladas = new Set();
+
+        const registrarClave = (setObj, cliente) => {
+            obtenerClavesCoincidenciaCliente(cliente).forEach((clave) => setObj.add(clave));
+        };
+
+        const registrarVenta = (venta) => {
+            const claves = obtenerClavesCoincidenciaCliente(venta);
+            claves.forEach((clave) => {
+                if (!mapa.has(clave)) mapa.set(clave, venta);
+            });
+        };
+
+        // 🛡️ RECOLECTAR TODAS LAS ANULADAS (Backend y local)
+        // Esto es CLAVE para que el badge desaparezca de inmediato tras anular
+        (ventasBackendDia || []).forEach((v) => {
+            if (String(v?.estado || '').toUpperCase() === 'ANULADA') registrarClave(anuladas, v);
+        });
+        (ventasDelDia || []).forEach((v) => {
+            if (String(v?.estado || '').toUpperCase() === 'ANULADA') registrarClave(anuladas, v);
+        });
+
+        (ventasDelDia || []).forEach((venta) => {
+            if (String(venta?.estado || '').toUpperCase() === 'ANULADA') return;
+            const claves = obtenerClavesCoincidenciaCliente(venta);
+            const estaAnulada = claves.some((clave) => anuladas.has(clave));
+            if (estaAnulada) return;
+            registrarVenta(venta);
+        });
+
+        (ventasBackendDia || []).forEach((venta) => {
+            if (String(venta?.estado || '').toUpperCase() === 'ANULADA') return;
+            registrarVenta(venta);
+        });
+
+        return mapa;
+    }, [ventasDelDia, ventasBackendDia, obtenerClavesCoincidenciaCliente]);
 
     const clienteSeleccionadoYaVendido = useMemo(() => {
         if (!clienteSeleccionado) return false;
-        const cNegocio = norm(clienteSeleccionado.negocio);
-        const cNombre = norm(clienteSeleccionado.nombre);
-
-        // 1. Revisar ventas del backend (si están anuladas, no cuenta)
-        const anuladoEnBackend = (ventasBackendDia || []).some(b =>
-            b.estado === 'ANULADA' &&
-            ((b.nombre_negocio && norm(b.nombre_negocio) === cNegocio) || (b.cliente_nombre && norm(b.cliente_nombre) === cNombre))
-        );
-        if (anuladoEnBackend) return false;
-
-        // 2. Revisar ventas locales del día
-        return (ventasDelDia || []).some(venta => {
-            if (venta.estado === 'ANULADA') return false;
-            const vNegocio = norm(venta.cliente_negocio || venta.nombre_negocio);
-            const vNombre = norm(venta.cliente_nombre);
-            return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
-        });
-    }, [clienteSeleccionado, ventasDelDia, ventasBackendDia, norm]);
+        return obtenerClavesCoincidenciaCliente(clienteSeleccionado).some((clave) => ventasPorCliente.has(clave));
+    }, [clienteSeleccionado, ventasPorCliente, obtenerClavesCoincidenciaCliente]);
 
     const clienteSeleccionadoConPedidoEntregado = useMemo(() => {
         if (!clienteSeleccionado) return false;
-        const cNegocio = norm(clienteSeleccionado.negocio);
-        const cNombre = norm(clienteSeleccionado.nombre);
 
-        return (pedidosEntregadosHoy || []).some(p => {
-            const pDestinatario = norm(p.destinatario);
-            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
+        // 🔧 Igualar lógica robusta de verificación de pedidos para cubrir navegación con flechas (⏭️)
+        const normT = (s) => (s || '').toString().trim().toUpperCase();
+        const negocioCliente = normT(clienteSeleccionado?.negocio);
+        const nombreCliente = normT(clienteSeleccionado?.nombre);
+
+        return (pedidosEntregadosHoy || []).some((pedido) => {
+            if (coincideCliente(clienteSeleccionado, pedido)) return true;
+            const dest = normT(pedido?.destinatario);
+            return dest && (dest === negocioCliente || dest === nombreCliente);
         });
-    }, [clienteSeleccionado, pedidosEntregadosHoy, norm]);
+    }, [clienteSeleccionado, pedidosEntregadosHoy, coincideCliente]);
     const [cantidadesEdicionInput, setCantidadesEdicionInput] = useState({}); // texto temporal por producto para evitar que desaparezca al borrar
     const [metodoPagoEdicion, setMetodoPagoEdicion] = useState('EFECTIVO');
     const [busquedaProductoEdicion, setBusquedaProductoEdicion] = useState('');
@@ -167,9 +253,11 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const scrollOffsetEdicionRef = useRef(0);
     const indiceCantidadEdicionEnFocoRef = useRef(null);
     const carritoRef = useRef({});
+    const clienteAntesVentaRapidaRef = useRef(null);
     const listaEdicionRef = useRef(null);
     const carritoEdicionRef = useRef({});
     const inputsCantidadEdicionRef = useRef({});
+    const bloqueoRefreshStockHastaRef = useRef(0);
     const esModoListaScroll = modoListaProductos === 'scroll';
 
     useEffect(() => {
@@ -348,6 +436,31 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         return flagEditada || conteoEdiciones > 0;
     }, []);
 
+    const fusionarMetaEdicionHistorial = useCallback((itemBase, itemLocal) => {
+        if (!itemBase) return itemLocal || itemBase;
+        if (!itemLocal || !ventaYaFueModificada(itemLocal)) return itemBase;
+
+        return {
+            ...itemBase,
+            editada: true,
+            veces_editada: Math.max(Number(itemBase?.veces_editada || 0), Number(itemLocal?.veces_editada || 0), 1),
+            fecha_ultima_edicion: itemBase?.fecha_ultima_edicion || itemLocal?.fecha_ultima_edicion || null,
+            dispositivo_ultima_edicion: itemBase?.dispositivo_ultima_edicion || itemLocal?.dispositivo_ultima_edicion || '',
+            metodo_pago: itemBase?.metodo_pago || itemLocal?.metodo_pago,
+            fecha_actualizacion: itemBase?.fecha_actualizacion || itemBase?.fecha_ultima_edicion || itemLocal?.fecha_ultima_edicion || itemLocal?.fecha_actualizacion,
+            detalles: Array.isArray(itemBase?.detalles) && itemBase.detalles.length > 0
+                ? itemBase.detalles
+                : (Array.isArray(itemLocal?.detalles) ? itemLocal.detalles : (Array.isArray(itemLocal?.productos) ? itemLocal.productos : [])),
+            productos_vencidos: Array.isArray(itemBase?.productos_vencidos) && itemBase.productos_vencidos.length > 0
+                ? itemBase.productos_vencidos
+                : (Array.isArray(itemLocal?.productos_vencidos) ? itemLocal.productos_vencidos : (Array.isArray(itemLocal?.vencidas) ? itemLocal.vencidas : [])),
+            evidencias: Array.isArray(itemBase?.evidencias) && itemBase.evidencias.length > 0
+                ? itemBase.evidencias
+                : (Array.isArray(itemLocal?.evidencias) ? itemLocal.evidencias : []),
+            foto_vencidos: itemBase?.foto_vencidos || itemLocal?.foto_vencidos || null,
+        };
+    }, [ventaYaFueModificada]);
+
     const esErrorVentaYaModificada = useCallback((error) => {
         const codigo = String(error?.code || error?.payload?.codigo || '').toUpperCase();
         const mensaje = String(error?.message || '').toUpperCase();
@@ -467,6 +580,17 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         }
     }, [setBusquedaProductoDebounced]);
 
+    const contarPendientesSincronizables = useCallback((pendientes = []) => (
+        (pendientes || []).filter((venta) => !(
+            venta?.requiere_revision === true ||
+            String(venta?.estado_sync || '').trim().toUpperCase() === 'REVISION'
+        )).length
+    ), []);
+
+    const contarPendientesEnRevision = useCallback((pendientes = []) => (
+        Math.max(0, (pendientes || []).length - contarPendientesSincronizables(pendientes))
+    ), [contarPendientesSincronizables]);
+
     const mostrarConfirmacionSyncRapida = useCallback((enviadas) => {
         setTextoModalSyncRapido(
             enviadas === 1 ? 'Venta offline enviada' : `${enviadas} ventas offline enviadas`
@@ -485,8 +609,9 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
         try {
             const pendientesAntes = await obtenerVentasPendientes();
-            setVentasPendientes(pendientesAntes.length);
-            if (pendientesAntes.length === 0) return;
+            const pendientesAntesSincronizables = contarPendientesSincronizables(pendientesAntes);
+            setVentasPendientes(pendientesAntesSincronizables);
+            if (pendientesAntesSincronizables === 0) return;
 
             sincronizandoAutoRef.current = true;
             setEstadoBanner('sincronizando');
@@ -495,7 +620,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             const enviadas = resultado?.sincronizadas || 0;
 
             const pendientesDespues = await obtenerVentasPendientes();
-            setVentasPendientes(pendientesDespues.length);
+            setVentasPendientes(contarPendientesSincronizables(pendientesDespues));
 
             if (enviadas > 0) {
                 setVentasSincronizadas(enviadas);
@@ -517,10 +642,18 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         } finally {
             sincronizandoAutoRef.current = false;
         }
-    }, [hayInternet, mostrarConfirmacionSyncRapida]);
+    }, [hayInternet, mostrarConfirmacionSyncRapida, contarPendientesSincronizables]);
 
     // 🆕 Monitor de conectividad — detecta cambios de red y sincroniza ventas pendientes
     useEffect(() => {
+        const precalentarImpresionSiHayInternet = async () => {
+            try {
+                await precalentarConfigImpresion();
+            } catch (error) {
+                console.log('⚠️ No se pudo precalentar config de impresión:', error?.message || error);
+            }
+        };
+
         const unsubscribe = NetInfo.addEventListener(async (state) => {
             const conectado = state.isConnected && state.isInternetReachable !== false;
             setHayInternet(conectado);
@@ -532,9 +665,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             } else {
                 // Volvió internet → quitar banner offline PRIMERO, luego sincronizar
                 setEstadoBanner(null);
+                await precalentarImpresionSiHayInternet();
                 await sincronizarPendientesAutomatico({ forzar: true });
             }
         });
+
+        precalentarImpresionSiHayInternet();
 
         return () => {
             unsubscribe();
@@ -548,14 +684,20 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         if (!hayInternet) return;
         const intervalId = setInterval(() => {
             sincronizarPendientesAutomatico();
-        }, 5000);
+        }, 30000); // 30 segundos (antes 5s) para no saturar en mala señal
 
         return () => clearInterval(intervalId);
     }, [hayInternet, sincronizarPendientesAutomatico]);
 
     // 🆕 Verificar flags de permisos de ruta (se llama al montar y al abrir selector)
     const verificarFlagsRuta = useCallback(async () => {
-        if (!userId) return;
+        const fallback = {
+            crear: flagCrearCliente,
+            rapida: flagVentaRapida,
+            tope: Number(topeVentaRutaOcasional) || 60000,
+        };
+
+        if (!userId) return fallback;
         try {
             const resp = await fetch(`${API_URL}/api/rutas/?vendedor_id=${userId}`);
             if (resp.ok) {
@@ -563,14 +705,19 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 if (rutas.length > 0) {
                     const crear = rutas.every(r => r.permitir_crear_cliente !== false);
                     const rapida = rutas.every(r => r.permitir_venta_rapida !== false);
+                    const topes = rutas.map((ruta) => parseFloat(ruta?.tope_cliente_ocasional || 60000) || 60000);
+                    const tope = topes.length > 0 ? Math.max(...topes) : 60000;
                     setFlagCrearCliente(crear);
                     setFlagVentaRapida(rapida);
+                    setTopeVentaRutaOcasional(tope);
+                    return { crear, rapida, tope };
                 }
             }
         } catch (e) {
             // Silencioso — sin internet no bloquea nada
         }
-    }, [userId]);
+        return fallback;
+    }, [userId, flagCrearCliente, flagVentaRapida, topeVentaRutaOcasional]);
 
     // Verificar al montar VentasScreen (1 sola vez)
     useEffect(() => {
@@ -588,9 +735,26 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             // Si no hay fecha ni userId, salir
             if (!fecha || !userId) return;
 
-            console.log(`📦 Buscando pedidos para ${userId} en ${fecha}`);
+            const cacheKey = `pedidos_cache_${userId}_${fecha}`;
+
+            // 🚀 CACHE-FIRST: Cargar caché inmediatamente
+            try {
+                const cached = await AsyncStorage.getItem(cacheKey);
+                if (cached) {
+                    const datosCache = JSON.parse(cached);
+                    setPedidosPendientes(datosCache.pendientes || []);
+                    setPedidosEntregadosHoy(datosCache.entregados || []);
+                    setPedidosNoEntregadosHoy(datosCache.noEntregados || []);
+                    console.log(`💾 Pedidos cargados desde caché (${datosCache.pendientes?.length || 0} pendientes)`);
+                }
+            } catch (errCache) {
+                console.log('⚠️ Error leyendo caché de pedidos:', errCache?.message);
+            }
+
+            // 🌐 Actualizar desde backend en segundo plano
+            console.log(`📦 Actualizando pedidos desde backend para ${userId} en ${fecha}`);
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 25000); // 10 segundos
+            const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 segundos (reducido para señal media)
             const headersAuth = await obtenerAuthHeaders();
 
             const response = await fetch(`${ENDPOINTS.PEDIDOS_PENDIENTES}?vendedor_id=${userId}&fecha=${fecha}`, {
@@ -614,6 +778,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         destinatario: p.destinatario,
                         numero_pedido: p.numero_pedido,
                         total: parseFloat(p.total) || 0,
+                        estado: 'ENTREGADA', // 🔧 Inyectar estado explícito para deshabilitar botones
                         fecha: p.fecha_actualizacion || p.fecha || p.fecha_entrega,
                         fecha_actualizacion: p.fecha_actualizacion
                     }));
@@ -626,6 +791,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         id: p.id,
                         destinatario: p.destinatario,
                         numero_pedido: p.numero_pedido,
+                        estado: 'ANULADA',
                         total: parseFloat(p.total) || 0
                     }));
 
@@ -633,11 +799,23 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     setPedidosEntregadosHoy(entregados);
                     setPedidosNoEntregadosHoy(noEntregados);
 
-                    console.log(`✅ ${pendientes.length} pedidos pendientes, ${entregados.length} entregados`);
+                    // 💾 Guardar en caché
+                    try {
+                        await AsyncStorage.setItem(cacheKey, JSON.stringify({
+                            pendientes,
+                            entregados,
+                            noEntregados,
+                            timestamp: Date.now()
+                        }));
+                    } catch (errSave) {
+                        console.log('⚠️ Error guardando caché de pedidos:', errSave?.message);
+                    }
+
+                    console.log(`✅ ${pendientes.length} pedidos pendientes, ${entregados.length} entregados (actualizado desde backend)`);
                 }
             }
         } catch (e) {
-            console.log('Error buscando pedidos:', e);
+            console.log('⚠️ Error actualizando pedidos desde backend (usando caché):', e?.message || e);
         }
     };
 
@@ -711,7 +889,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 25000);
+            const timeoutId = setTimeout(() => controller.abort(), 8000); // 🔧 Reducido de 25s a 8s
             const headersAuth = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
 
             const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_NO_ENTREGADO(pedidoEnNovedad.id), {
@@ -831,7 +1009,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         try {
             // Enviar metodo_pago en el cuerpo del POST
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 25000);
+            const timeoutId = setTimeout(() => controller.abort(), 8000); // 🔧 Reducido de 25s a 8s para mejor UX
             const headersAuth = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
 
             const response = await fetch(ENDPOINTS.PEDIDO_MARCAR_ENTREGADO(pedidoParaEntregar.id), {
@@ -846,56 +1024,66 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             setMostrarResumenEntrega(false);
 
             if (data.success) {
-                // 🆕 Agregar pedido con info del destinatario
-                // 🚀 Generar timestamp respetando el día seleccionado pero con hora actual
-                const ahora = new Date();
-                const year = fechaSeleccionada.getFullYear();
-                const month = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
-                const day = String(fechaSeleccionada.getDate()).padStart(2, '0');
-                const hours = String(ahora.getHours()).padStart(2, '0');
-                const minutes = String(ahora.getMinutes()).padStart(2, '0');
-                const seconds = String(ahora.getSeconds()).padStart(2, '0');
-                const fechaRegistro = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
-
                 setPedidosEntregadosHoy(prev => [...prev, {
                     id: pedidoParaEntregar.id,
                     destinatario: pedidoParaEntregar.destinatario || clienteSeleccionado?.negocio || 'Cliente',
                     numero_pedido: pedidoParaEntregar.numero_pedido,
-                    metodo_pago: metodoPago, // 🆕 Guardar localmente también
-                    total: parseFloat(pedidoParaEntregar.total) || 0, // 🆕 Guardar total
-                    fecha: fechaRegistro, // 🚀 Guardar respetando el día de la prueba
-                    fecha_actualizacion: fechaRegistro
+                    metodo_pago: metodoPago,
+                    total: parseFloat(pedidoParaEntregar.total) || 0,
+                    fecha: new Date().toISOString(),
+                    fecha_actualizacion: new Date().toISOString()
                 }]);
 
-                // 🆕 Limpiar pedido del cliente para volver a botones normales
+                setPedidosPendientes(prev => prev.map(p =>
+                    p.id === pedidoParaEntregar.id ? { ...p, estado: 'ENTREGADO' } : p
+                ));
+
                 setPedidoClienteSeleccionado(null);
                 setPedidoParaEntregar(null);
-
-                // 🆕 UX: avanzar automáticamente al siguiente cliente
                 avanzarAlSiguienteCliente({ limpiarAntes: false, mostrarAvisoFin: true });
 
-
-                // Recargar pedidos pendientes (con delay para dar tiempo al backend)
-                const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
-                setTimeout(() => {
-                    verificarPedidosPendientes(fechaStr);
-                }, 500); // 500ms de delay
-
-                // Mensaje según si reportó vencidas
                 if (tieneVencidas) {
                     Alert.alert(
                         '✅ Pedido Entregado',
-                        `Pago: ${metodoPago}\n\nEl pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado.\n\n⚠️ Recuerda reportar las vencidas usando el botón "Vencidas" del cliente.`
+                        `Pago: ${metodoPago}
+
+El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado.
+
+⚠️ Recuerda reportar las vencidas usando el botón "Vencidas" del cliente.`
                     );
                 } else {
-                    Alert.alert('✅ Pedido Entregado', `Pago: ${metodoPago}\n\nEl pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado exitosamente.`);
+                    Alert.alert(
+                        '✅ Pedido Entregado',
+                        `Pago: ${metodoPago}
+
+El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado exitosamente.`
+                    );
                 }
+
             } else {
                 Alert.alert('Error', data.message || 'No se pudo actualizar el pedido');
             }
         } catch (e) {
             setMostrarResumenEntrega(false);
-            console.error(e);
+            const mensajeErrorEntrega = String(e?.message || '');
+            const esErrorConexionEntrega =
+                e?.name === 'AbortError' ||
+                mensajeErrorEntrega.includes('Network request failed') ||
+                mensajeErrorEntrega.includes('Network Error') ||
+                mensajeErrorEntrega.includes('fetch');
+
+            if (esErrorConexionEntrega) {
+                console.log('📴 Entrega de pedido sin internet, activando fallback offline');
+            } else {
+                console.error(e);
+            }
+
+            // 🔧 MOSTRAR ALERT CLARO ANTES DEL FALLBACK
+            Alert.alert(
+                '⚠️ Sin Conexión',
+                'No se pudo conectar con el servidor.\n\nEl pedido se guardará localmente y se sincronizará cuando tengas internet.',
+                [{ text: 'Entendido', style: 'default' }]
+            );
 
             // OFFLINE FALLBACK
             try {
@@ -946,6 +1134,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
     const [nota, setNota] = useState('');
     const [clientes, setClientes] = useState([]);
+    const [refreshClientesToken, setRefreshClientesToken] = useState(0);
 
     // Estados para modales
     const [mostrarSelectorCliente, setMostrarSelectorCliente] = useState(false);
@@ -960,6 +1149,9 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     // Estados para vencidas
     const [vencidas, setVencidas] = useState([]);
     const [fotoVencidas, setFotoVencidas] = useState(null);
+    const [mostrarVencidasEdicion, setMostrarVencidasEdicion] = useState(false);
+    const [vencidasEdicion, setVencidasEdicion] = useState([]);
+    const [fotoVencidasEdicion, setFotoVencidasEdicion] = useState({});
 
     // Estado para pull to refresh
     const [refreshing, setRefreshing] = useState(false);
@@ -968,6 +1160,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     // 🆕 Flags de permisos de ruta (controlados desde la web)
     const [flagCrearCliente, setFlagCrearCliente] = useState(true);
     const [flagVentaRapida, setFlagVentaRapida] = useState(true);
+    const [topeVentaRutaOcasional, setTopeVentaRutaOcasional] = useState(60000);
 
     // 🆕 Estado para cerrar turno
     const [mostrarModalCerrarTurno, setMostrarModalCerrarTurno] = useState(false);
@@ -1117,7 +1310,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             // 🆕 Llamar al backend para abrir turno (persistir estado)
             try {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 25000);
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 🔧 Reducido de 25s a 10s
                 const headersAuth = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
 
                 const response = await fetch(ENDPOINTS.TURNO_ABRIR, {
@@ -1209,7 +1402,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             if (clientePreseleccionado) {
                 cargarDatosConClientePreseleccionado(clientePreseleccionado);
             } else {
-                cargarDatos();
+                cargarDatos(date);
             }
             verificarPendientes();
 
@@ -1238,7 +1431,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             console.log('🚀 Precargando clientes de ruta en segundo plano...');
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 25000); // 10 segundos
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 🔧 Reducido de 25s a 15s (precarga puede tardar más)
 
             const response = await fetch(url, { signal: controller.signal });
             clearTimeout(timeoutId);
@@ -1297,19 +1490,68 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         try {
             const fechaDia = fecha.toISOString().split('T')[0];
             const vendedorIdVentas = String(userId).toUpperCase().startsWith('ID') ? String(userId).toUpperCase() : `ID${userId}`;
+            const cacheKey = `ventas_backend_cache_${userId}_${fechaDia}`;
 
             // 1. Obtener locales offline
             const todasLasVentasLocal = await obtenerVentas();
             const localesHoy = todasLasVentasLocal.filter(v => v.fecha.split('T')[0] === fechaDia);
 
             let ventasUnificadas = localesHoy;
+            let backendHoy = [];
 
-            // 2. Obtener backend
+            // 🚀 CACHE-FIRST: Cargar caché de backend inmediatamente
             try {
-                const respConfig = await fetch(`${API_URL}/api/ventas-ruta/?vendedor_id=${vendedorIdVentas}&fecha=${fechaDia}`);
+                const cached = await AsyncStorage.getItem(cacheKey);
+                if (cached) {
+                    const datosCache = JSON.parse(cached);
+                    backendHoy = Array.isArray(datosCache.ventas) ? datosCache.ventas : [];
+                    setVentasBackendDia(backendHoy);
+                    
+                    // Deduplicar con caché
+                    const mapa = new Map();
+                    localesHoy.forEach(v => {
+                        if (v.sincronizada !== true && String(v.estado || '').toUpperCase() !== 'ANULADA') {
+                            const key = v.id_local || `local-${Math.random()}`;
+                            mapa.set(key, v);
+                        }
+                    });
+                    backendHoy.forEach(v => {
+                        if (String(v.estado || '').toUpperCase() !== 'ANULADA') {
+                            const key = v.id_local || v.id_venta_local || `backend-${v.id}`;
+                            mapa.set(key, v);
+                        }
+                    });
+                    ventasUnificadas = Array.from(mapa.values());
+                    console.log(`💾 Ventas backend cargadas desde caché (${backendHoy.length} ventas)`);
+                }
+            } catch (errCache) {
+                console.log('⚠️ Error leyendo caché de ventas backend:', errCache?.message);
+            }
+
+            // 2. Actualizar desde backend en segundo plano
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 segundos
+                
+                const respConfig = await fetch(`${API_URL}/api/ventas-ruta/?vendedor_id=${vendedorIdVentas}&fecha=${fechaDia}`, {
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                
                 if (respConfig.ok) {
                     const data = await respConfig.json();
-                    const backendHoy = Array.isArray(data) ? data : [];
+                    backendHoy = Array.isArray(data) ? data : [];
+                    setVentasBackendDia(backendHoy);
+
+                    // 💾 Guardar en caché
+                    try {
+                        await AsyncStorage.setItem(cacheKey, JSON.stringify({
+                            ventas: backendHoy,
+                            timestamp: Date.now()
+                        }));
+                    } catch (errSave) {
+                        console.log('⚠️ Error guardando caché de ventas backend:', errSave?.message);
+                    }
 
                     // 3. Deduplicar (mantener backend + locales que aún no subieron)
                     const mapa = new Map();
@@ -1329,10 +1571,15 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     });
 
                     ventasUnificadas = Array.from(mapa.values());
+                    console.log(`✅ Ventas backend actualizadas (${backendHoy.length} ventas)`);
                 }
             } catch (errBackend) {
-                console.log('⚠️ No se pudo obtener ventas del backend, usando locales:', errBackend?.message);
-                ventasUnificadas = localesHoy.filter(v => String(v.estado || '').toUpperCase() !== 'ANULADA');
+                console.log('⚠️ No se pudo actualizar ventas desde backend (usando caché):', errBackend?.message);
+                // Si ya teníamos caché, ventasUnificadas ya está poblado
+                if (backendHoy.length === 0) {
+                    setVentasBackendDia([]);
+                    ventasUnificadas = localesHoy.filter(v => String(v.estado || '').toUpperCase() !== 'ANULADA');
+                }
             }
 
             // Calcular totales
@@ -1365,9 +1612,83 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             setDiferenciaPrecios(diferencia);
             setVentasDelDia(ventasUnificadas);
         } catch (error) {
+            setVentasBackendDia([]);
             console.error('Error cargando ventas del día:', error);
         }
     };
+
+    const normalizarItemHistorialLocal = (item, index = 0) => {
+        const origen = item?.origen || (item?.es_pedido ? 'PEDIDO_FACTURADO' : 'RUTA');
+        const id = item?.id;
+        const idLocal = item?.id_local || (typeof id === 'string' && id.includes('-') ? id : '');
+        const fechaBase = item?.fecha || item?.fecha_actualizacion || item?.fecha_creacion || '';
+        const keyCalculada = item?._key
+            || (origen === 'PEDIDO_FACTURADO'
+                ? `pedido-${id ?? item?.numero_pedido ?? index}`
+                : (idLocal
+                    ? `ruta-local-${idLocal}`
+                    : (id !== undefined && id !== null
+                        ? `ruta-id-${id}` // Unificado con obtenerClaveHistorial
+                        : `ruta-local-${index}-${fechaBase}`)));
+
+        return {
+            ...item,
+            _key: keyCalculada,
+            origen,
+            cliente_negocio: item?.cliente_negocio || item?.nombre_negocio || item?.destinatario || item?.cliente_nombre || 'Cliente General',
+            cliente_nombre: item?.cliente_nombre || item?.destinatario || 'Cliente General',
+            total: parseFloat(item?.total) || 0,
+            vendedor: item?.vendedor || vendedorNombre || userId,
+            fecha_creacion: item?.fecha_creacion || item?.fecha || item?.fecha_actualizacion,
+            fecha_actualizacion: item?.fecha_actualizacion || item?.fecha || item?.fecha_creacion,
+            fecha: item?.fecha || item?.fecha_actualizacion || item?.fecha_creacion,
+            detalles: Array.isArray(item?.detalles) ? item.detalles : (Array.isArray(item?.productos) ? item.productos : []),
+        };
+    };
+
+    const obtenerClaveHistorialLocal = (item) => {
+        if (!item) return '';
+
+        const origen = item?.origen || (item?.es_pedido ? 'PEDIDO_FACTURADO' : 'RUTA');
+        if (origen === 'PEDIDO_FACTURADO') {
+            return `pedido-${item?.id ?? item?._key ?? ''}`;
+        }
+
+        const idLocal = item?.id_local || (typeof item?.id === 'string' && item.id.includes('-') ? item.id : '');
+        if (idLocal) return `ruta-local-${idLocal}`;
+
+        if (item?.id !== undefined && item?.id !== null) {
+            return `ruta-id-${item.id}`;
+        }
+
+        const cliente = norm(item?.cliente_negocio || item?.nombre_negocio || item?.cliente_nombre || item?.destinatario || '');
+        const total = Math.round(parseFloat(item?.total) || 0);
+        const fechaBase = String(item?.fecha_actualizacion || item?.fecha_creacion || item?.fecha || '').slice(0, 16);
+        return `ruta-fallback-${cliente}-${total}-${fechaBase}`;
+    };
+
+    const fusionarVentaRecienteEnHistorial = (items = [], ventaReciente = ultimaVentaHistorialRef.current) => {
+        const base = Array.isArray(items) ? items : [];
+        if (!ventaReciente) {
+            return ordenarHistorialLocal(base.map((item, index) => normalizarItemHistorialLocal(item, index)));
+        }
+
+        const ventaNormalizada = normalizarItemHistorialLocal(ventaReciente, 0);
+        const claveVentaReciente = obtenerClaveHistorialLocal(ventaNormalizada);
+        const restantes = base
+            .map((item, index) => normalizarItemHistorialLocal(item, index + 1))
+            .filter((item) => obtenerClaveHistorialLocal(item) !== claveVentaReciente);
+
+        return ordenarHistorialLocal([ventaNormalizada, ...restantes]);
+    };
+
+    const ordenarHistorialLocal = (items = []) => items.sort((a, b) => {
+        const dA = new Date(a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0);
+        const dB = new Date(b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0);
+        dA.setFullYear(2000, 0, 1);
+        dB.setFullYear(2000, 0, 1);
+        return dB.getTime() - dA.getTime();
+    });
 
     const construirHistorialLocal = () => {
         const rutaLocales = Array.isArray(ventasDelDia) ? ventasDelDia : [];
@@ -1382,24 +1703,14 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             detalles: Array.isArray(p.detalles) ? p.detalles : (Array.isArray(p.detalles_info) ? p.detalles_info : []),
         }));
 
-        return [...rutaLocales, ...pedidosLocales]
-            .map((item, index) => ({
-                ...item,
-                _key: item._key || `local-${item?.id ?? index}-${item?.fecha ?? ''}`,
-                origen: item?.origen || (item?.es_pedido ? 'PEDIDO_FACTURADO' : 'RUTA'),
-                cliente_negocio: item?.cliente_negocio || item?.nombre_negocio || item?.destinatario || item?.cliente_nombre || 'Cliente General',
-                cliente_nombre: item?.cliente_nombre || item?.destinatario || 'Cliente General',
-                detalles: Array.isArray(item?.detalles) ? item.detalles : (Array.isArray(item?.productos) ? item.productos : []),
-            }))
-            .sort((a, b) => {
-                // 🚀 Normalizar para comparar solo por el tiempo si el día es diferente por pruebas
-                const dA = new Date(a?.fecha || 0);
-                const dB = new Date(b?.fecha || 0);
-                // Forzamos el mismo día para que solo importe la HORA en el orden
-                dA.setFullYear(2000, 0, 1);
-                dB.setFullYear(2000, 0, 1);
-                return dB.getTime() - dA.getTime();
-            });
+        // 🛡️ Deduplicación estricta antes de pasar a la UI
+        const mapaUnico = new Map();
+        [...rutaLocales, ...pedidosLocales].forEach(v => {
+            const tempKey = obtenerClaveHistorialLocal(v);
+            if (tempKey) mapaUnico.set(tempKey, v);
+        });
+
+        return fusionarVentaRecienteEnHistorial(Array.from(mapaUnico.values()));
     };
 
     const cargarHistorialReimpresion = async () => {
@@ -1419,19 +1730,108 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             const vendedorIdVentas = String(userId).toUpperCase().startsWith('ID')
                 ? String(userId).toUpperCase()
                 : `ID${userId}`;
+            const cacheKey = `historial_cache_${userId}_${fechaStr}`;
+
+            let ventasRuta = [];
+            let pedidosFacturados = [];
+
+            // 🚀 CACHE-FIRST: Cargar caché inmediatamente
+            try {
+                const cached = await AsyncStorage.getItem(cacheKey);
+                if (cached) {
+                    const datosCache = JSON.parse(cached);
+                    ventasRuta = Array.isArray(datosCache.ventasRuta) ? datosCache.ventasRuta : [];
+                    pedidosFacturados = Array.isArray(datosCache.pedidosFacturados) ? datosCache.pedidosFacturados : [];
+                    
+                    if (ventasRuta.length > 0 || pedidosFacturados.length > 0) {
+                        // Procesar caché igual que backend
+                        const fallbackLocalPendientes = fallbackLocal.filter((venta) => {
+                            const estado = String(venta?.estado || '').toUpperCase();
+                            if (estado === 'ANULADA') return true;
+                            return venta?.sincronizada !== true || ventaYaFueModificada(venta);
+                        });
+
+                        const obtenerClaveHistorial = (item) => {
+                            if (item?.origen === 'PEDIDO_FACTURADO') {
+                                return `pedido-${item?.id ?? item?._key ?? Math.random()}`;
+                            }
+                            const idLocal = item?.id_local
+                                || (typeof item?.id === 'string' && item.id.includes('-') ? item.id : null);
+                            if (idLocal) return `ruta-local-${idLocal}`;
+                            if (item?.id !== undefined && item?.id !== null) return `ruta-id-${item.id}`;
+                            return `ruta-key-${item?._key ?? Math.random()}`;
+                        };
+
+                        const mapa = new Map();
+                        [...ventasRuta, ...pedidosFacturados, ...fallbackLocalPendientes].forEach((item) => {
+                            const key = obtenerClaveHistorial(item);
+                            const previo = mapa.get(key);
+                            if (!previo) {
+                                mapa.set(key, item);
+                                return;
+                            }
+                            const itemEsBackend = typeof item?._key === 'string' && (item._key.startsWith('ruta-') || item._key.startsWith('pedido-'));
+                            const previoEsBackend = typeof previo?._key === 'string' && (previo._key.startsWith('ruta-') || previo._key.startsWith('pedido-'));
+                            if (itemEsBackend && !previoEsBackend) {
+                                mapa.set(key, fusionarMetaEdicionHistorial(item, previo));
+                                return;
+                            }
+                            if (!itemEsBackend && previoEsBackend) {
+                                mapa.set(key, fusionarMetaEdicionHistorial(previo, item));
+                            }
+                        });
+
+                        const combinado = Array.from(mapa.values())
+                            .sort((a, b) => {
+                                const fA = a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0;
+                                const fB = b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0;
+                                const dA = new Date(fA);
+                                const dB = new Date(fB);
+                                dA.setFullYear(2000, 0, 1);
+                                dB.setFullYear(2000, 0, 1);
+                                return dB.getTime() - dA.getTime();
+                            });
+
+                        const historialCombinado = combinado.length > 0
+                            ? fusionarVentaRecienteEnHistorial(combinado)
+                            : fallbackLocal;
+
+                        setVentasBackendDia(ventasRuta);
+                        setHistorialReimpresion(historialCombinado);
+                        console.log(`💾 Historial cargado desde caché (${ventasRuta.length} ventas, ${pedidosFacturados.length} pedidos)`);
+                    }
+                }
+            } catch (errCache) {
+                console.log('⚠️ Error leyendo caché de historial:', errCache?.message);
+            }
+
+            // 🌐 Actualizar desde backend en segundo plano (solo si hay internet)
+            if (!hayInternet) {
+                setCargandoHistorial(false);
+                return;
+            }
+
             const headersAuth = await obtenerAuthHeaders();
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 segundos
 
             const [respVentas, respPedidos] = await Promise.all([
-                fetch(`${API_URL}/api/ventas-ruta/?vendedor_id=${vendedorIdVentas}&fecha=${fechaStr}`),
-                fetch(`${ENDPOINTS.PEDIDOS_PENDIENTES}?vendedor_id=${userId}&fecha=${fechaStr}`, { headers: headersAuth })
+                fetch(`${API_URL}/api/ventas-ruta/?vendedor_id=${vendedorIdVentas}&fecha=${fechaStr}`, {
+                    signal: controller.signal
+                }),
+                fetch(`${ENDPOINTS.PEDIDOS_PENDIENTES}?vendedor_id=${userId}&fecha=${fechaStr}`, { 
+                    headers: headersAuth,
+                    signal: controller.signal
+                })
             ]);
+            clearTimeout(timeoutId);
 
             const ventasData = respVentas.ok ? await respVentas.json() : [];
             const pedidosData = respPedidos.ok ? await respPedidos.json() : [];
 
-            const ventasRuta = (Array.isArray(ventasData) ? ventasData : []).map((venta, index) => ({
+            ventasRuta = (Array.isArray(ventasData) ? ventasData : []).map((venta, index) => ({
                 ...venta,
-                _key: `ruta-${venta?.id ?? index}`,
+                _key: `ruta-id-${venta?.id ?? index}`,
                 origen: 'RUTA',
                 cliente_negocio: venta?.nombre_negocio || venta?.cliente_nombre || 'Cliente General',
                 cliente_nombre: venta?.cliente_nombre || 'Cliente General',
@@ -1442,7 +1842,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 detalles: Array.isArray(venta?.detalles) ? venta.detalles : [],
             }));
 
-            const pedidosFacturados = (Array.isArray(pedidosData) ? pedidosData : [])
+            pedidosFacturados = (Array.isArray(pedidosData) ? pedidosData : [])
                 .filter((pedido) => pedido?.estado === 'ENTREGADO' || pedido?.estado === 'ENTREGADA')
                 .map((pedido) => ({
                     ...pedido,
@@ -1460,12 +1860,23 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     detalles: Array.isArray(pedido?.detalles) ? pedido.detalles : (Array.isArray(pedido?.detalles_info) ? pedido.detalles_info : []),
                 }));
 
+            // 💾 Guardar en caché
+            try {
+                await AsyncStorage.setItem(cacheKey, JSON.stringify({
+                    ventasRuta,
+                    pedidosFacturados,
+                    timestamp: Date.now()
+                }));
+            } catch (errSave) {
+                console.log('⚠️ Error guardando caché de historial:', errSave?.message);
+            };
+
             // Si backend respondió, solo mezclar ventas locales pendientes/no sincronizadas.
             // Esto evita tarjetas "fantasma" duplicadas por mezclar local+backend de la misma venta.
             const fallbackLocalPendientes = fallbackLocal.filter((venta) => {
                 const estado = String(venta?.estado || '').toUpperCase();
                 if (estado === 'ANULADA') return true;
-                return venta?.sincronizada !== true;
+                return venta?.sincronizada !== true || ventaYaFueModificada(venta);
             });
 
             const obtenerClaveHistorial = (item) => {
@@ -1497,7 +1908,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 const previoEsBackend = typeof previo?._key === 'string' && (previo._key.startsWith('ruta-') || previo._key.startsWith('pedido-'));
 
                 if (itemEsBackend && !previoEsBackend) {
-                    mapa.set(key, item);
+                    mapa.set(key, fusionarMetaEdicionHistorial(item, previo));
+                    return;
+                }
+
+                if (!itemEsBackend && previoEsBackend) {
+                    mapa.set(key, fusionarMetaEdicionHistorial(previo, item));
                 }
             });
 
@@ -1517,7 +1933,16 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     return dB.getTime() - dA.getTime();
                 });
 
-            setHistorialReimpresion(combinado.length > 0 ? combinado : fallbackLocal);
+            const historialCombinado = combinado.length > 0
+                ? fusionarVentaRecienteEnHistorial(combinado)
+                : fallbackLocal;
+
+            // 🚀 ACTUALIZAR ESTADO GLOBAL DE VENTAS BACKEND
+            // Esto permite que resolverVentaBackendAsociada encuentre coincidencias
+            // para ventas recién creadas que acaban de sincronizarse.
+            setVentasBackendDia(ventasRuta);
+
+            setHistorialReimpresion(historialCombinado);
         } catch (error) {
             console.log('⚠️ Historial backend no disponible, usando datos locales:', error?.message || error);
             setHistorialReimpresion(fallbackLocal);
@@ -1527,29 +1952,276 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     };
 
     const abrirHistorialReimpresion = () => {
+        Keyboard.dismiss();
         setMostrarHistorialVentas(true);
-        cargarHistorialReimpresion();
+        // 🔧 Pequeño delay para que el modal se renderice completamente antes de cargar datos
+        setTimeout(() => {
+            cargarHistorialReimpresion();
+        }, 100);
     };
+
+    const construirUrlMediaVenta = useCallback((valor) => {
+        if (!valor || typeof valor !== 'string') return null;
+        if (valor.startsWith('http')) return valor;
+        return `${API_URL}${valor.startsWith('/') ? valor : `/${valor}`}`;
+    }, []);
+
+    const normalizarVencidasVentaEdicion = useCallback((ventaFuente) => {
+        const listaBase = Array.isArray(ventaFuente?.productos_vencidos)
+            ? ventaFuente.productos_vencidos
+            : Array.isArray(ventaFuente?.vencidas)
+                ? ventaFuente.vencidas
+                : [];
+
+        return listaBase
+            .map((item) => ({
+                id: item?.id,
+                nombre: item?.nombre || item?.producto || '',
+                cantidad: parseInt(item?.cantidad || 0, 10) || 0,
+                motivo: item?.motivo || 'No especificado',
+            }))
+            .filter((item) => item.nombre && item.cantidad > 0);
+    }, []);
+
+    const normalizarFotosVentaEdicion = useCallback((ventaFuente) => {
+        if (ventaFuente?.fotoVencidas && typeof ventaFuente.fotoVencidas === 'object') {
+            return ventaFuente.fotoVencidas;
+        }
+
+        if (Array.isArray(ventaFuente?.evidencias) && ventaFuente.evidencias.length > 0) {
+            const urls = ventaFuente.evidencias
+                .map((ev) => construirUrlMediaVenta(ev?.imagen))
+                .filter(Boolean);
+            if (urls.length > 0) {
+                return { general: urls };
+            }
+        }
+
+        if (ventaFuente?.foto_vencidos) {
+            const url = construirUrlMediaVenta(ventaFuente.foto_vencidos);
+            if (url) {
+                return { general: [url] };
+            }
+        }
+
+        return {};
+    }, [construirUrlMediaVenta]);
+
+
+    const esVentaBackendPersistida = useCallback((ventaFuente) => {
+        if (!ventaFuente) return false;
+
+        const rawId = ventaFuente?.id;
+        const idTexto = String(rawId ?? '').trim();
+        const idEsNumerico = idTexto !== '' && /^\d+$/.test(idTexto);
+        const esMarcadaLocal = String(ventaFuente?._key || '').startsWith('local-');
+
+        return idEsNumerico && !esMarcadaLocal;
+    }, []);
+
+    const obtenerTimestampVentaComparable = useCallback((ventaFuente) => {
+        const candidatos = [
+            ventaFuente?.fecha_ultima_edicion,
+            ventaFuente?.fecha_actualizacion,
+            ventaFuente?.updated_at,
+            ventaFuente?.fecha,
+            ventaFuente?.fecha_creacion,
+        ];
+
+        for (const valor of candidatos) {
+            if (!valor) continue;
+            const timestamp = new Date(valor).getTime();
+            if (!Number.isNaN(timestamp)) return timestamp;
+        }
+
+        return 0;
+    }, []);
+
+    const resolverVentaBackendAsociada = useCallback((ventaFuente) => {
+        if (!ventaFuente) return null;
+        if (esVentaBackendPersistida(ventaFuente)) return ventaFuente;
+
+        const clavesObjetivo = obtenerClavesCoincidenciaCliente(ventaFuente);
+        if (!clavesObjetivo.length) return null;
+
+        const totalObjetivo = Math.round(parseFloat(ventaFuente?.total) || 0);
+        const timestampObjetivo = obtenerTimestampVentaComparable(ventaFuente);
+        const yaModificada = !!(ventaFuente.edicion_num || ventaFuente.yaModificada || ventaFuente.fecha_ultima_edicion);
+        const margenTiempoMs = (yaModificada ? 120 : 120) * 60 * 1000; // 2 horas de margen para robustez total
+
+        const candidatas = [...(historialReimpresion || []), ...(ventasBackendDia || [])]
+            .filter((venta) => {
+                if (!esVentaBackendPersistida(venta)) return false;
+
+                const clavesVenta = obtenerClavesCoincidenciaCliente(venta);
+                if (!clavesVenta.some((clave) => clavesObjetivo.includes(clave))) return false;
+
+                const totalVenta = Math.round(parseFloat(venta?.total) || 0);
+                
+                // 🛡️ Si es una edición, no exigimos que el total coincida (porque el dashboard puede tener el total viejo)
+                // Es mejor permitir anular el registro de backend "viejo" que dejar al vendedor bloqueado.
+                if (!yaModificada && totalVenta !== totalObjetivo) return false;
+
+                if (!timestampObjetivo) return true;
+
+                const timestampVenta = obtenerTimestampVentaComparable(venta);
+                if (!timestampVenta) return true;
+
+                return Math.abs(timestampVenta - timestampObjetivo) <= margenTiempoMs;
+            })
+            .sort((a, b) => obtenerTimestampVentaComparable(b) - obtenerTimestampVentaComparable(a));
+
+        return candidatas[0] || null;
+    }, [
+        esVentaBackendPersistida,
+        historialReimpresion,
+        ventasBackendDia,
+        obtenerClavesCoincidenciaCliente,
+        obtenerTimestampVentaComparable,
+    ]);
+
+    const obtenerVentaPreviaCliente = useCallback((clienteObjetivo) => {
+        if (!clienteObjetivo) return null;
+
+        const clavesCliente = obtenerClavesCoincidenciaCliente(clienteObjetivo);
+        if (!clavesCliente.length) return null;
+
+        const ventaCoincidePorClave = (venta) => {
+            const clavesVenta = obtenerClavesCoincidenciaCliente(venta);
+            return clavesVenta.some((clave) => clavesCliente.includes(clave));
+        };
+
+        const coincideVentaConCliente = (venta) => {
+            if (!venta || String(venta?.estado || '').toUpperCase() === 'ANULADA') return false;
+            return ventaCoincidePorClave(venta);
+        };
+
+        const anuladaBackend = (ventasBackendDia || []).some((venta) => {
+            if (String(venta?.estado || '').toUpperCase() !== 'ANULADA') return false;
+            return ventaCoincidePorClave(venta);
+        });
+
+        if (anuladaBackend) return null;
+
+        const candidatas = [...(ventasDelDia || []), ...(ventasBackendDia || [])].filter(coincideVentaConCliente);
+        if (!candidatas.length) return null;
+
+        const mapa = new Map();
+        candidatas.forEach((venta, indice) => {
+            const clave = String(
+                venta?.id_local ||
+                venta?.id_venta_local ||
+                venta?.id ||
+                `${normalizar(venta?.cliente_negocio || venta?.nombre_negocio || venta?.cliente_nombre)}-${indice}`
+            );
+
+            const actual = mapa.get(clave);
+            if (!actual) {
+                mapa.set(clave, venta);
+                return;
+            }
+
+            const scoreVenta = [
+                ventaYaFueModificada(venta) ? 1 : 0,
+                esVentaBackendPersistida(venta) ? 1 : 0,
+                obtenerTimestampVentaComparable(venta),
+            ];
+            const scoreActual = [
+                ventaYaFueModificada(actual) ? 1 : 0,
+                esVentaBackendPersistida(actual) ? 1 : 0,
+                obtenerTimestampVentaComparable(actual),
+            ];
+
+            if (scoreVenta[0] > scoreActual[0] ||
+                (scoreVenta[0] === scoreActual[0] && scoreVenta[1] > scoreActual[1]) ||
+                (scoreVenta[0] === scoreActual[0] && scoreVenta[1] === scoreActual[1] && scoreVenta[2] > scoreActual[2])) {
+                mapa.set(clave, venta);
+            }
+        });
+
+        return Array.from(mapa.values()).sort((a, b) => {
+            const modA = ventaYaFueModificada(a) ? 1 : 0;
+            const modB = ventaYaFueModificada(b) ? 1 : 0;
+            if (modA !== modB) return modB - modA;
+
+            const backendA = esVentaBackendPersistida(a) ? 1 : 0;
+            const backendB = esVentaBackendPersistida(b) ? 1 : 0;
+            if (backendA !== backendB) return backendB - backendA;
+
+            return obtenerTimestampVentaComparable(b) - obtenerTimestampVentaComparable(a);
+        })[0] || null;
+    }, [ventasDelDia, ventasBackendDia, ventaYaFueModificada, esVentaBackendPersistida, obtenerTimestampVentaComparable, obtenerClavesCoincidenciaCliente]);
+
+    const totalItemsVencidasEdicion = useMemo(() => (
+        (vencidasEdicion || []).reduce((sum, item) => sum + (parseInt(item?.cantidad || 0, 10) || 0), 0)
+    ), [vencidasEdicion]);
+
+    const cerrarEdicionVenta = useCallback((reabrirHistorial = true) => {
+        setModalEdicionVisible(false);
+        setVentaEnEdicion(null);
+        setCarritoEdicion({});
+        setMetodoPagoEdicion('EFECTIVO');
+        setCantidadesEdicionInput({});
+        setBusquedaProductoEdicion('');
+        setFocoCampoEdicion(null);
+        setVencidasEdicion([]);
+        setFotoVencidasEdicion({});
+        setMostrarVencidasEdicion(false);
+        if (reabrirHistorial) {
+            setMostrarHistorialVentas(true);
+            cargarHistorialReimpresion();
+        }
+    }, [cargarHistorialReimpresion]);
+
+    const abrirModalVencidasDesdeEdicion = useCallback(() => {
+        if (!ventaEnEdicion) return;
+        setMostrarVencidasEdicion(true);
+    }, [ventaEnEdicion]);
+
+    const handleGuardarVencidasEdicion = useCallback((productosVencidos, foto) => {
+        setVencidasEdicion(productosVencidos || []);
+        setFotoVencidasEdicion(foto || {});
+        setMostrarVencidasEdicion(false);
+    }, []);
 
     // ─────────────────────────────────────────────
     // 🆕 EDICIÓN DE VENTA DESDE HISTORIAL
     // ─────────────────────────────────────────────
 
     /** Abre el modal de edición con los productos de la venta pre-cargados */
-    const abrirEdicionVenta = (venta) => {
-        if (ventaYaFueModificada(venta)) {
+    const abrirEdicionVenta = async (venta) => {
+        const normalizarDetallesVenta = (ventaFuente) => {
+            if (Array.isArray(ventaFuente?.detalles) && ventaFuente.detalles.length > 0) {
+                return ventaFuente.detalles;
+            }
+            if (Array.isArray(ventaFuente?.productos) && ventaFuente.productos.length > 0) {
+                return ventaFuente.productos;
+            }
+            if (Array.isArray(ventaFuente?.detalles_info) && ventaFuente.detalles_info.length > 0) {
+                return ventaFuente.detalles_info;
+            }
+            return [];
+        };
+
+        let ventaEditable = {
+            ...venta,
+            detalles: normalizarDetallesVenta(venta),
+        };
+
+        // 🚀 OPTIMIZACIÓN: Validar bloqueos ANTES de abrir el modal
+        if (ventaYaFueModificada(ventaEditable)) {
             Alert.alert('Bloqueado', 'Esta venta ya fue modificada una vez y no se puede volver a editar.');
             return;
         }
 
-        if (!venta?.detalles || venta.detalles.length === 0) {
+        if (!ventaEditable?.detalles || ventaEditable.detalles.length === 0) {
             Alert.alert('Sin productos', 'Esta venta no tiene detalles para editar.');
             return;
         }
 
-        // Pre-llenar carrito con los detalles existentes: { "Producto": cantidad }
+        // 🚀 OPTIMIZACIÓN: Pre-llenar carrito con los detalles existentes ANTES de abrir modal
         const carritoInicial = {};
-        venta.detalles.forEach(item => {
+        ventaEditable.detalles.forEach(item => {
             const nombre = item.nombre || item.producto || '';
             const cantidad = parseInt(item.cantidad || 0);
             if (nombre && cantidad > 0) {
@@ -1561,18 +2233,47 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             }
         });
 
-        setVentaEnEdicion(venta);
+        // 🚀 ABRIR MODAL INMEDIATAMENTE con datos básicos
+        setVentaEnEdicion(ventaEditable);
         setCarritoEdicion(carritoInicial);
         setCantidadesEdicionInput(
             Object.fromEntries(
                 Object.entries(carritoInicial).map(([nombre, item]) => [nombre, String(item?.cantidad || 0)])
             )
         );
-        setMetodoPagoEdicion(normalizarMetodoPagoEdicion(venta?.metodo_pago));
+        setMetodoPagoEdicion(normalizarMetodoPagoEdicion(ventaEditable?.metodo_pago));
+        setVencidasEdicion(normalizarVencidasVentaEdicion(ventaEditable));
+        setFotoVencidasEdicion(normalizarFotosVentaEdicion(ventaEditable));
         setBusquedaProductoEdicion('');
         setFocoCampoEdicion(null);
+        setMostrarVencidasEdicion(false);
         setModalEdicionVisible(true);
-        setMostrarHistorialVentas(false); // Cerrar historial mientras se edita
+        setMostrarHistorialVentas(false);
+
+        // 🚀 CARGAR DETALLES COMPLETOS EN SEGUNDO PLANO (solo si es venta del backend)
+        if (esVentaBackendPersistida(ventaEditable)) {
+            try {
+                const headers = await obtenerAuthHeaders();
+                const respVenta = await fetch(`${API_URL}/api/ventas-ruta/${ventaEditable.id}/`, { headers });
+
+                if (respVenta.ok) {
+                    const ventaDetallada = await respVenta.json();
+                    const ventaActualizada = {
+                        ...ventaEditable,
+                        ...ventaDetallada,
+                        detalles: normalizarDetallesVenta(ventaDetallada),
+                    };
+                    
+                    // Actualizar solo si el modal sigue abierto
+                    setVentaEnEdicion(ventaActualizada);
+                    setVencidasEdicion(normalizarVencidasVentaEdicion(ventaActualizada));
+                    setFotoVencidasEdicion(normalizarFotosVentaEdicion(ventaActualizada));
+                }
+            } catch (error) {
+                console.log('⚠️ No se pudo cargar detalle completo para edición:', error?.message || error);
+                // No hacer nada, el modal ya está abierto con los datos básicos
+            }
+        }
     };
 
     const abrirSelectorMetodoPagoDesdeCard = useCallback((venta) => {
@@ -1605,7 +2306,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         const fechaEdicionLocal = new Date().toISOString();
         const siguienteConteoEdicion = Math.max(1, Number(venta?.veces_editada || 0) + 1);
 
-        const esVentaLocal = !venta.id || String(venta._key || '').startsWith('local-');
+        const esVentaLocal = !esVentaBackendPersistida(venta);
 
         const aplicarMetodoEnMemoria = (metodoPago, extra = {}) => {
             const esMismaVenta = (v) => (
@@ -1759,15 +2460,23 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     }, [normalizarMetodoPagoEdicion, ventaYaFueModificada, esErrorVentaYaModificada]);
 
     const confirmarCambioMetodoPagoDesdeCard = useCallback(async () => {
-        if (!ventaMetodoPagoCard) return;
+        if (!ventaMetodoPagoCard || guardandoMetodoPagoCardRef.current) return;
 
-        setGuardandoMetodoPagoCard(true);
-        const ok = await actualizarMetodoPagoDesdeCard(ventaMetodoPagoCard, metodoPagoCardSeleccionado);
-        setGuardandoMetodoPagoCard(false);
-
-        if (ok) {
-            setModalMetodoPagoCardVisible(false);
-            setVentaMetodoPagoCard(null);
+        try {
+            guardandoMetodoPagoCardRef.current = true;
+            setGuardandoMetodoPagoCard(true);
+            const ok = await actualizarMetodoPagoDesdeCard(ventaMetodoPagoCard, metodoPagoCardSeleccionado);
+            
+            if (ok) {
+                setModalMetodoPagoCardVisible(false);
+                setVentaMetodoPagoCard(null);
+            }
+        } catch (error) {
+            console.error('❌ Error crítico en confirmarCambioMetodoPagoDesdeCard:', error);
+            Alert.alert('Error', 'Ocurrió un error inesperado al procesar el cambio.');
+        } finally {
+            guardandoMetodoPagoCardRef.current = false;
+            setGuardandoMetodoPagoCard(false);
         }
     }, [ventaMetodoPagoCard, metodoPagoCardSeleccionado, actualizarMetodoPagoDesdeCard]);
 
@@ -1830,8 +2539,66 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         return Math.max(0, stockActual + cantidadOriginal);
     }, [stockCargue, resolverClaveStockEdicion, obtenerCantidadOriginalEdicion]);
 
+    const obtenerCantidadOriginalVencidaEdicion = useCallback((nombreProducto) => {
+        const vencidasOriginales = normalizarVencidasVentaEdicion(ventaEnEdicion);
+        const nombreNorm = normalizarNombreStockEdicion(nombreProducto);
+        const itemOriginal = vencidasOriginales.find((item) => (
+            normalizarNombreStockEdicion(item?.nombre || item?.producto || '') === nombreNorm
+        ));
+        return parseInt(itemOriginal?.cantidad || 0, 10) || 0;
+    }, [ventaEnEdicion, normalizarNombreStockEdicion, normalizarVencidasVentaEdicion]);
+
+    const construirAdvertenciasVencidasEdicion = useCallback((vencidasObjetivo = [], detallesObjetivo = []) => {
+        if (!Array.isArray(vencidasObjetivo) || vencidasObjetivo.length === 0) return [];
+
+        return vencidasObjetivo.reduce((acumulado, vencida) => {
+            const nombreProducto = vencida?.nombre || vencida?.producto || '';
+            const claveStock = resolverClaveStockEdicion(nombreProducto);
+            const stockActual = parseInt(stockCargue[claveStock] || 0, 10) || 0;
+            const cantidadOriginalVenta = obtenerCantidadOriginalEdicion(nombreProducto);
+            const cantidadOriginalVencida = obtenerCantidadOriginalVencidaEdicion(nombreProducto);
+            const cantidadVendidaNueva = (detallesObjetivo || []).find((item) => (
+                normalizarNombreStockEdicion(item?.nombre || item?.producto || '') === normalizarNombreStockEdicion(nombreProducto)
+            ))?.cantidad || 0;
+
+            const stockDisponible = Math.max(0, stockActual + cantidadOriginalVenta + cantidadOriginalVencida - cantidadVendidaNueva);
+            const cantidadVencidaNueva = parseInt(vencida?.cantidad || 0, 10) || 0;
+
+            if (cantidadVencidaNueva > stockDisponible) {
+                if (stockDisponible <= 0) {
+                    acumulado.push(`⚠️ ${nombreProducto}: No tienes stock para adjuntar ${cantidadVencidaNueva} vencidas`);
+                } else {
+                    acumulado.push(`⚠️ ${nombreProducto}: Solo tienes ${stockDisponible} para adjuntar ${cantidadVencidaNueva} vencidas`);
+                }
+            }
+
+            return acumulado;
+        }, []);
+    }, [resolverClaveStockEdicion, stockCargue, obtenerCantidadOriginalEdicion, obtenerCantidadOriginalVencidaEdicion, normalizarNombreStockEdicion]);
+
+    const obtenerAdvertenciasStockVencidasEdicion = useCallback((vencidasObjetivo = []) => {
+        const detallesObjetivo = Object.entries(carritoEdicion).map(([nombre, item]) => ({
+            nombre,
+            producto: nombre,
+            cantidad: item?.cantidad || 0,
+        }));
+        return construirAdvertenciasVencidasEdicion(vencidasObjetivo, detallesObjetivo);
+    }, [carritoEdicion, construirAdvertenciasVencidasEdicion]);
+
+    const obtenerStockDisponibleVencidaEdicion = useCallback((nombreProducto = '') => {
+        const claveStock = resolverClaveStockEdicion(nombreProducto);
+        const stockActual = parseInt(stockCargue[claveStock] || 0, 10) || 0;
+        const cantidadOriginalVenta = obtenerCantidadOriginalEdicion(nombreProducto);
+        const cantidadOriginalVencida = obtenerCantidadOriginalVencidaEdicion(nombreProducto);
+        const cantidadVendidaNueva = Object.entries(carritoEdicion).find(([nombre]) => (
+            normalizarNombreStockEdicion(nombre) === normalizarNombreStockEdicion(nombreProducto)
+        ))?.[1]?.cantidad || 0;
+
+        return Math.max(0, stockActual + cantidadOriginalVenta + cantidadOriginalVencida - cantidadVendidaNueva);
+    }, [resolverClaveStockEdicion, stockCargue, obtenerCantidadOriginalEdicion, obtenerCantidadOriginalVencidaEdicion, carritoEdicion, normalizarNombreStockEdicion]);
+
     /** Modifica la cantidad de un producto en el carritoEdicion */
-    const cambiarCantidadEdicion = (nombreProducto, nuevaCantidad) => {
+    const cambiarCantidadEdicion = useCallback((nombreProducto, nuevaCantidad) => {
         const valorRaw = String(nuevaCantidad ?? '');
         const valorLimpio = valorRaw.replace(/[^\d]/g, '');
 
@@ -1855,9 +2622,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             );
         }
 
+        // ⚡ OPTIMIZACIÓN: Actualizar ambos estados en una sola operación
+        const cantidadStr = String(cantidad);
+        
         setCantidadesEdicionInput(prev => ({
             ...prev,
-            [nombreProducto]: String(cantidad),
+            [nombreProducto]: cantidadStr,
         }));
 
         setCarritoEdicion(prev => {
@@ -1865,15 +2635,16 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             if (cantidad <= 0) {
                 delete updated[nombreProducto];
             } else {
+                const precio = updated[nombreProducto]?.precio || 0;
                 updated[nombreProducto] = {
                     ...updated[nombreProducto],
                     cantidad,
-                    subtotal: (updated[nombreProducto]?.precio || 0) * cantidad,
+                    subtotal: precio * cantidad,
                 };
             }
             return updated;
         });
-    };
+    }, [obtenerMaximoEditableProducto]); // ⚡ Memoizar función
 
     /** Confirma la edición: actualiza backend, stock local y el historial */
     const confirmarEdicionVenta = async () => {
@@ -1912,6 +2683,31 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             return;
         }
 
+        const advertenciasVencidas = construirAdvertenciasVencidasEdicion(vencidasEdicion, nuevosDetalles);
+        if (advertenciasVencidas.length > 0) {
+            Alert.alert('Stock insuficiente', advertenciasVencidas.join('\n'));
+            return;
+        }
+
+        const nuevosProductosVencidos = (vencidasEdicion || []).map((item) => ({
+            id: item?.id,
+            producto: item?.nombre || item?.producto || '',
+            cantidad: parseInt(item?.cantidad || 0, 10) || 0,
+            motivo: item?.motivo || 'No especificado',
+        })).filter((item) => item.producto && item.cantidad > 0);
+
+        const fotosLocalesEdicion = Object.fromEntries(
+            Object.entries(fotoVencidasEdicion || {}).map(([clave, fotos]) => [
+                clave,
+                (Array.isArray(fotos) ? fotos : []).filter((uri) => typeof uri === 'string' && !uri.startsWith('http')),
+            ]).filter(([, fotos]) => fotos.length > 0)
+        );
+
+        let fotosVencidosEdicionBase64 = null;
+        if (Object.keys(fotosLocalesEdicion).length > 0) {
+            fotosVencidosEdicionBase64 = await convertirFotosABase64(fotosLocalesEdicion);
+        }
+
         const nuevoTotal = nuevosDetalles.reduce((sum, i) => sum + i.subtotal, 0);
         const fechaEdicionLocal = new Date().toISOString();
         const conteoEdicionLocal = Math.max(1, Number(ventaEnEdicion?.veces_editada || 0) + 1);
@@ -1920,19 +2716,43 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             veces_editada: conteoEdicionLocal,
             fecha_ultima_edicion: fechaEdicionLocal,
         };
+        const vencidasOriginales = normalizarVencidasVentaEdicion(ventaEnEdicion);
 
         setCargandoEdicion(true);
         try {
             const dispositivoId = await obtenerDispositivoId();
             let respuestaEdicion = null;
-            // Si tiene id del backend → PATCH
-            if (ventaEnEdicion.id && !String(ventaEnEdicion._key || '').startsWith('local-')) {
-                respuestaEdicion = await editarVentaRuta(ventaEnEdicion.id, {
-                    detalles: nuevosDetalles,
-                    total: nuevoTotal,
-                    metodo_pago: metodoPagoNormalizado,
-                    dispositivo_id: dispositivoId,
-                });
+            const payloadEdicion = {
+                detalles: nuevosDetalles,
+                total: nuevoTotal,
+                metodo_pago: metodoPagoNormalizado,
+                dispositivo_id: dispositivoId,
+                productos_vencidos: nuevosProductosVencidos,
+            };
+            if (fotosVencidosEdicionBase64) {
+                payloadEdicion.foto_vencidos = fotosVencidosEdicionBase64;
+            }
+
+            if (esVentaBackendPersistida(ventaEnEdicion)) {
+                try {
+                    // ⏱️ ESTRATEGIA: Esperar un máximo de 6 segundos por el servidor.
+                    // Si el servidor es rápido (buena señal), sincronizamos 'de una vez' y no sale el banner naranja.
+                    // Si pasan 6s y no hay respuesta, soltamos el bloqueo y seguimos en segundo plano.
+                    const promiseSync = editarVentaRuta(ventaEnEdicion.id, payloadEdicion)
+                        .then(resp => { respuestaEdicion = resp; })
+                        .catch(err => { console.warn('Sync Fallido/Timeout:', err.message); });
+
+                    await Promise.race([
+                        promiseSync,
+                        new Promise(resolve => setTimeout(resolve, 6000)) // Espera máxima para el usuario
+                    ]);
+
+                    if (respuestaEdicion) {
+                        console.log('✅ Edición sincronizada de inmediato (sin banner)');
+                    }
+                } catch (editError) {
+                    console.warn('⚠️ Fallo edición inmediata:', editError.message);
+                }
             }
 
             const metaEdicionConfirmada = {
@@ -1941,8 +2761,11 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 fecha_ultima_edicion: respuestaEdicion?.fecha_ultima_edicion || fechaEdicionLocal,
                 dispositivo_ultima_edicion: respuestaEdicion?.dispositivo_ultima_edicion || dispositivoId || '',
             };
+            const fotoVencidosPersistida = respuestaEdicion?.foto_vencidos || ventaEnEdicion?.foto_vencidos || null;
+            const evidenciasPersistidas = Array.isArray(respuestaEdicion?.evidencias)
+                ? respuestaEdicion.evidencias
+                : (Array.isArray(ventaEnEdicion?.evidencias) ? ventaEnEdicion.evidencias : []);
 
-            // Actualizar también en la lista local ventasDelDia
             setVentasDelDia(prev =>
                 prev.map(v => {
                     const mismaVenta =
@@ -1952,8 +2775,14 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         return {
                             ...v,
                             detalles: nuevosDetalles,
+                            productos: nuevosDetalles,
                             total: nuevoTotal,
                             metodo_pago: metodoPagoNormalizado,
+                            vencidas: vencidasEdicion,
+                            productos_vencidos: nuevosProductosVencidos,
+                            fotoVencidas: fotoVencidasEdicion,
+                            foto_vencidos: fotoVencidosPersistida,
+                            evidencias: evidenciasPersistidas,
                             ...metaEdicionConfirmada,
                         };
                     }
@@ -1961,9 +2790,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 })
             );
 
-            // Actualizar en historialReimpresion para que la card se vea en rojo
-            setHistorialReimpresion(prev => {
-                const updated = prev.map(v => {
+            const aplicarEdicionEnHistorial = (lista = []) => {
+                const updated = (Array.isArray(lista) ? lista : []).map(v => {
                     const mismaVenta =
                         (v.id && v.id === ventaEnEdicion.id) ||
                         (v.id_local && v.id_local === ventaEnEdicion.id_local) ||
@@ -1972,8 +2800,14 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         return {
                             ...v,
                             detalles: nuevosDetalles,
+                            productos: nuevosDetalles,
                             total: nuevoTotal,
                             metodo_pago: metodoPagoNormalizado,
+                            vencidas: vencidasEdicion,
+                            productos_vencidos: nuevosProductosVencidos,
+                            fotoVencidas: fotoVencidasEdicion,
+                            foto_vencidos: fotoVencidosPersistida,
+                            evidencias: evidenciasPersistidas,
                             ...metaEdicionConfirmada,
                             fecha_actualizacion: metaEdicionConfirmada.fecha_ultima_edicion || v.fecha_actualizacion,
                         };
@@ -1985,14 +2819,40 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     const fechaB = new Date(b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0).getTime();
                     return fechaB - fechaA;
                 });
+            };
+
+            setHistorialReimpresion(prev => aplicarEdicionEnHistorial(prev));
+            setHistorialResumenPreview(prev => aplicarEdicionEnHistorial(prev));
+            
+            // 🔧 Invalidar caché del historial para que se recargue con la edición
+            try {
+                const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+                const cacheKey = `historial_cache_${userId}_${fechaStr}`;
+                await AsyncStorage.removeItem(cacheKey);
+                console.log(`🗑️ Caché de historial invalidado tras edición: ${cacheKey}`);
+            } catch (errCache) {
+                console.log('⚠️ No se pudo invalidar caché de historial:', errCache?.message);
+            }
+            
+            ultimaVentaHistorialRef.current = normalizarItemHistorialLocal({
+                ...ventaEnEdicion,
+                detalles: nuevosDetalles,
+                productos: nuevosDetalles,
+                total: nuevoTotal,
+                metodo_pago: metodoPagoNormalizado,
+                vencidas: vencidasEdicion,
+                productos_vencidos: nuevosProductosVencidos,
+                fotoVencidas: fotoVencidasEdicion,
+                foto_vencidos: fotoVencidosPersistida,
+                evidencias: evidenciasPersistidas,
+                ...metaEdicionConfirmada,
+                fecha_actualizacion: metaEdicionConfirmada.fecha_ultima_edicion || ventaEnEdicion?.fecha_actualizacion || ventaEnEdicion?.fecha,
             });
 
-            // 🆕 Actualizar contadores diarios de dinero (cantidad de ventas sigue igual)
             const viejoTotal = parseFloat(ventaEnEdicion.total || 0);
             const diferenciaDinero = nuevoTotal - viejoTotal;
             setTotalDineroHoy(prev => Math.max(0, prev + diferenciaDinero));
 
-            // 🆕 Actualizar almacenamiento permanente (AsyncStorage)
             try {
                 const ventasGuardadas = await obtenerVentas();
                 const ventasActualizadas = ventasGuardadas.map(v => {
@@ -2003,8 +2863,14 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         return {
                             ...v,
                             detalles: nuevosDetalles,
+                            productos: nuevosDetalles,
                             total: nuevoTotal,
                             metodo_pago: metodoPagoNormalizado,
+                            vencidas: vencidasEdicion,
+                            productos_vencidos: nuevosProductosVencidos,
+                            fotoVencidas: fotoVencidasEdicion,
+                            foto_vencidos: fotoVencidosPersistida,
+                            evidencias: evidenciasPersistidas,
                             ...metaEdicionConfirmada,
                         };
                     }
@@ -2012,13 +2878,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 });
                 await AsyncStorage.setItem('ventas', JSON.stringify(ventasActualizadas));
 
-                // 🆕 Mantener coherencia con cola offline si la venta aún no se había sincronizado
                 try {
                     const colaRaw = await AsyncStorage.getItem('ventas_pendientes_sync');
                     const cola = colaRaw ? JSON.parse(colaRaw) : [];
                     let huboCambiosEnCola = false;
 
-                    const colaActualizada = cola.map((pendiente) => {
+                    let colaActualizada = cola.map((pendiente) => {
                         const idPendiente = pendiente?.id;
                         const idLocalPendiente = pendiente?.data?.id_local;
                         const mismaVenta =
@@ -2033,12 +2898,35 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             data: {
                                 ...(pendiente?.data || {}),
                                 detalles: nuevosDetalles,
+                                productos: nuevosDetalles,
                                 total: nuevoTotal,
                                 metodo_pago: metodoPagoNormalizado,
+                                productos_vencidos: nuevosProductosVencidos,
+                                ...(fotosVencidosEdicionBase64 ? { foto_vencidos: fotosVencidosEdicionBase64 } : {}),
                                 ...metaEdicionLocal,
                             },
                         };
                     });
+
+                    // 🆕 Si era una venta persistida y la edición inmediata falló, agregarla a la cola
+                    if (!huboCambiosEnCola && !respuestaEdicion && esVentaBackendPersistida(ventaEnEdicion)) {
+                        colaActualizada.push({
+                            id: ventaEnEdicion.id,
+                            data: {
+                                ...ventaEnEdicion,
+                                detalles: nuevosDetalles,
+                                productos: nuevosDetalles,
+                                total: nuevoTotal,
+                                metodo_pago: metodoPagoNormalizado,
+                                productos_vencidos: nuevosProductosVencidos,
+                                ...(fotosVencidosEdicionBase64 ? { foto_vencidos: fotosVencidosEdicionBase64 } : {}),
+                                ...metaEdicionConfirmada,
+                            },
+                            intentos: 0,
+                            fechaCreacion: new Date().toISOString()
+                        });
+                        huboCambiosEnCola = true;
+                    }
 
                     if (huboCambiosEnCola) {
                         await AsyncStorage.setItem('ventas_pendientes_sync', JSON.stringify(colaActualizada));
@@ -2047,17 +2935,18 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     console.warn('⚠️ No se pudo actualizar la cola offline tras editar venta:', colaErr?.message || colaErr);
                 }
             } catch (err) {
-                console.error("Error guardando edición localmente", err);
+                console.error('Error guardando edición localmente', err);
             }
 
-            // 🆕 Actualizar inventario local
+            bloqueoRefreshStockHastaRef.current = Date.now() + 3 * 60 * 1000;
+
             setStockCargue((prevStock) => {
                 const nuevoStock = { ...prevStock };
                 const normalizarNombre = (txt) =>
                     (txt || '')
                         .toString()
                         .normalize('NFD')
-                        .replace(/[\u0300-\u036f]/g, '')
+                        .replace(/[̀-ͯ]/g, '')
                         .toUpperCase()
                         .replace(/\s+/g, ' ')
                         .trim();
@@ -2074,7 +2963,6 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     );
                     if (claveNormalizada) return claveNormalizada;
 
-                    // Fallback: resolver contra catálogo local de productos
                     const prodCatalogo = productos.find((p) => {
                         const prodNorm = normalizarNombre(p?.nombre);
                         return prodNorm === nombreNorm || prodNorm.includes(nombreNorm) || nombreNorm.includes(prodNorm);
@@ -2095,20 +2983,34 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     return claveDirecta;
                 };
 
-                // 1. Devolver al inventario lo de la venta ORIGINAL
                 const detallesViejos = ventaEnEdicion.detalles || [];
                 detallesViejos.forEach((item) => {
                     const nombre = resolverClaveStock(item.nombre || item.producto || '');
-                    const cant = parseInt(item.cantidad) || 0;
+                    const cant = parseInt(item.cantidad, 10) || 0;
                     if (nombre && cant > 0) {
                         nuevoStock[nombre] = (nuevoStock[nombre] || 0) + cant;
                     }
                 });
 
-                // 2. Descontar del inventario lo de la venta NUEVA EDITADA
+                vencidasOriginales.forEach((item) => {
+                    const nombre = resolverClaveStock(item.nombre || item.producto || '');
+                    const cant = parseInt(item.cantidad, 10) || 0;
+                    if (nombre && cant > 0) {
+                        nuevoStock[nombre] = (nuevoStock[nombre] || 0) + cant;
+                    }
+                });
+
                 nuevosDetalles.forEach((item) => {
                     const nombre = resolverClaveStock(item.nombre || item.producto || '');
-                    const cant = parseInt(item.cantidad) || 0;
+                    const cant = parseInt(item.cantidad, 10) || 0;
+                    if (nombre && cant > 0) {
+                        nuevoStock[nombre] = Math.max(0, (nuevoStock[nombre] || 0) - cant);
+                    }
+                });
+
+                (vencidasEdicion || []).forEach((item) => {
+                    const nombre = resolverClaveStock(item.nombre || item.producto || '');
+                    const cant = parseInt(item.cantidad, 10) || 0;
                     if (nombre && cant > 0) {
                         nuevoStock[nombre] = Math.max(0, (nuevoStock[nombre] || 0) - cant);
                     }
@@ -2117,24 +3019,20 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 return nuevoStock;
             });
 
-            // Cerrar el modal de edición
-            setModalEdicionVisible(false);
-            setVentaEnEdicion(null);
-            setCarritoEdicion({});
-            setCantidadesEdicionInput({});
-            setMetodoPagoEdicion('EFECTIVO');
-            setBusquedaProductoEdicion('');
-            setFocoCampoEdicion(null);
+            cerrarEdicionVenta(false);
 
-            // IMPORTANTE:
-            // Después de editar, mantenemos el ajuste LOCAL del stock para que la UI
-            // refleje inmediatamente la diferencia de la venta editada.
-            // No recargamos el stock desde backend aquí porque el backend todavía no
-            // reconcilia ese delta y terminaría pisando el valor visible correcto.
+            // 🆕 Disparar el loop de sincronización manual para que empiece de una vez 
+            // pero sin bloquear el Alert de éxito.
+            setTimeout(() => {
+                sincronizarPendientesAutomatico({ forzar: true }).catch(() => {});
+            }, 100);
 
             Alert.alert(
                 '✅ Venta editada',
-                `La venta fue actualizada correctamente.\nNuevo total: ${formatearMoneda(Math.round(nuevoTotal))}\nPago: ${metodoPagoNormalizado}`,
+                `La venta fue actualizada correctamente.
+Nuevo total: ${formatearMoneda(Math.round(nuevoTotal))}
+Pago: ${metodoPagoNormalizado}${nuevosProductosVencidos.length > 0 ? `
+Vencidas: ${nuevosProductosVencidos.length}` : ''}`,
                 [{ text: 'Ver historial', onPress: () => abrirHistorialReimpresion() }, { text: 'OK' }]
             );
         } catch (error) {
@@ -2142,7 +3040,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 Alert.alert('Bloqueado', 'Esta venta ya fue modificada una vez y no admite otra edición.');
                 cargarHistorialReimpresion();
             } else {
-                Alert.alert('Error al editar', `No se pudo guardar la edición:\n${error.message}`);
+                Alert.alert('Error al editar', `No se pudo guardar la edición:
+${error.message}`);
             }
         } finally {
             setCargandoEdicion(false);
@@ -2150,27 +3049,48 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     };
 
     // 🆕 ANULACIÓN DE VENTA DESDE HISTORIAL
-    const anularVentaRuta = (venta) => {
-        if (!venta?.id || String(venta._key || '').startsWith('local-')) {
-            Alert.alert('No disponible', 'Solo se pueden anular ventas ya sincronizadas con el servidor.');
-            return;
-        }
+    const anularVentaRuta = async (venta) => {
+        const esLocal = !esVentaBackendPersistida(venta);
+        
         if (venta.estado === 'ANULADA') {
             Alert.alert('Ya anulada', 'Esta venta ya fue anulada.');
             return;
         }
+
+        // 🔒 LÍMITE DE ANULACIONES: Máximo 1 anulación por venta
+        const intentosAnulacion = parseInt(venta.intentos_anulacion) || 0;
+        if (intentosAnulacion >= 1) {
+            Alert.alert(
+                '⚠️ Límite Alcanzado',
+                'Esta venta ya fue anulada anteriormente.\n\n' +
+                '💡 ¿Necesitas corregir algo?\n' +
+                'Usa el botón "✏️ Editar" en vez de anular.\n\n' +
+                'Editar mantiene el registro y es más rápido.',
+                [{ text: 'Entendido', style: 'default' }]
+            );
+            return;
+        }
+
         Alert.alert(
-            '🚫 Anular Venta',
+            esLocal ? '🚫 Cancelar Venta Local' : '🚫 Anular Venta (Servidor)',
             `¿Confirmas anular la venta de "${venta.cliente_negocio || venta.cliente_nombre || 'Cliente'}"?\n\n` +
             `💰 Total: ${formatearMoneda(Math.round(parseFloat(venta.total) || 0))}\n\n` +
             `📦 Productos a devolver al cargue:\n` +
-            (Array.isArray(venta.detalles) && venta.detalles.length > 0
+            ((Array.isArray(venta.detalles) && venta.detalles.length > 0)
                 ? venta.detalles.map(item => {
                     const nombre = item.nombre || item.producto || 'Producto';
                     const cant = item.cantidad || 0;
                     return `  • ${cant} × ${nombre}`;
                 }).join('\n')
                 : '  (sin detalle de productos)') +
+            ((Array.isArray(venta.productos_vencidos) && venta.productos_vencidos.length > 0)
+                ? `\n\n♻️ Vencidas a reintegrar:\n` +
+                  venta.productos_vencidos.map(item => {
+                      const nombre = item.producto || item.nombre || 'Producto';
+                      const cant = item.cantidad || 0;
+                      return `  • ${cant} × ${nombre}`;
+                  }).join('\n')
+                : '') +
             `\n\n⚠️ Esta acción no se puede deshacer.`,
             [
                 { text: 'Cancelar', style: 'cancel' },
@@ -2178,33 +3098,146 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     text: '🚫 Anular',
                     style: 'destructive',
                     onPress: async () => {
+                        if (cargandoAnulacion) return;
+                        setCargandoAnulacion(true);
                         try {
-                            const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 25000);
-                            const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
-                            const response = await fetch(
-                                `${API_URL}/api/ventas-ruta/${venta.id}/anular/`,
-                                { method: 'POST', headers, signal: controller.signal }
-                            );
-                            clearTimeout(timeoutId);
-                            const data = await response.json();
-                            if (response.ok && data.success) {
-                                // Actualizar estado local en los tres estados de ventas
-                                const marcarAnulada = v => {
+                            if (esLocal) {
+                                console.log('🗑️ Anulando venta local:', venta.id);
+                                // 1. Quitar de ventas locales
+                                const todasVentas = await obtenerVentas();
+                                const filtradas = todasVentas.filter(v => v.id !== venta.id);
+                                await AsyncStorage.setItem('ventas', JSON.stringify(filtradas));
+
+                                // 2. Quitar de cola sync (importante para que no se envie despues)
+                                const colaRaw = await AsyncStorage.getItem('ventas_pendientes_sync');
+                                const cola = colaRaw ? JSON.parse(colaRaw) : [];
+                                const nuevaCola = cola.filter(item => {
+                                    const idItem = item?.id || item?.data?.id_local || item?.data?.id;
+                                    return String(idItem) !== String(venta.id) && String(idItem) !== String(venta.id_local);
+                                });
+                                await AsyncStorage.setItem('ventas_pendientes_sync', JSON.stringify(nuevaCola));
+
+                                // 3. Actualizar UI
+                                const marcarAnuladaUI = v => {
                                     const misma = (v.id && v.id === venta.id) ||
-                                        (v.id_local && v.id_local === venta.id_local);
-                                    return misma ? { ...v, estado: 'ANULADA' } : v;
+                                        (v.id_local && v.id_local === venta.id_local) ||
+                                        (v._key === venta._key);
+                                    // 🔒 Incrementar contador de anulaciones
+                                    return misma ? { ...v, estado: 'ANULADA', intentos_anulacion: (parseInt(v.intentos_anulacion) || 0) + 1 } : v;
                                 };
+                                
+                                setVentasDelDia(prev => prev.map(marcarAnuladaUI));
+                                setHistorialReimpresion(prev => prev.map(marcarAnuladaUI));
+                                
+                                 // Resetear stock localmente (Vendidas + Vencidas)
+                                 if ((Array.isArray(venta.detalles) && venta.detalles.length > 0) || (Array.isArray(venta.productos_vencidos) && venta.productos_vencidos.length > 0)) {
+                                     setStockCargue(prevStock => {
+                                         const nuevoStock = { ...prevStock };
+                                         
+                                         // 1. Devolver productos vendidos
+                                         if (Array.isArray(venta.detalles)) {
+                                            venta.detalles.forEach(item => {
+                                                const nombreProducto = resolverClaveStockEdicion(item.nombre || item.producto || '');
+                                                const cantidadDevuelta = parseInt(item.cantidad) || 0;
+                                                if (nombreProducto && cantidadDevuelta > 0) {
+                                                    nuevoStock[nombreProducto] = (nuevoStock[nombreProducto] || 0) + cantidadDevuelta;
+                                                }
+                                            });
+                                         }
+                                         
+                                         // 2. Devolver productos vencidos (importante en ventas editadas)
+                                         if (Array.isArray(venta.productos_vencidos)) {
+                                            venta.productos_vencidos.forEach(item => {
+                                                const nombreProducto = resolverClaveStockEdicion(item.producto || item.nombre || '');
+                                                const cantidadDevuelta = parseInt(item.cantidad) || 0;
+                                                if (nombreProducto && cantidadDevuelta > 0) {
+                                                    nuevoStock[nombreProducto] = (nuevoStock[nombreProducto] || 0) + cantidadDevuelta;
+                                                }
+                                            });
+                                         }
+                                         
+                                         return nuevoStock;
+                                     });
+                                 }
+
+                                Alert.alert('✅ Cancelada', 'La venta local fue anulada y los productos regresaron al stock.');
+                                setCargandoAnulacion(false);
+                                return;
+                            }
+
+                            // --- CASO BACKEND PERSISTIDA (NO BLOQUEANTE) ---
+                             // 🛡️ IMPORTANTE: Limpiar cola sync antes de anular en backend
+                             try {
+                                 const colaRaw = await AsyncStorage.getItem('ventas_pendientes_sync');
+                                 const cola = colaRaw ? JSON.parse(colaRaw) : [];
+                                 const nuevaCola = cola.filter(item => {
+                                     const idItem = item?.id || item?.data?.id_local || item?.data?.id;
+                                     return String(idItem) !== String(venta.id) && String(idItem) !== String(venta.id_local);
+                                 });
+                                 if (cola.length !== nuevaCola.length) {
+                                     console.log(`🧹 Limpiada edición pendiente de cola sync para venta ${venta.id}`);
+                                     await AsyncStorage.setItem('ventas_pendientes_sync', JSON.stringify(nuevaCola));
+                                 }
+                             } catch (errCola) {
+                                 console.warn("⚠️ No se pudo limpiar cola sync:", errCola.message);
+                             }
+
+                            // Estrategia "Danza del Vendedor": Esperar 6s o liberar UI
+                            console.log('🚫 Iniciando anulación resiliente (Race 6s)...');
+                             
+                            const sincronizarAnulacionBackground = async () => {
+                                try {
+                                    const controller = new AbortController();
+                                    const timeoutId = setTimeout(() => controller.abort(), 12000); // 🔧 Reducido de 30s a 12s
+                                    const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
+                                    const response = await fetch(
+                                        `${API_URL}/api/ventas-ruta/${venta.id}/anular/`,
+                                        { method: 'POST', headers, signal: controller.signal }
+                                    );
+                                    clearTimeout(timeoutId);
+                                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                                } catch (anErr) {
+                                    console.warn('⚠️ Falló anulación inmediata, a cola de pendientes:', anErr.message);
+                                    // Agregar a cola (data null indica anulación)
+                                    await agregarAColaPendientes(null, venta.id);
+                                    sincronizarPendientesAutomatico({ forzar: true });
+                                }
+                            };
+
+                            // Correr la carrera de 6 segundos
+                            await Promise.race([
+                                sincronizarAnulacionBackground(),
+                                new Promise(resolve => setTimeout(resolve, 6000))
+                            ]);
+
+                            // Éxito parcial (flujo sigue localmente aunque el server tarde)
+                            const data = { success: true }; 
+
+                            if (data.success) {
+                                // Actualizar estado local en los tres estados de ventas (Robusto contra tipos de ID)
+                                const marcarAnulada = (v) => {
+                                    const v_id = v.id != null ? String(v.id) : null;
+                                    const venta_id = venta.id != null ? String(venta.id) : null;
+                                    const v_id_local = v.id_local != null ? String(v.id_local) : null;
+                                    const venta_id_local = venta.id_local != null ? String(venta.id_local) : null;
+
+                                    const misma = (v_id && v_id === venta_id) ||
+                                                (v_id_local && v_id_local === venta_id_local);
+                                    
+                                    // 🔒 Incrementar contador de anulaciones
+                                    return misma ? { ...v, estado: 'ANULADA', intentos_anulacion: (parseInt(v.intentos_anulacion) || 0) + 1 } : v;
+                                };
+
                                 setHistorialReimpresion(prev => {
                                     const updated = prev.map(marcarAnulada);
                                     return updated.sort((a, b) => {
-                                        const fechaA = new Date(a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0).getTime();
-                                        const fechaB = new Date(b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0).getTime();
-                                        return fechaB - fechaA;
+                                        const fA = new Date(a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0).getTime();
+                                        const fB = new Date(b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0).getTime();
+                                        return fB - fA;
                                     });
                                 });
                                 setVentasDelDia(prev => prev.map(marcarAnulada));
-                                setVentasBackendDia(prev => prev.map(marcarAnulada)); // 🆕 badge header
+                                setVentasBackendDia(prev => prev.map(marcarAnulada));
 
                                 // 🆕 Actualizar almacenamiento permanente (AsyncStorage)
                                 try {
@@ -2216,32 +3249,79 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                 }
 
                                 // 🆕 Restaurar el stock localmente sin necesidad de deslizar hacia abajo
-                                if (Array.isArray(venta.detalles) && venta.detalles.length > 0) {
-                                    setStockCargue(prevStock => {
-                                        const nuevoStock = { ...prevStock };
-                                        venta.detalles.forEach(item => {
-                                            const nombreProducto = (item.nombre || item.producto || '').toUpperCase();
-                                            const cantidadDevuelta = parseInt(item.cantidad) || 0;
-                                            if (nombreProducto && cantidadDevuelta > 0) {
-                                                const stockActual = nuevoStock[nombreProducto] || 0;
-                                                nuevoStock[nombreProducto] = stockActual + cantidadDevuelta;
-                                                console.log(`♻️ Stock Restituido (Anulación): ${nombreProducto} +${cantidadDevuelta}`);
-                                            }
-                                        });
-                                        return nuevoStock;
-                                    });
-                                }
+                                 // 🆕 Restaurar el stock localmente (Vendidas + Vencidas)
+                                 if ((Array.isArray(venta.detalles) && venta.detalles.length > 0) || (Array.isArray(venta.productos_vencidos) && venta.productos_vencidos.length > 0)) {
+                                     setStockCargue(prevStock => {
+                                         const nuevoStock = { ...prevStock };
+                                         
+                                         // 1. Devolver vendidos
+                                         if (Array.isArray(venta.detalles)) {
+                                             venta.detalles.forEach(item => {
+                                                 const nombreProducto = resolverClaveStockEdicion(item.nombre || item.producto || '');
+                                                 const cantidadDevuelta = parseInt(item.cantidad) || 0;
+                                                 if (nombreProducto && cantidadDevuelta > 0) {
+                                                     nuevoStock[nombreProducto] = (nuevoStock[nombreProducto] || 0) + cantidadDevuelta;
+                                                     console.log(`♻️ Stock Restituido (Anul): ${nombreProducto} +${cantidadDevuelta}`);
+                                                 }
+                                             });
+                                         }
+                                         
+                                         // 2. Devolver vencidos
+                                         if (Array.isArray(venta.productos_vencidos)) {
+                                             venta.productos_vencidos.forEach(item => {
+                                                 const nombreProducto = resolverClaveStockEdicion(item.producto || item.nombre || '');
+                                                 const cantidadDevuelta = parseInt(item.cantidad) || 0;
+                                                 if (nombreProducto && cantidadDevuelta > 0) {
+                                                     nuevoStock[nombreProducto] = (nuevoStock[nombreProducto] || 0) + cantidadDevuelta;
+                                                     console.log(`♻️ Stock Restituido (Anul Vencida): ${nombreProducto} +${cantidadDevuelta}`);
+                                                 }
+                                             });
+                                         }
+                                         
+                                         return nuevoStock;
+                                     });
+                                 }
 
                                 // 🆕 Descontar venta de los contadores rápidos diarios (para UX precisa)
                                 setTotalVentasHoy(prev => Math.max(0, prev - 1));
                                 setTotalDineroHoy(prev => Math.max(0, prev - parseFloat(venta.total || 0)));
+
+                                // 🆕 Reconciliar con backend para limpiar badges y sincronizar stock
+                                try {
+                                    await cargarVentasDelDia(fechaSeleccionada);
+                                    await refrescarStockSilencioso();
+                                } catch (err) {
+                                    console.log('⚠️ No se pudo refrescar tras anulación:', err.message);
+                                }
 
                                 Alert.alert('✅ Venta Anulada', `La venta fue anulada correctamente.\nLos productos regresaron a tu inventario.`);
                             } else {
                                 Alert.alert('Error', data.error || 'No se pudo anular la venta.');
                             }
                         } catch (e) {
-                            Alert.alert('Error de conexión', 'Verifica tu conexión a internet e intenta de nuevo.');
+                            const esAbort = e.name === 'AbortError';
+                            console.error("❌ Error en anulación:", e);
+                            
+                            // 🛡️ ESTRATEGIA: Si dio timeout (AbortError), es MUY probable que el servidor ya la haya anulado 
+                            // pero no alcanzó a avisar. Refrescamos para ver si ya no está.
+                            if (esAbort) {
+                                try {
+                                    console.log('🔄 Intentando verificar anulación tras timeout...');
+                                    await cargarVentasDelDia(fechaSeleccionada);
+                                    await refrescarStockSilencioso();
+                                } catch (_) { /* ignore */ }
+                            }
+
+                            Alert.alert(
+                                esAbort ? '⏳ Tiempo de Espera Agotado' : '⚠️ Error de conexión', 
+                                esAbort 
+                                    ? 'La respuesta tardó demasiado, pero es posible que la venta ya esté anulada.\n\nEl listado se actualizará ahora.'
+                                    : 'Verifica tu conexión a internet e intenta de nuevo.'
+                            );
+                        } finally {
+                            setCargandoAnulacion(false);
+                            // También refrescar el historial para estar seguros
+                            try { cargarHistorialReimpresion(); } catch (_) { }
                         }
                     }
                 }
@@ -2251,14 +3331,65 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
 
     const verificarTurnoActivo = async () => {
-        const MAX_INTENTOS = 3;
-        const TIMEOUT_MS = 5000; // 5 segundos
+        const MAX_INTENTOS = 2; // Reducir intentos para no desesperar al usuario
+        const TIMEOUT_MS = 3500; // 3.5 segundos por intento
+
+        const restaurarTurnoOfflineGuardado = async () => {
+            try {
+                const turnoGuardado = await AsyncStorage.getItem(`@turno_activo_${userId}`);
+                if (!turnoGuardado) return false;
+
+                const data = JSON.parse(turnoGuardado);
+
+                let esReciente = true;
+                if (data.hora_apertura) {
+                    const msPasados = new Date() - new Date(data.hora_apertura);
+                    const diasPasados = msPasados / (1000 * 60 * 60 * 24);
+                    if (diasPasados > 3) esReciente = false;
+                }
+
+                if (!esReciente) {
+                    console.log(`🗑️ Turno offline muy viejo o inválido descartado (${data.fecha})`);
+                    await AsyncStorage.removeItem(`@turno_activo_${userId}`);
+                    return false;
+                }
+
+                console.log(`✅ Turno activo recuperado OFFLINE para fecha: ${data.fecha}`);
+
+                setDiaSeleccionado(data.dia);
+                const fechaTurno = new Date(data.fecha + 'T12:00:00');
+                setFechaSeleccionada(fechaTurno);
+
+                verificarPedidosPendientes(data.fecha);
+                if (data.hora_apertura) setHoraTurno(new Date(data.hora_apertura));
+
+                setTurnoAbierto(true);
+                setMostrarSelectorDia(false);
+
+                await cargarStockCargue(data.dia, fechaTurno);
+                cargarDatos(fechaTurno);
+                verificarPendientes();
+                await cargarVentasDelDia(fechaTurno);
+
+                Alert.alert(
+                    '📴 Turno Restaurado Sin Conexión',
+                    `Has entrado en modo offline con el turno del ${data.fecha}. Las ventas se conservarán en el celular y se enviarán al reconectar.`,
+                    [{ text: 'ENTENDIDO' }]
+                );
+
+                return true;
+            } catch (e) {
+                console.log('⚠️ Error leyendo turno offline:', e);
+                return false;
+            }
+        };
 
         for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
             try {
                 console.log(`🔍 Verificando turno (intento ${intento}/${MAX_INTENTOS})...`);
 
-                // Crear AbortController para timeout
+                // 🛡️ ESTRATEGIA: Si es el primer intento y falla la red, e inmediatamente 
+                // intentamos restaurar el offline si el timeout es corto.
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
@@ -2280,22 +3411,17 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
                 if (data.turno_activo) {
                     console.log('✅ Turno activo encontrado:', data);
-                    // Hay turno abierto - saltar modal de selección
                     setDiaSeleccionado(data.dia);
 
-                    // Restaurar fecha seleccionada del turno
-                    const fechaTurno = new Date(data.fecha + 'T12:00:00'); // Forzar hora mediodía para evitar UTC shift
+                    const fechaTurno = new Date(data.fecha + 'T12:00:00');
                     setFechaSeleccionada(fechaTurno);
 
-                    // 🆕 Cargar pedidos
                     verificarPedidosPendientes(data.fecha);
 
-                    // Parsear hora de apertura
                     if (data.hora_apertura) {
                         setHoraTurno(new Date(data.hora_apertura));
                     }
 
-                    // 🆕 Guardar turno en memoria del dispositivo (Offline Fallback)
                     try {
                         await AsyncStorage.setItem(`@turno_activo_${userId}`, JSON.stringify({
                             dia: data.dia,
@@ -2307,16 +3433,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         console.log('⚠️ Error guardando turno en offline (sincronizando):', e);
                     }
 
-                    // Marcar turno como abierto
                     setTurnoAbierto(true);
                     setMostrarSelectorDia(false);
 
-                    // Cargar datos
                     await cargarStockCargue(data.dia, fechaTurno);
-                    cargarDatos();
+                    cargarDatos(fechaTurno);
                     verificarPendientes();
-
-                    // 🆕 Cargar ventas reales del día
                     await cargarVentasDelDia(fechaTurno);
 
                     return true;
@@ -2325,70 +3447,22 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             } catch (error) {
                 const esTimeout = error.name === 'AbortError';
-                const esSinRed = error.message.includes('Network request failed');
+                const esSinRed = String(error?.message || '').includes('Network request failed');
 
                 console.log(`⚠️ Error verificando turno (intento ${intento}):`, esTimeout ? 'Timeout' : error.message);
 
-                // Si es el último intento, manejar el error
+                if ((esTimeout || esSinRed) && await restaurarTurnoOfflineGuardado()) {
+                    return true;
+                }
+
                 if (intento === MAX_INTENTOS) {
-                    // 🆕 Buscar en AsyncStorage (Offline Fallback)
-                    try {
-                        const turnoGuardado = await AsyncStorage.getItem(`@turno_activo_${userId}`);
-                        if (turnoGuardado) {
-                            const data = JSON.parse(turnoGuardado);
-
-                            // 🆕 Calcular antigüedad del turno en días para evitar descartar turnos válidos 
-                            // que pasaron de medianoche o que seleccionaron otra fecha manualmente en el calendario
-                            let esReciente = true;
-                            if (data.hora_apertura) {
-                                const msPasados = new Date() - new Date(data.hora_apertura);
-                                const diasPasados = msPasados / (1000 * 60 * 60 * 24);
-                                if (diasPasados > 3) esReciente = false;
-                            }
-
-                            // 🆕 Restaurar cualquier turno guardado localmente (hasta de 3 días atrás)
-                            if (esReciente) {
-                                console.log(`✅ Turno activo recuperado OFFLINE para fecha: ${data.fecha}`);
-
-                                setDiaSeleccionado(data.dia);
-                                const fechaTurno = new Date(data.fecha + 'T12:00:00');
-                                setFechaSeleccionada(fechaTurno);
-
-                                verificarPedidosPendientes(data.fecha);
-                                if (data.hora_apertura) setHoraTurno(new Date(data.hora_apertura));
-
-                                setTurnoAbierto(true);
-                                setMostrarSelectorDia(false);
-
-                                await cargarStockCargue(data.dia, fechaTurno);
-                                cargarDatos();
-                                verificarPendientes();
-                                await cargarVentasDelDia(fechaTurno);
-
-                                // Mostrar confirmación visual de que se entró offline
-                                Alert.alert(
-                                    '📴 Turno Restaurado Sin Conexión',
-                                    `Has entrado en modo offline con el turno del ${data.fecha}. Las ventas se conservarán en el celular y se enviarán al reconectar.`,
-                                    [{ text: 'ENTENDIDO' }]
-                                );
-
-                                return true;
-                            } else {
-                                console.log(`🗑️ Turno offline muy viejo o inválido descartado (${data.fecha})`);
-                                await AsyncStorage.removeItem(`@turno_activo_${userId}`);
-                            }
-                        }
-                    } catch (e) {
-                        console.log('⚠️ Error leyendo turno offline:', e);
+                    if (await restaurarTurnoOfflineGuardado()) {
+                        return true;
                     }
 
-                    // Si no había turno offline o no es de hoy, pedir al usuario
-                    // Mostrar alerta al usuario
                     Alert.alert(
                         '⚠️ Sin Conexión',
-                        'No se pudo verificar el turno activo.\n\n' +
-                        '¿Deseas continuar en modo offline?\n\n' +
-                        '(Podrás abrir un turno nuevo, pero no se verificará si ya hay uno abierto)',
+                        'No se pudo verificar el turno activo.\n\n¿Deseas continuar en modo offline?\n\n(Podrás abrir un turno nuevo, pero no se verificará si ya hay uno abierto)',
                         [
                             {
                                 text: 'Volver',
@@ -2411,7 +3485,6 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     return false;
                 }
 
-                // Esperar antes del siguiente intento (backoff exponencial)
                 await new Promise(resolve => setTimeout(resolve, 1000 * intento));
             }
         }
@@ -2428,15 +3501,29 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 setClientePreseleccionado(route.params.clientePreseleccionado);
             }
 
-            // Verificar turno activo
+            // Verificar turno activo con tiempo límite estricto para no bloquear UI
             setVerificandoTurno(true);
-            const hayTurno = await verificarTurnoActivo();
-            setVerificandoTurno(false);
+            try {
+                // Si en 10 segundos no ha terminado, forzamos el cierre del modal (fallback offline automático)
+                const timeoutCierre = setTimeout(() => {
+                    if (verificandoTurno) {
+                        console.log('⏰ Forzando cierre de modal verificandoTurno por timeout global');
+                        setVerificandoTurno(false);
+                    }
+                }, 12000);
 
-            if (!hayTurno) {
-                // No hay turno, mostrar selector de día
+                const hayTurno = await verificarTurnoActivo();
+                clearTimeout(timeoutCierre);
+                setVerificandoTurno(false);
+
+                if (!hayTurno) {
+                    setMostrarSelectorDia(true);
+                }
+            } catch (err) {
+                console.warn("⚠️ Error en inicialización de turno:", err.message);
+                setVerificandoTurno(false);
                 setMostrarSelectorDia(true);
-            };
+            }
         };
 
         inicializar();
@@ -2495,36 +3582,32 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         setClientes(clientesData);
 
         // Buscar si el cliente existe en la lista o crear uno temporal
-        const clienteExistente = clientesData.find(c =>
-            c.nombre_negocio === clientePre.nombre_negocio ||
-            c.id === clientePre.id
-        );
+        const clienteExistente = clientesData.find((cliente) => coincideCliente(cliente, clientePre));
 
         if (clienteExistente) {
-            // 🆕 Combinar datos: priorizar lista_precio_nombre de la ruta si existe
+            // Con cliente fresco, confiar en la lista actual del backend/ruta y no arrastrar listas viejas guardadas.
             setClienteSeleccionado({
                 ...clienteExistente,
-                lista_precio_nombre: clientePre.lista_precio_nombre || clienteExistente.lista_precio_nombre,
-                tipo_lista_precio: clienteExistente.tipo_lista_precio || clientePre.lista_precio_nombre
+                lista_precio_nombre: clienteExistente.lista_precio_nombre || null,
+                tipo_lista_precio: clienteExistente.tipo_lista_precio || clienteExistente.lista_precio_nombre || null
             });
         } else {
-            // Usar el cliente de la ruta directamente
+            // Si no existe en la lista fresca, restaurar lo mínimo del cliente guardado.
             setClienteSeleccionado({
                 id: clientePre.id,
                 nombre: clientePre.nombre_contacto || clientePre.nombre_negocio,
                 nombre_negocio: clientePre.nombre_negocio,
                 direccion: clientePre.direccion,
                 telefono: clientePre.telefono,
-                // 🆕 Incluir lista de precios
-                lista_precio_nombre: clientePre.lista_precio_nombre,
-                tipo_lista_precio: clientePre.lista_precio_nombre
+                lista_precio_nombre: clientePre.lista_precio_nombre || null,
+                tipo_lista_precio: clientePre.tipo_lista_precio || clientePre.lista_precio_nombre || null
             });
         }
 
         verificarPendientes();
     };
 
-    const cargarDatos = async () => {
+    const cargarDatos = async (fechaObjetivo = fechaSeleccionada) => {
         // Cargar productos filtrados por disponible_app_ventas
         const productosData = obtenerProductos();
         const productosFiltrados = productosData.filter(p => p.disponible_app_ventas !== false);
@@ -2534,30 +3617,175 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         const clientesData = await obtenerClientes();
         setClientes(clientesData);
 
+        try {
+            const storageKey = obtenerClaveUltimoCliente(fechaObjetivo);
+            const ultimoClienteRaw = storageKey ? await AsyncStorage.getItem(storageKey) : null;
+            const ultimoCliente = ultimoClienteRaw ? JSON.parse(ultimoClienteRaw) : null;
+
+            if (ultimoCliente) {
+                const clienteRestaurado = clientesData.find((cliente) => coincideCliente(cliente, ultimoCliente));
+
+                if (clienteRestaurado) {
+                    seleccionarClienteDirecto({
+                        ...clienteRestaurado,
+                        lista_precio_nombre: clienteRestaurado?.lista_precio_nombre || null,
+                        tipo_lista_precio: clienteRestaurado?.tipo_lista_precio || clienteRestaurado?.lista_precio_nombre || null,
+                    });
+                    return;
+                }
+
+                seleccionarClienteDirecto({
+                    ...ultimoCliente,
+                    lista_precio_nombre: ultimoCliente?.lista_precio_nombre || null,
+                    tipo_lista_precio: ultimoCliente?.tipo_lista_precio || ultimoCliente?.lista_precio_nombre || null,
+                });
+                return;
+            }
+        } catch (error) {
+            console.log('⚠️ No se pudo restaurar el último cliente seleccionado:', error?.message || error);
+        }
+
         // NO seleccionar cliente por defecto - Obligar al usuario a elegir
         setClienteSeleccionado(null);
     };
 
+    const formatearFechaOperativaStock = useCallback((fecha) => {
+        if (fecha instanceof Date) {
+            const year = fecha.getFullYear();
+            const month = String(fecha.getMonth() + 1).padStart(2, '0');
+            const day = String(fecha.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        return String(fecha || '').slice(0, 10);
+    }, []);
+
+
+    const obtenerClaveUltimoCliente = useCallback((fechaObjetivo = fechaSeleccionada) => {
+        if (!userId) return '';
+        const fechaKey = formatearFechaOperativaStock(fechaObjetivo);
+        if (!fechaKey) return '';
+        return `@ventas_ultimo_cliente_${userId}_${fechaKey}`;
+    }, [userId, fechaSeleccionada, formatearFechaOperativaStock]);
+
+    const guardarUltimoClienteSeleccionado = useCallback(async (cliente, fechaObjetivo = fechaSeleccionada) => {
+        try {
+            const storageKey = obtenerClaveUltimoCliente(fechaObjetivo);
+            if (!storageKey) return;
+
+            if (!cliente || cliente.id === 'general') {
+                await AsyncStorage.removeItem(storageKey);
+                return;
+            }
+
+            await AsyncStorage.setItem(storageKey, JSON.stringify(cliente));
+        } catch (error) {
+            console.log('⚠️ No se pudo guardar el último cliente seleccionado:', error?.message || error);
+        }
+    }, [obtenerClaveUltimoCliente, fechaSeleccionada]);
+
+    const limpiarUltimoClienteSeleccionado = useCallback(async (fechaObjetivo = fechaSeleccionada) => {
+        try {
+            const storageKey = obtenerClaveUltimoCliente(fechaObjetivo);
+            if (!storageKey) return;
+            await AsyncStorage.removeItem(storageKey);
+        } catch (error) {
+            console.log('⚠️ No se pudo limpiar el último cliente seleccionado:', error?.message || error);
+        }
+    }, [obtenerClaveUltimoCliente, fechaSeleccionada]);
+
+    const reconciliarStockConVentasLocales = useCallback(async (stockBase, fechaOperativa) => {
+        const stockReconciliado = { ...stockBase };
+
+        const normalizarClave = (valor) => String(valor || '')
+            .normalize('NFD')
+            .replace(/[̀-ͯ]/g, '')
+            .toUpperCase()
+            .trim();
+
+        try {
+            const [ventasLocales, pendientesSync] = await Promise.all([
+                obtenerVentas(),
+                obtenerVentasPendientes(),
+            ]);
+
+            const idsPendientes = new Set(
+                (pendientesSync || [])
+                    .map((venta) => String(venta?.id || venta?.data?.id_local || venta?.data?.id || ''))
+                    .filter(Boolean)
+            );
+
+            const ventasNoSincronizadas = (ventasLocales || []).filter((venta) => {
+                const fechaVenta = String(venta?.fecha || '').slice(0, 10);
+                if (fechaVenta !== fechaOperativa) return false;
+                if (String(venta?.estado || '').toUpperCase() === 'ANULADA') return false;
+
+                const ventaId = String(venta?.id || '');
+                return venta?.sincronizada !== true || idsPendientes.has(ventaId);
+            });
+
+            ventasNoSincronizadas.forEach((venta) => {
+                const detalles = Array.isArray(venta?.detalles)
+                    ? venta.detalles
+                    : Array.isArray(venta?.productos)
+                        ? venta.productos
+                        : [];
+
+                detalles.forEach((item) => {
+                    const clave = normalizarClave(item?.nombre || item?.producto);
+                    const cantidad = parseInt(item?.cantidad, 10) || 0;
+                    if (!clave || cantidad <= 0) return;
+
+                    const stockActual = parseInt(stockReconciliado[clave] || 0, 10) || 0;
+                    stockReconciliado[clave] = Math.max(0, stockActual - cantidad);
+                });
+
+                const vencidas = Array.isArray(venta?.productos_vencidos)
+                    ? venta.productos_vencidos
+                    : Array.isArray(venta?.vencidas)
+                        ? venta.vencidas
+                        : [];
+
+                vencidas.forEach((item) => {
+                    const clave = normalizarClave(item?.nombre || item?.producto);
+                    const cantidad = parseInt(item?.cantidad, 10) || 0;
+                    if (!clave || cantidad <= 0) return;
+
+                    const stockActual = parseInt(stockReconciliado[clave] || 0, 10) || 0;
+                    stockReconciliado[clave] = Math.max(0, stockActual - cantidad);
+                });
+            });
+
+            return stockReconciliado;
+        } catch (error) {
+            console.log('⚠️ No se pudo reconciliar stock con ventas locales:', error?.message || error);
+            return stockBase;
+        }
+    }, []);
+
     // 🆕 Cargar stock del cargue según el día y fecha
     const cargarStockCargue = async (dia, fecha) => {
         try {
-            // Formatear fecha a YYYY-MM-DD
-            let fechaFormateada;
-            if (fecha instanceof Date) {
-                const year = fecha.getFullYear();
-                const month = String(fecha.getMonth() + 1).padStart(2, '0');
-                const day = String(fecha.getDate()).padStart(2, '0');
-                fechaFormateada = `${year}-${month}-${day}`;
-            } else {
-                fechaFormateada = fecha;
+            const fechaFormateada = formatearFechaOperativaStock(fecha);
+            const stockPrevio = { ...stockCargue };
+            
+            // 🆕 Intentar cargar stock desde caché de AsyncStorage
+            const cacheKey = `@stock_cargue_${userId}_${fechaFormateada}`;
+            let stockCache = null;
+            try {
+                const stockCacheStr = await AsyncStorage.getItem(cacheKey);
+                if (stockCacheStr) {
+                    stockCache = JSON.parse(stockCacheStr);
+                    console.log('📦 Stock en caché encontrado:', Object.keys(stockCache).length, 'productos');
+                }
+            } catch (e) {
+                console.log('⚠️ No se pudo leer caché de stock:', e?.message);
             }
 
-            // 🆕 Agregar timeout de 30 segundos
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 🔧 Reducido de 30s a 15s
 
             try {
-                // Llamar al endpoint de obtener cargue
                 const response = await fetch(
                     `${ENDPOINTS.OBTENER_CARGUE}?vendedor_id=${userId}&dia=${dia}&fecha=${fechaFormateada}`,
                     { signal: controller.signal }
@@ -2567,76 +3795,124 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 const data = await response.json();
 
                 if (data && Object.keys(data).length > 0) {
-                    // Crear objeto con stock por producto
                     const stockPorProducto = {};
-                    const preciosAlternos = {}; // 🆕
+                    const preciosAlternos = {};
                     let totalProductos = 0;
                     let estadoCargue = 'DESCONOCIDO';
 
                     Object.keys(data).forEach(nombreProducto => {
                         const item = data[nombreProducto];
-                        // Calcular stock disponible (total ya viene calculado desde backend)
                         const stockDisponible = parseInt(item.quantity) || 0;
                         stockPorProducto[nombreProducto.toUpperCase()] = stockDisponible;
                         totalProductos++;
 
-                        // Capturar estado del cargue (todos deberían tener el mismo estado)
                         if (item.estado) {
                             estadoCargue = item.estado;
                         }
 
-                        // 🆕 Capturar precios alternos
                         if (item.precios_alternos) {
                             preciosAlternos[nombreProducto.toUpperCase()] = item.precios_alternos;
                         }
                     });
 
-                    setStockCargue(stockPorProducto);
-                    setPreciosAlternosCargue(preciosAlternos); // 🆕 Guardar precios alternos
-                    console.log('📦 Stock cargado:', Object.keys(stockPorProducto).length, 'productos');
+                    const stockReconciliado = await reconciliarStockConVentasLocales(stockPorProducto, fechaFormateada);
 
-                    if (Object.keys(preciosAlternos).length > 0) {
-                        // 🆕 No mostrar alert, solo guardar silenciosamente
+                    // 🆕 Guardar stock en caché para recuperación offline
+                    try {
+                        await AsyncStorage.setItem(cacheKey, JSON.stringify(stockReconciliado));
+                        console.log('💾 Stock guardado en caché');
+                    } catch (e) {
+                        console.log('⚠️ No se pudo guardar caché de stock:', e?.message);
                     }
 
-                    // 🆕 Retornar información del cargue
+                    setStockCargue(stockReconciliado);
+                    setPreciosAlternosCargue(preciosAlternos);
+                    console.log('📦 Stock cargado/reconciliado:', Object.keys(stockReconciliado).length, 'productos');
+
                     return {
                         hayCargue: true,
                         totalProductos,
                         estado: estadoCargue
                     };
+                }
+
+                console.log('⚠️ No hay cargue para esta fecha');
+                setStockCargue({});
+                return {
+                    hayCargue: false,
+                    totalProductos: 0,
+                    estado: null
+                };
+            } catch (fetchError) {
+                clearTimeout(timeoutId);
+                const mensaje = String(fetchError?.message || '');
+                const isNetworkError = fetchError.name === 'AbortError' || mensaje.includes('Network') || mensaje.includes('fetch');
+
+                if (fetchError.name === 'AbortError') {
+                    console.log('⏱️ Timeout cargando stock; intentando recuperar desde caché');
                 } else {
-                    console.log('⚠️ No hay cargue para esta fecha');
+                    console.log('⚠️ Error cargando stock; intentando recuperar desde caché:', mensaje);
+                }
+
+                // 🆕 RECUPERACIÓN OFFLINE: Usar caché si existe
+                const stockAUsar = stockCache || stockPrevio;
+                
+                if (Object.keys(stockAUsar).length > 0) {
+                    // Reconciliar con ventas locales
+                    const stockReconciliado = await reconciliarStockConVentasLocales(stockAUsar, fechaFormateada);
+                    setStockCargue(stockReconciliado);
+                    console.log('✅ Stock recuperado desde caché:', Object.keys(stockReconciliado).length, 'productos');
+                    
+                    return {
+                        hayCargue: true,
+                        totalProductos: Object.keys(stockReconciliado).length,
+                        estado: 'DESPACHO', // Asumir DESPACHO si hay stock en caché
+                        offline: isNetworkError,
+                        stockLocalConservado: true
+                    };
+                } else {
                     setStockCargue({});
+                    console.log('❌ No hay stock en caché ni en memoria');
                     return {
                         hayCargue: false,
                         totalProductos: 0,
-                        estado: null
+                        estado: null,
+                        offline: isNetworkError,
+                        stockLocalConservado: false
                     };
                 }
-            } catch (fetchError) {
-                clearTimeout(timeoutId);
-                const isNetworkError = fetchError.message.includes('Network') || fetchError.message.includes('fetch');
-                if (fetchError.name === 'AbortError') {
-                    console.error('⏱️ Timeout cargando stock');
-                } else {
-                    console.error('❌ Error cargando stock:', fetchError.message);
-                }
-                setStockCargue({});
-                return { hayCargue: false, totalProductos: 0, estado: null, offline: isNetworkError };
             }
         } catch (error) {
-            console.error('❌ Error general cargando stock:', error);
-            setStockCargue({});
-            return { hayCargue: false, totalProductos: 0, estado: null, offline: true };
+            console.log('⚠️ Error general cargando stock:', error?.message || error);
+            return {
+                hayCargue: Object.keys(stockCargue).length > 0,
+                totalProductos: Object.keys(stockCargue).length,
+                estado: null,
+                offline: true,
+                stockLocalConservado: Object.keys(stockCargue).length > 0
+            };
         }
     };
 
     // Verificar ventas pendientes de sincronizar
     const verificarPendientes = async () => {
         const pendientes = await obtenerVentasPendientes();
-        setVentasPendientes(pendientes.length);
+        setVentasPendientes(contarPendientesSincronizables(pendientes));
     };
+
+    const refrescarStockSilencioso = useCallback(async () => {
+        if (!turnoAbierto || !diaSeleccionado || !fechaSeleccionada || !userId) return;
+        if (Date.now() < (bloqueoRefreshStockHastaRef.current || 0)) return;
+
+        try {
+            const netInfo = await NetInfo.fetch();
+            if (!netInfo.isConnected) return;
+
+            await cargarStockCargue(diaSeleccionado, fechaSeleccionada);
+        } catch (error) {
+            console.log('⚠️ Refresh silencioso de stock falló:', error?.message || error);
+        }
+    }, [turnoAbierto, diaSeleccionado, fechaSeleccionada, userId]);
 
     // Función para sincronizar al arrastrar hacia abajo (con timeout y manejo de errores)
     const onRefresh = async () => {
@@ -2779,6 +4055,30 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         }
     };
 
+    useEffect(() => {
+        if (!turnoAbierto || !diaSeleccionado || !fechaSeleccionada || !userId) return undefined;
+
+        const appStateSub = AppState.addEventListener('change', (nextState) => {
+            if (nextState === 'active') {
+                refrescarStockSilencioso();
+            }
+        });
+
+        return () => {
+            appStateSub?.remove?.();
+        };
+    }, [turnoAbierto, diaSeleccionado, fechaSeleccionada, userId, refrescarStockSilencioso]);
+
+    useEffect(() => {
+        if (!turnoAbierto || !diaSeleccionado || !fechaSeleccionada || !userId) return undefined;
+
+        const intervalId = setInterval(() => {
+            refrescarStockSilencioso();
+        }, 45000);
+
+        return () => clearInterval(intervalId);
+    }, [turnoAbierto, diaSeleccionado, fechaSeleccionada, userId, refrescarStockSilencioso]);
+
     const normalizarTexto = useCallback((txt) => (
         (txt || '')
             .toString()
@@ -2908,6 +4208,14 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         const precioUnitario = Number(preciosPorProductoId[Number(producto.id)] ?? producto.precio ?? 0);
         const maximoPermitido = obtenerMaximoEditableProducto(nombreProducto);
 
+        if (maximoPermitido <= 0) {
+            Alert.alert(
+                'Sin stock',
+                `No tienes unidades disponibles de "${nombreProducto}" para agregar en esta edición.`
+            );
+            return;
+        }
+
         setCarritoEdicion((prev) => {
             const itemActual = prev[nombreProducto];
             const cantidadNueva = (itemActual?.cantidad || 0) + 1;
@@ -2972,6 +4280,67 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         return { subtotal: subtotalVal, total: totalVal };
     }, [carrito, productosPorId, getPrecioProducto, descuento]);
 
+    const productosVentaPreview = useMemo(() => (
+        Object.entries(carrito)
+            .filter(([, cantidad]) => cantidad > 0)
+            .map(([idStr, cantidad]) => {
+                const id = Number(idStr);
+                const producto = productosPorId.get(id);
+                if (!producto) return null;
+
+                const precio = preciosPersonalizados[id] !== undefined
+                    ? preciosPersonalizados[id]
+                    : producto.precio;
+
+                return {
+                    id: producto.id,
+                    nombre: producto.nombre,
+                    precio,
+                    cantidad,
+                    subtotal: precio * cantidad,
+                };
+            })
+            .filter(Boolean)
+    ), [carrito, productosPorId, preciosPersonalizados]);
+
+    const construirAdvertenciasVencidasVenta = useCallback((vencidasObjetivo = []) => {
+        if (!vencidasObjetivo || vencidasObjetivo.length === 0) return [];
+
+        return vencidasObjetivo.reduce((acumulado, vencida) => {
+            const nombreProducto = String(vencida?.nombre || '').toUpperCase();
+            const stockActual = stockCargue[nombreProducto] || 0;
+            const cantidadVendida = productosVentaPreview.find(
+                (producto) => String(producto?.nombre || '').toUpperCase() === nombreProducto
+            )?.cantidad || 0;
+            const stockDisponible = stockActual - cantidadVendida;
+
+            if (vencida.cantidad > stockDisponible) {
+                if (stockDisponible <= 0) {
+                    acumulado.push(`⚠️ ${vencida.nombre}: No tienes stock para cambiar ${vencida.cantidad} vencidas`);
+                } else {
+                    acumulado.push(`⚠️ ${vencida.nombre}: Solo tienes ${stockDisponible} para cambiar ${vencida.cantidad} vencidas`);
+                }
+            }
+
+            return acumulado;
+        }, []);
+    }, [stockCargue, productosVentaPreview]);
+
+    const advertenciasVencidasPreview = useMemo(() => {
+        return construirAdvertenciasVencidasVenta(vencidas);
+    }, [vencidas, construirAdvertenciasVencidasVenta]);
+
+    const obtenerStockDisponibleVencidaVenta = useCallback((nombreProducto = '') => {
+        const nombreNormalizado = normalizarNombreStockEdicion(nombreProducto);
+        const claveStock = resolverClaveStockEdicion(nombreProducto);
+        const stockActual = parseInt(stockCargue[claveStock] || 0, 10) || 0;
+        const cantidadVendida = productosVentaPreview.find((producto) => (
+            normalizarNombreStockEdicion(producto?.nombre || producto?.producto || '') === nombreNormalizado
+        ))?.cantidad || 0;
+
+        return Math.max(0, stockActual - cantidadVendida);
+    }, [normalizarNombreStockEdicion, resolverClaveStockEdicion, stockCargue, productosVentaPreview]);
+
     // Completar venta
     const completarVenta = async () => {
         // Validar que haya productos en el carrito O vencidas
@@ -2989,8 +4358,17 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         }
 
         // 🆕 Validar tope de venta para clientes ocasionales y BLOQUEAR
-        if (clienteSeleccionado.esOcasional && clienteSeleccionado.tope_venta) {
-            const topeVenta = parseFloat(clienteSeleccionado.tope_venta);
+        if (clienteSeleccionado.esOcasional) {
+            let topeVenta = parseFloat(topeVentaRutaOcasional || clienteSeleccionado.tope_venta || 60000);
+
+            try {
+                const configRuta = await verificarFlagsRuta();
+                if (configRuta?.tope) {
+                    topeVenta = parseFloat(configRuta.tope) || topeVenta;
+                }
+            } catch (e) {
+                console.log('⚠️ No se pudo refrescar el tope ocasional antes de vender:', e?.message || e);
+            }
 
             // 🆕 Calcular suma de ventas ocasionales ya hechas hoy
             const totalOcasionalesPrevias = (ventasDelDia || []).reduce((sum, v) => {
@@ -3017,22 +4395,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
         // 🆕 Función interna para procesar la venta después de validaciones
         const procesarVenta = () => {
-            // Preparar datos de la venta
-            const productosVenta = productosEnCarrito.map(idStr => {
-                const id = parseInt(idStr);
-                const producto = productosPorId.get(id);
-                if (!producto) return null;
-                const cantidad = carrito[id];
-
-                return {
-                    id: producto.id,
-                    nombre: producto.nombre,
-                    // 🆕 Usar precio personalizado si existe
-                    precio: preciosPersonalizados[id] !== undefined ? preciosPersonalizados[id] : producto.precio,
-                    cantidad: cantidad,
-                    subtotal: (preciosPersonalizados[id] !== undefined ? preciosPersonalizados[id] : producto.precio) * cantidad
-                };
-            }).filter(Boolean);
+            const productosVenta = productosVentaPreview;
 
             const venta = {
                 cliente_id: clienteSeleccionado.id,
@@ -3056,24 +4419,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             setVentaTemporal(venta);
 
-            // 🆕 Validar si hay stock suficiente para cambiar vencidas
-            const advertenciasVencidas = [];
-            if (vencidas && vencidas.length > 0) {
-                vencidas.forEach(vencida => {
-                    const nombreProducto = vencida.nombre.toUpperCase();
-                    const stockActual = stockCargue[nombreProducto] || 0;
-                    const cantidadVendida = productosVenta.find(p => p.nombre.toUpperCase() === nombreProducto)?.cantidad || 0;
-                    const stockDisponible = stockActual - cantidadVendida;
-
-                    if (vencida.cantidad > stockDisponible) {
-                        if (stockDisponible <= 0) {
-                            advertenciasVencidas.push(`⚠️ ${vencida.nombre}: No tienes stock para cambiar ${vencida.cantidad} vencidas`);
-                        } else {
-                            advertenciasVencidas.push(`⚠️ ${vencida.nombre}: Solo tienes ${stockDisponible} para cambiar ${vencida.cantidad} vencidas`);
-                        }
-                    }
-                });
-            }
+            const advertenciasVencidas = advertenciasVencidasPreview;
 
             // Si hay advertencias, mostrar alerta pero permitir continuar
             // Función auxiliar para abrir el modal correcto
@@ -3095,10 +4441,10 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         numero_pedido: pedidoClienteSeleccionado.numero_pedido,
                         detalles: detallesVisuales // 🆕 Detalles actualizados
                     });
-                    setMostrarResumenEntrega(true);
+                    requestAnimationFrame(() => setMostrarResumenEntrega(true));
                 } else {
                     // Si es Venta Normal -> Modal Grande (ResumenVentaModal)
-                    setMostrarResumen(true);
+                    requestAnimationFrame(() => setMostrarResumen(true));
                 }
             };
 
@@ -3116,35 +4462,20 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             }
         };
 
-        // 🆕 DETECCIÓN DE VENTA REPETIDA — combina ventas locales + backend
-        const norm = (t) => t ? t.toString().toLowerCase().trim() : '';
-        const cNegocio = norm(clienteSeleccionado.negocio);
-        const cNombre = norm(clienteSeleccionado.nombre);
-
-        const anuladoEnBackend = ventasBackendDia.some(b =>
-            b.estado === 'ANULADA' &&
-            ((b.nombre_negocio && norm(b.nombre_negocio) === cNegocio) ||
-                (b.cliente_nombre && norm(b.cliente_nombre) === cNombre))
-        );
-
-        const ventaPrevia = !anuladoEnBackend && (
-            ventasDelDia.find(v => v.estado !== 'ANULADA' && v.cliente_id == clienteSeleccionado.id) ||
-            ventasBackendDia.find(v =>
-                v.estado !== 'ANULADA' && (
-                    (norm(v.nombre_negocio) && norm(v.nombre_negocio) === cNegocio) ||
-                    (norm(v.cliente_nombre) && norm(v.cliente_nombre) === cNombre)
-                )
-            )
-        );
+        // 🆕 DETECCIÓN DE VENTA REPETIDA — prioriza la venta más reciente y completa del cliente
+        const ventaPrevia = obtenerVentaPreviaCliente(clienteSeleccionado);
 
         // Si ya vendió y NO estamos editando un pedido específico (flujo normal)
         if (ventaPrevia && !pedidoClienteSeleccionado) {
             Alert.alert(
                 '⚠️ Cliente Ya Atendido',
-                `Ya realizaste una venta a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\n¿Deseas registrar otra venta?`,
+                `Ya realizaste una venta a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\nSi necesitas ajustar algo, edita la venta existente.`,
                 [
                     { text: 'Cancelar', style: 'cancel' },
-                    { text: 'Sí, Continuar', onPress: procesarVenta }
+                    {
+                        text: 'Editar venta',
+                        onPress: () => abrirEdicionVenta(ventaPrevia)
+                    }
                 ]
             );
             return;
@@ -3248,17 +4579,39 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     console.log('🗑️ Vencidas detectadas en pedido:', productosVencidosFormateados.length);
                 }
 
-                // 3. Actualizar en Backend
-                await actualizarPedido(pedidoClienteSeleccionado.id, {
+                // 3. Actualizar en Backend (NO BLOQUEANTE)
+                const payloadPedido = {
                     estado: 'ENTREGADA',
                     total: ventaConDatos.total,
                     metodo_pago: ventaConDatos.metodo_pago,
                     detalles: detallesNuevos,
                     novedades: novedades,
-                    productos_vencidos: productosVencidosFormateados, // 🆕 Enviar vencidas
-                    foto_vencidos: fotosVencidosBase64, // 🆕 Enviar fotos base64
-                    fecha_entrega: fechaFormateada.split('T')[0]
-                });
+                    productos_vencidos: productosVencidosFormateados,
+                    foto_vencidos: fotosVencidosBase64,
+                    fecha_entrega: fechaFormateada.split('T')[0],
+                    _esPedido: true // 🆕 Flag para el sync loop
+                };
+
+                // Estrategia "Danza del Vendedor": Esperar 6s o liberar UI
+                console.log('📦 Iniciando sincronización de pedido (Race 6s)...');
+                
+                // IIFE para sincronizar en background
+                const sincronizarPedidoBackground = async () => {
+                    try {
+                        await actualizarPedido(pedidoClienteSeleccionado.id, payloadPedido);
+                        console.log('✅ Pedido sincronizado correctamente en background');
+                    } catch (pedErr) {
+                        console.warn('⚠️ Falló sincronización inmediata de pedido, a cola de pendientes:', pedErr.message);
+                        await agregarAColaPendientes(payloadPedido, pedidoClienteSeleccionado.id);
+                        sincronizarPendientesAutomatico({ forzar: true }); // Gatillar reintento manual
+                    }
+                };
+
+                // Correr la carrera
+                await Promise.race([
+                    sincronizarPedidoBackground(),
+                    new Promise((resolve) => setTimeout(resolve, 6000)) // 6 segundos de cortesía
+                ]);
 
                 // 🆕 ACTUALIZAR LISTAS LOCALES INMEDIATAMENTE
                 // Mover de Pendientes a Entregados para actualizar la UI (Badge Verde)
@@ -3344,13 +4697,29 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             }
 
             // ✅ Agregar venta recién guardada al estado inmediatamente (sin esperar recarga)
-            setVentasDelDia(prev => [...prev, {
+            const ventaHistorialReciente = normalizarItemHistorialLocal({
                 ...ventaGuardada,
+                origen: 'RUTA',
                 cliente_nombre: ventaConDatos.cliente_nombre,
                 cliente_negocio: ventaConDatos.cliente_negocio,
+                vendedor: vendedorNombre || userId,
                 fecha: ventaConDatos.fecha,
-                total: ventaConDatos.total
-            }]);
+                fecha_creacion: ventaConDatos.fecha,
+                fecha_actualizacion: ventaConDatos.fecha,
+                total: ventaConDatos.total,
+                detalles: Array.isArray(ventaConDatos.productos) ? ventaConDatos.productos : [],
+                productos: Array.isArray(ventaConDatos.productos) ? ventaConDatos.productos : [],
+                subtotal: ventaConDatos.subtotal,
+                descuento: ventaConDatos.descuento,
+                vencidas: ventaConDatos.vencidas,
+                productos_vencidos: ventaConDatos.productos_vencidos || ventaConDatos.vencidas || [],
+                metodo_pago: metodoPago,
+            });
+
+            ultimaVentaHistorialRef.current = ventaHistorialReciente;
+            setVentasDelDia(prev => [...prev, ventaHistorialReciente]);
+            setHistorialResumenPreview(prev => fusionarVentaRecienteEnHistorial(prev, ventaHistorialReciente));
+            setHistorialReimpresion(prev => prev.length > 0 ? fusionarVentaRecienteEnHistorial(prev, ventaHistorialReciente) : prev);
 
             // 🆕 UX: El avance de cliente se hará DESPUÉS de que interactúen con el modal de Imprimir.
 
@@ -3362,7 +4731,15 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             // 🆕 LIMPIEZA CRÍTICA: Limpiar estado inmediatamente para evitar duplicados si el usuario tarda en cerrar el Alert
             // Guardamos copia para el ticket/alert
-            const ventaParaTicket = { ...ventaGuardada };
+            const ventaParaTicket = {
+                ...ventaHistorialReciente,
+                id: ventaGuardada?.id ?? ventaHistorialReciente.id,
+                consecutivo: ventaGuardada?.consecutivo ?? ventaHistorialReciente?.consecutivo,
+                productos: Array.isArray(ventaHistorialReciente?.productos)
+                    ? ventaHistorialReciente.productos
+                    : (Array.isArray(ventaHistorialReciente?.detalles) ? ventaHistorialReciente.detalles : []),
+                fecha: ventaHistorialReciente?.fecha_actualizacion || ventaHistorialReciente?.fecha_creacion || ventaHistorialReciente?.fecha,
+            };
 
             // Limpiar estados reactivos que podrían causar reenvíos
             setVentaTemporal(null);
@@ -3376,7 +4753,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     text: 'Cerrar',
                     onPress: () => {
                         limpiarVenta();
-                        avanzarAlSiguienteCliente({ limpiarAntes: false, mostrarAvisoFin: true });
+                        continuarDespuesDeVentaGuardada({ limpiarAntes: false, mostrarAvisoFin: true });
                     },
                     style: 'cancel'
                 }
@@ -3387,9 +4764,9 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 text: 'Imprimir',
                 onPress: async () => {
                     try {
-                        await imprimirTicket(ventaGuardada);
+                        await imprimirTicket(ventaParaTicket);
                         limpiarVenta(); // Solo limpiar si la impresión fue exitosa
-                        avanzarAlSiguienteCliente({ limpiarAntes: false, mostrarAvisoFin: true });
+                        continuarDespuesDeVentaGuardada({ limpiarAntes: false, mostrarAvisoFin: true });
                     } catch (error) {
                         console.error('❌ Error al imprimir:', error);
                         Alert.alert(
@@ -3408,7 +4785,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     text: 'WhatsApp',
                     onPress: () => {
                         enviarFacturaWhatsApp(ventaGuardada, opcionesEnvio.whatsapp, () => {
-                            avanzarAlSiguienteCliente({ limpiarAntes: false, mostrarAvisoFin: true });
+                            continuarDespuesDeVentaGuardada({ limpiarAntes: false, mostrarAvisoFin: true });
                         });
                     }
                 });
@@ -3420,7 +4797,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     text: 'Correo',
                     onPress: () => {
                         enviarFacturaCorreo(ventaGuardada, opcionesEnvio.correo || opcionesEnvio.email, () => {
-                            avanzarAlSiguienteCliente({ limpiarAntes: false, mostrarAvisoFin: true });
+                            continuarDespuesDeVentaGuardada({ limpiarAntes: false, mostrarAvisoFin: true });
                         });
                     }
                 });
@@ -3563,6 +4940,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         if (!cliente) return;
         setClienteSeleccionadoEsPedido(esClientePedido(cliente));
         setClienteSeleccionado(cliente);
+        guardarUltimoClienteSeleccionado(cliente);
 
         // 🆕 Consultar ventas backend del día sin bloquear (Fire-and-forget)
         if (fechaSeleccionada && userId) {
@@ -3632,33 +5010,23 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
 
         // 🆕 Verificar si ya le vendió hoy
-        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
-        const cNegocio = norm(cliente.negocio);
-        const cNombre = norm(cliente.nombre);
+        const ventaPrevia = obtenerVentaPreviaCliente(cliente);
 
-        const anuladoEnBackend = ventasBackendDia.some(b =>
-            b.estado === 'ANULADA' &&
-            ((b.nombre_negocio && norm(b.nombre_negocio) === cNegocio) ||
-                (b.cliente_nombre && norm(b.cliente_nombre) === cNombre))
-        );
+        if (ventaPrevia) {
 
-        const yaVendidoHoy = !anuladoEnBackend && ventasDelDia.some(venta => {
-            if (venta.estado === 'ANULADA') return false; // 🆕 Ignorar anuladas explícitas
-            const vNegocio = norm(venta.cliente_negocio);
-            const vNombre = norm(venta.cliente_nombre);
-            return (vNegocio && vNegocio === cNegocio) || (vNombre && vNombre === cNombre);
-        });
-
-        if (yaVendidoHoy) {
             Alert.alert(
                 '⚠️ Cliente con Venta',
-                `Ya realizaste una venta a ${cliente.negocio || cliente.nombre} el día de hoy.\n\n¿Deseas continuar de todas formas?`,
+                `Ya realizaste una venta a ${cliente.negocio || cliente.nombre} el día de hoy.
+
+Si necesitas ajustar algo, edita la venta existente.`,
                 [
                     { text: 'Cancelar', style: 'cancel' },
                     {
-                        text: 'Sí, Continuar',
+                        text: 'Editar venta',
                         onPress: () => {
-                            seleccionarClienteDirecto(cliente);
+                            if (ventaPrevia) {
+                                abrirEdicionVenta(ventaPrevia);
+                            }
                         }
                     }
                 ]
@@ -3670,6 +5038,10 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     };
 
     const abrirClienteOcasionalRapido = useCallback(async () => {
+        if (clienteSeleccionado && !clienteSeleccionado.esOcasional) {
+            clienteAntesVentaRapidaRef.current = clienteSeleccionado;
+        }
+
         const totalOcasionalesPrevias = (ventasDelDia || []).reduce((sum, v) => {
             const esOcasional = v.cliente_ocasional ||
                 (v.cliente_negocio && String(v.cliente_negocio).toUpperCase().includes('(OCASIONAL)')) ||
@@ -3681,28 +5053,21 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             return sum;
         }, 0);
 
-        let topeVentaLimit = 60000;
+        let topeVentaLimit = parseFloat(topeVentaRutaOcasional || 60000) || 60000;
         try {
-            const vendedorIdLimpio = String(userId).toUpperCase().replace('ID', '');
-            const resp = await fetch(`${API_URL}/api/rutas/?vendedor_id=ID${vendedorIdLimpio}`);
-            if (resp.ok) {
-                const data = await resp.json();
-                if (data.length > 0) {
-                    const ventaRapidaPermitida = data.every(r => r.permitir_venta_rapida !== false);
-                    setFlagVentaRapida(ventaRapidaPermitida);
+            const configRuta = await verificarFlagsRuta();
+            const ventaRapidaPermitida = configRuta?.rapida !== false;
 
-                    if (!ventaRapidaPermitida) {
-                        Alert.alert(
-                            'No disponible',
-                            'La venta rápida está deshabilitada para esta ruta.\n\nContacta al administrador.'
-                        );
-                        return;
-                    }
+            if (!ventaRapidaPermitida) {
+                Alert.alert(
+                    'No disponible',
+                    'La venta rápida está deshabilitada para esta ruta.\n\nContacta al administrador.'
+                );
+                return;
+            }
 
-                    if (data[0].tope_cliente_ocasional) {
-                        topeVentaLimit = parseFloat(data[0].tope_cliente_ocasional);
-                    }
-                }
+            if (configRuta?.tope) {
+                topeVentaLimit = parseFloat(configRuta.tope) || topeVentaLimit;
             }
         } catch (e) {
             console.log('Error obteniendo tope de ruta, usando fallback:', e);
@@ -3729,9 +5094,11 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
         setMostrarSelectorCliente(false);
         setMostrarModalOcasional(true);
-    }, [ventasDelDia, userId, flagVentaRapida]);
+    }, [ventasDelDia, userId, flagVentaRapida, clienteSeleccionado, topeVentaRutaOcasional, verificarFlagsRuta]);
 
     const avanzarAlSiguienteCliente = ({ limpiarAntes = false, mostrarAvisoFin = true } = {}) => {
+        Keyboard.dismiss(); // 🔧 Fix teclado: cerrar antes de transición para evitar empuje visual (AI-CONTEXT)
+        
         const lista = Array.isArray(clientesOrdenDia) ? clientesOrdenDia : [];
 
         if (lista.length === 0) {
@@ -3754,10 +5121,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         let idx = lista.findIndex((c) => String(c.id) === idActual);
 
         if (idx < 0) {
-            const norm = (s) => (s || '').toString().trim().toUpperCase();
-            const negocioActual = norm(clienteSeleccionado.negocio);
-            const nombreActual = norm(clienteSeleccionado.nombre);
-            idx = lista.findIndex((c) => norm(c.negocio) === negocioActual || norm(c.nombre) === nombreActual);
+            idx = lista.findIndex((c) => coincideCliente(c, clienteSeleccionado));
         }
 
         const siguiente = idx >= 0 ? lista[idx + 1] : lista[0];
@@ -3795,6 +5159,27 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             setClienteSeleccionadoEsPedido(false);
         }
     }, [clienteSeleccionado, clientesOrdenDia]);
+
+    const continuarDespuesDeVentaGuardada = ({ limpiarAntes = false, mostrarAvisoFin = true } = {}) => {
+        const clientePrevioRuta = clienteAntesVentaRapidaRef.current;
+        const clienteActualEsOcasional = !!clienteSeleccionado?.esOcasional;
+
+        if (limpiarAntes) {
+            limpiarVenta();
+        }
+
+        if (clienteActualEsOcasional && clientePrevioRuta) {
+            clienteAntesVentaRapidaRef.current = null;
+            seleccionarClienteDirecto(clientePrevioRuta);
+            return;
+        }
+
+        if (!clienteActualEsOcasional) {
+            clienteAntesVentaRapidaRef.current = null;
+        }
+
+        avanzarAlSiguienteCliente({ limpiarAntes: false, mostrarAvisoFin });
+    };
 
     useEffect(() => {
         const showSub = Keyboard.addListener('keyboardDidShow', (event) => {
@@ -3861,7 +5246,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         cancelarCompensacionAnimada,
         refrescarBaseBloqueSuperior,
         modalEdicionVisible,
-        esModoListaScroll
+        esModoListaScroll,
+        asegurarVisibilidadInputCantidad
     ]);
 
     // Cargar orden del día en segundo plano para que el auto-siguiente funcione sin abrir selector
@@ -3895,14 +5281,26 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
     // 🆕 Verificar si el cliente tiene pedido pendiente
     const verificarPedidoCliente = (cliente) => {
-        const norm = (str) => str ? str.toString().toUpperCase().trim() : '';
-        const cNegocio = norm(cliente.negocio);
-        const cNombre = norm(cliente.nombre);
-
-        const pedidosCliente = pedidosPendientes.filter(p => {
-            const pDestinatario = norm(p.destinatario);
-            return (pDestinatario === cNegocio) || (pDestinatario === cNombre);
-        });
+        const pedidoPreferido = cliente?.__pedidoVista || null;
+        let pedidosCliente;
+        if (pedidoPreferido) {
+            pedidosCliente = [pedidoPreferido, ...pedidosPendientes.filter((pedido) => String(pedido?.id || '') !== String(pedidoPreferido?.id || ''))];
+        } else {
+            // Buscar por coincideCliente Y también por nombre/negocio vs destinatario
+            // (cubre el caso de la flecha ⏭️ donde coincideCliente puede fallar por IDs no comparables)
+            const normT = (s) => (s || '').toString().trim().toUpperCase();
+            const negocioCliente = normT(cliente?.negocio);
+            const nombreCliente = normT(cliente?.nombre);
+            
+            // 🔧 Unir arreglos: si el pedido ya fue entregado, debe recuperarse al navegar con flechas
+            const todosLosPedidos = [...pedidosPendientes, ...(pedidosEntregadosHoy || [])];
+            
+            pedidosCliente = todosLosPedidos.filter((pedido) => {
+                if (coincideCliente(cliente, pedido)) return true;
+                const dest = normT(pedido?.destinatario);
+                return dest && (dest === negocioCliente || dest === nombreCliente);
+            });
+        }
 
         const obtenerPuntajePedido = (pedido) => {
             const estado = (pedido?.estado || '').toString().toUpperCase();
@@ -3939,9 +5337,21 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         console.log('🔍 Pedido del cliente:', pedido ? `#${pedido.numero_pedido}` : 'Sin pedido');
     };
 
+    useEffect(() => {
+        if (!clienteSeleccionado) return;
+        verificarPedidoCliente(clienteSeleccionado);
+    }, [pedidosPendientes, clienteSeleccionado]);
+
     // 🆕 Editar pedido del cliente seleccionado (cargar en carrito)
     const editarPedidoClienteSeleccionado = () => {
         if (!pedidoClienteSeleccionado) return;
+
+        // 🛡️ Guard de seguridad: EVITAR editar un pedido ya entregado
+        const esEntregado = ['ENTREGADO', 'ENTREGADA'].includes((pedidoClienteSeleccionado.estado || '').toUpperCase());
+        if (esEntregado) {
+            Alert.alert('📦 Ya Entregado', 'Este pedido ya ha sido entregado y no puede editarse.');
+            return;
+        }
 
         const nuevoCarrito = {};
         let encontrados = 0;
@@ -3986,7 +5396,25 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     // 🆕 Marcar pedido del cliente seleccionado como entregado
     const marcarEntregadoClienteSeleccionado = () => {
         if (!pedidoClienteSeleccionado) return;
-        marcarPedidoEntregado(pedidoClienteSeleccionado);
+
+        // 🛡️ Guard de seguridad: EVITAR re-entregar un pedido ya cerrado
+        const esEntregado = ['ENTREGADO', 'ENTREGADA'].includes((pedidoClienteSeleccionado.estado || '').toUpperCase());
+        if (esEntregado) {
+            Alert.alert('📦 Ya Entregado', 'Este pedido ya fue marcado como entregado hoy.');
+            return;
+        }
+
+        if (!pedidoClienteSeleccionado) return;
+        // 🔧 Normalizar detalles: el backend puede devolver 'detalles' o 'detalles_info'
+        const detallesNormalizados = Array.isArray(pedidoClienteSeleccionado.detalles) && pedidoClienteSeleccionado.detalles.length > 0
+            ? pedidoClienteSeleccionado.detalles
+            : Array.isArray(pedidoClienteSeleccionado.detalles_info) && pedidoClienteSeleccionado.detalles_info.length > 0
+                ? pedidoClienteSeleccionado.detalles_info
+                : [];
+        marcarPedidoEntregado({
+            ...pedidoClienteSeleccionado,
+            detalles: detallesNormalizados
+        });
     };
 
 
@@ -4011,30 +5439,154 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         } catch (error) {
             // No crítico
         }
+
+        setRefreshClientesToken((prev) => prev + 1);
     };
 
     // Manejar vencidas
     const handleGuardarVencidas = (productosVencidos, foto) => {
+        // 🆕 Calcular diferencia con vencidas anteriores para ajustar stock correctamente
+        const vencidasAnteriores = vencidas || [];
+        
         setVencidas(productosVencidos);
         setFotoVencidas(foto);
+
+        // 🆕 Ajustar stock localmente cuando se agregan/modifican productos vencidos
+        setStockCargue(prevStock => {
+            const nuevoStock = { ...prevStock };
+            
+            // 1. Restaurar stock de vencidas anteriores (si las había)
+            vencidasAnteriores.forEach(item => {
+                const nombreProducto = (item.nombre || '').toUpperCase().trim();
+                const cantidadAnterior = parseInt(item.cantidad || 0, 10);
+                
+                if (!nombreProducto || cantidadAnterior <= 0) return;
+                
+                const stockActual = parseInt(nuevoStock[nombreProducto] || 0, 10);
+                nuevoStock[nombreProducto] = stockActual + cantidadAnterior;
+                
+                console.log(`↩️ Restaurando vencido anterior: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+            });
+            
+            // 2. Descontar nuevas vencidas
+            (productosVencidos || []).forEach(item => {
+                const nombreProducto = (item.nombre || '').toUpperCase().trim();
+                const cantidadVencida = parseInt(item.cantidad || 0, 10);
+                
+                if (!nombreProducto || cantidadVencida <= 0) return;
+                
+                const stockActual = parseInt(nuevoStock[nombreProducto] || 0, 10);
+                nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVencida);
+                
+                console.log(`🗑️ Vencido agregado: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+            });
+            
+            return nuevoStock;
+        });
     };
+
+    const describirVentaEnRevision = useCallback((ventaRevision) => {
+        const data = ventaRevision?.data || {};
+        const cliente = data?.cliente_negocio || data?.nombre_negocio || data?.cliente_nombre || 'Cliente sin nombre';
+        const total = parseFloat(data?.total || 0) || 0;
+        const motivo = String(ventaRevision?.motivo_error || 'Error permanente de sincronización');
+        const idLocal = String(ventaRevision?.id || data?.id_local || data?.id || '').trim();
+
+        return {
+            idLocal,
+            cliente,
+            total,
+            motivo,
+        };
+    }, []);
+
+    const abrirRevisionVentasPendientes = useCallback(async () => {
+        try {
+            const ventasRevision = await obtenerVentasEnRevision();
+
+            if (!ventasRevision.length) {
+                Alert.alert('Sin revisión', 'No hay ventas en revisión en este momento.');
+                await verificarPendientes();
+                return;
+            }
+
+            const ventaRevision = ventasRevision[0];
+            const { idLocal, cliente, total, motivo } = describirVentaEnRevision(ventaRevision);
+
+            Alert.alert(
+                'Venta en revisión',
+                `Cliente: ${cliente}
+Total: ${formatearMoneda(total)}
+ID local: ${idLocal || 'N/D'}
+
+Motivo:
+${motivo}
+
+Si fue una prueba, puedes descartarla para desbloquear el cierre del turno.`,
+                [
+                    { text: 'Cerrar', style: 'cancel' },
+                    {
+                        text: 'Descartar prueba',
+                        style: 'destructive',
+                        onPress: async () => {
+                            try {
+                                await descartarVentaEnRevision(idLocal);
+                                await verificarPendientes();
+                                await cargarVentasDelDia(fechaSeleccionada);
+                                await cargarStockCargue(diaSeleccionado, fechaSeleccionada);
+                                Alert.alert('Revisión eliminada', 'La venta de prueba se quitó de la cola local y se recargó el stock.');
+                            } catch (error) {
+                                console.error('Error descartando venta en revisión:', error);
+                                Alert.alert('Error', 'No se pudo descartar la venta en revisión.');
+                            }
+                        }
+                    }
+                ]
+            );
+        } catch (error) {
+            console.error('Error consultando ventas en revisión:', error);
+            Alert.alert('Error', 'No se pudo consultar la venta en revisión.');
+        }
+    }, [describirVentaEnRevision, fechaSeleccionada, diaSeleccionado]);
 
     // 🆕 Manejar cerrar turno
     const handleCerrarTurno = async () => {
         try {
             // 🔒 Seguridad operativa: no cerrar turno con ventas offline pendientes
             const pendientesActuales = await obtenerVentasPendientes();
+            const pendientesSync = contarPendientesSincronizables(pendientesActuales);
+            const pendientesRevision = contarPendientesEnRevision(pendientesActuales);
             if (pendientesActuales.length > 0) {
+                const mensajePendientes = pendientesSync > 0
+                    ? `Tienes ${pendientesSync} venta${pendientesSync > 1 ? 's' : ''} sin enviar.`
+                    : 'No hay ventas pendientes de reintento automático.';
+                const mensajeRevision = pendientesRevision > 0
+                    ? `
+
+Ademas, hay ${pendientesRevision} venta${pendientesRevision > 1 ? 's' : ''} en revision por error permanente y debes validarla${pendientesRevision > 1 ? 's' : ''} manualmente.`
+                    : '';
+                const accionesPendientes = [
+                    { text: 'Cancelar', style: 'cancel' },
+                ];
+
+                if (pendientesRevision > 0) {
+                    accionesPendientes.push({
+                        text: 'Ver revisión',
+                        onPress: () => abrirRevisionVentasPendientes()
+                    });
+                }
+
+                accionesPendientes.push({
+                    text: 'Sincronizar ahora',
+                    onPress: () => onRefresh()
+                });
+
                 Alert.alert(
                     'Sincronización pendiente',
-                    `Tienes ${pendientesActuales.length} venta${pendientesActuales.length > 1 ? 's' : ''} sin enviar.\n\nSincroniza antes de cerrar turno para no descuadrar inventario y reportes.`,
-                    [
-                        { text: 'Cancelar', style: 'cancel' },
-                        {
-                            text: 'Sincronizar ahora',
-                            onPress: () => onRefresh()
-                        }
-                    ]
+                    `${mensajePendientes}${mensajeRevision}
+
+Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y reportes.`,
+                    accionesPendientes
                 );
                 return;
             }
@@ -4088,16 +5640,32 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
             const data = await response.json();
             console.log(`📥 Respuesta:`, data);
-
             if (data.success) {
-                // Mostrar resumen
-                const resumenTexto = data.resumen.map(item =>
+                // Mostrar resumen en el mismo orden visual del catalogo de la app.
+                const ordenProductosResumen = new Map(
+                    productos.map((producto, index) => [normalizarTexto(producto?.nombre), index])
+                );
+
+                const resumenOrdenado = [...(data.resumen || [])].sort((a, b) => {
+                    const indiceA = ordenProductosResumen.get(normalizarTexto(a?.producto));
+                    const indiceB = ordenProductosResumen.get(normalizarTexto(b?.producto));
+
+                    if (indiceA === undefined && indiceB === undefined) {
+                        return String(a?.producto || '').localeCompare(String(b?.producto || ''), 'es', { sensitivity: 'base' });
+                    }
+                    if (indiceA === undefined) return 1;
+                    if (indiceB === undefined) return -1;
+                    return indiceA - indiceB;
+                });
+
+                const resumenTexto = resumenOrdenado.map(item =>
                     `${item.producto}:\n` +
                     `  Cargado: ${item.cargado}\n` +
                     `  Vendido: ${item.vendido}\n` +
                     `  Vencidas: ${item.vencidas}\n` +
                     `  Devuelto: ${item.devuelto}`
                 ).join('\n\n');
+
 
                 Alert.alert(
                     '✅ Turno Cerrado',
@@ -4132,6 +5700,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                 setStockCargue({});
                                 await limpiarVentasLocales();
                                 await AsyncStorage.removeItem(`@turno_activo_${userId}`); // 🆕 Limpiar turno offline
+                                await limpiarUltimoClienteSeleccionado(fecha);
 
                                 // Redirigir al menú principal
                                 navigation.navigate('Options', { userId, vendedorNombre });
@@ -4152,6 +5721,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             setHoraTurno(null);
                             setStockCargue({});
                             AsyncStorage.removeItem(`@turno_activo_${userId}`); // 🆕 Limpiar turno offline
+                            limpiarUltimoClienteSeleccionado(fechaSeleccionada);
                             navigation.navigate('Options', { userId, vendedorNombre });
                         }
                     }]
@@ -4193,7 +5763,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                     <Text style={styles.productoPrecio}>
                         Precio: {formatearMoneda(precioReal)}
                         {esPrecioEspecial && <Text style={{ color: '#ff9800', fontWeight: 'bold' }}> ⭐</Text>}
-                        {stock > 0 && <Text style={styles.stockTexto}> ({stock})</Text>}
+                        <Text style={[styles.stockTextoInline, stock <= 0 && styles.stockTextoAgotado]}>{`  Stock: ${stock}`}</Text>
                     </Text>
                     {cantidad > 0 && (
                         <Text style={styles.productoSubtotal}>
@@ -4246,7 +5816,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                 if (!esModoListaScroll) {
                                     setTecladoAbierto(true); // 🚀 Refuerzo visual inmediato
                                 }
-                                // NO hacer scroll automático - el usuario hace scroll manual si necesita
+                                // En modo scroll, dejar el posicionamiento manual del vendedor y solo aplicar un nudge suave al abrir teclado.
                             }}
                             onBlur={() => {
                                 tecladoDesdeCantidadPrincipalRef.current = false;
@@ -4326,6 +5896,34 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         </View>
                     )}
                 </>
+            )}
+
+            {clienteSeleccionado && estadoBanner && !(estadoBanner === 'offline' && ventasPendientes > 0) && (
+                <View style={[
+                    styles.bannerCompacto,
+                    estadoBanner === 'offline' && styles.bannerCompactoOffline,
+                    estadoBanner === 'sincronizando' && styles.bannerCompactoSincronizando,
+                    estadoBanner === 'exito' && styles.bannerCompactoExito,
+                ]}>
+                    <Ionicons
+                        name={
+                            estadoBanner === 'offline'
+                                ? 'cloud-offline-outline'
+                                : estadoBanner === 'sincronizando'
+                                    ? 'sync-outline'
+                                    : 'checkmark-circle-outline'
+                        }
+                        size={14}
+                        color="#fff"
+                    />
+                    <Text style={styles.bannerCompactoTexto}>
+                        {estadoBanner === 'offline'
+                            ? 'Sin internet'
+                            : estadoBanner === 'sincronizando'
+                                ? 'Sincronizando...'
+                                : `${ventasSincronizadas} ${ventasSincronizadas === 1 ? 'venta enviada' : 'ventas enviadas'}`}
+                    </Text>
+                </View>
             )}
 
             {/* 🆕 Pantalla de carga mientras verifica turno */}
@@ -4440,7 +6038,6 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             <View
                 ref={bloqueSuperiorRef}
                 collapsable={false}
-                style={compensacionBloqueSuperior > 0 ? { transform: [{ translateY: compensacionBloqueSuperior }] } : null}
                 onLayout={() => {
                     refrescarBaseBloqueSuperior();
                 }}
@@ -4457,6 +6054,17 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                 } : null
                             ]}
                         >
+                            {/* 🆕 Badges flotantes en la esquina del header (como en el Selector) */}
+                            {clienteSeleccionado && clienteSeleccionadoConPedidoEntregado && (
+                                <View style={styles.badgeEntregadoCliente}>
+                                    <Text style={styles.badgeEntregadoTexto}>Entregado</Text>
+                                </View>
+                            )}
+                            {clienteSeleccionado && !clienteSeleccionadoConPedidoEntregado && pedidoClienteSeleccionado && (
+                                <View style={styles.badgePendienteCliente}>
+                                    <Text style={styles.badgePendienteTexto}>Pendiente</Text>
+                                </View>
+                            )}
                             <TouchableOpacity
                                 style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
                                 onPress={abrirSelectorCliente}
@@ -4477,7 +6085,26 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                         <>
                                             {clienteSeleccionado?.nombre && <Text style={styles.clienteDetalle}>👤 {clienteSeleccionado.nombre}</Text>}
                                             <Text style={styles.clienteDetalle}>
-                                                {pedidoClienteSeleccionado ? `📦 Pedido #${pedidoClienteSeleccionado.numero_pedido}` : `📞 ${clienteSeleccionado?.celular || 'Sin teléfono'}`}
+                                                {(() => {
+                                                    if (pedidoClienteSeleccionado) {
+                                                        const esEntregado = ['ENTREGADO', 'ENTREGADA'].includes((pedidoClienteSeleccionado.estado || '').toUpperCase());
+                                                        return esEntregado 
+                                                            ? `✅ Pedido #${pedidoClienteSeleccionado.numero_pedido} - ENTREGADO` 
+                                                            : `📦 Pedido #${pedidoClienteSeleccionado.numero_pedido}`;
+                                                    }
+                                                    if (clienteSeleccionadoConPedidoEntregado) {
+                                                        const pEntregado = (pedidosEntregadosHoy || []).find(p => {
+                                                            const normT = (s) => (s || '').toString().trim().toUpperCase();
+                                                            const nC = normT(clienteSeleccionado?.negocio);
+                                                            const nM = normT(clienteSeleccionado?.nombre);
+                                                            if (coincideCliente(clienteSeleccionado, p)) return true;
+                                                            const d = normT(p?.destinatario);
+                                                            return d && (d === nC || d === nM);
+                                                        });
+                                                        return pEntregado ? `✅ Pedido #${pEntregado.numero_pedido} - ENTREGADO` : `✅ ENTREGADO`;
+                                                    }
+                                                    return `📞 ${clienteSeleccionado?.celular || 'Sin teléfono'}`;
+                                                })()}
                                             </Text>
                                             <Text style={styles.clienteDetalle}>📍 {clienteSeleccionado?.direccion || 'Sin dirección'}</Text>
                                         </>
@@ -4489,6 +6116,13 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             {clienteSeleccionado && !clienteSeleccionadoConPedidoEntregado && clienteSeleccionadoYaVendido && (
                                 <View style={styles.headerCheckVendido}>
                                     <Text style={styles.headerTextoVendido}>VENDIDO</Text>
+                                </View>
+                            )}
+
+                            {clienteSeleccionado && estadoBanner === 'offline' && ventasPendientes > 0 && (
+                                <View style={[styles.bannerCompactoEnCard, styles.bannerCompactoOffline]}>
+                                    <Ionicons name="cloud-offline-outline" size={13} color="#fff" />
+                                    <Text style={styles.bannerCompactoTexto}>Sin internet</Text>
                                 </View>
                             )}
 
@@ -4515,16 +6149,35 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 {/* Botones de acciones: Visibles si no hay teclado (salvo si el foco está en la búsqueda o hay filtro activo) */}
                 {(!tecladoAbierto || inputBuscadorEnFoco || busquedaProducto.length > 0) && (
                     <View style={styles.botonesAccionesContainer}>
-                        {pedidoClienteSeleccionado ? (
-                            <>
-                                <TouchableOpacity style={[styles.btnAccion, styles.btnEditar]} onPress={editarPedidoClienteSeleccionado}>
-                                    <Ionicons name="create" size={18} color="white" /><Text style={styles.btnAccionTexto}>Editar</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity style={[styles.btnAccion, styles.btnEntregado]} onPress={marcarEntregadoClienteSeleccionado}>
-                                    <Ionicons name="checkmark-circle" size={18} color="white" /><Text style={styles.btnAccionTexto}>Entregar</Text>
-                                </TouchableOpacity>
-                            </>
-                        ) : (
+                        {pedidoClienteSeleccionado ? (() => {
+                            const esEntregado = ['ENTREGADO', 'ENTREGADA'].includes((pedidoClienteSeleccionado.estado || '').toUpperCase());
+                            return (
+                                <>
+                                    <TouchableOpacity 
+                                        style={[
+                                            styles.btnAccion, 
+                                            styles.btnEditar, 
+                                            esEntregado && { opacity: 0.3 }
+                                        ]} 
+                                        onPress={editarPedidoClienteSeleccionado}
+                                        disabled={esEntregado}
+                                    >
+                                        <Ionicons name="create" size={18} color="white" /><Text style={styles.btnAccionTexto}>Editar</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity 
+                                        style={[
+                                            styles.btnAccion, 
+                                            styles.btnEntregado, 
+                                            esEntregado && { opacity: 0.3 }
+                                        ]} 
+                                        onPress={marcarEntregadoClienteSeleccionado}
+                                        disabled={esEntregado}
+                                    >
+                                        <Ionicons name="checkmark-circle" size={18} color="white" /><Text style={styles.btnAccionTexto}>{esEntregado ? 'Entregado' : 'Entregar'}</Text>
+                                    </TouchableOpacity>
+                                </>
+                            );
+                        })() : (
                             <>
                                 <TouchableOpacity style={[styles.btnAccion, styles.btnVencidas]} onPress={() => setMostrarVencidas(true)}>
                                     <Ionicons name="alert-circle" size={18} color="white" />
@@ -4571,7 +6224,9 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                 setInputBuscadorEnFoco(true);
                                 setTecladoAbierto(false); // 🚀 Forzar "modo normal" al tocar el buscador, evitando falsos positivos de listado
                             }}
-                            onBlur={() => setInputBuscadorEnFoco(false)}
+                            onBlur={() => {
+                                setInputBuscadorEnFoco(false);
+                            }}
                         />
                         {busquedaProducto.length > 0 && (
                             <TouchableOpacity
@@ -4757,6 +6412,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 diaSeleccionado={diaSeleccionado}
                 flagCrearCliente={flagCrearCliente}
                 flagVentaRapida={flagVentaRapida}
+                refreshClientesToken={refreshClientesToken}
             />
 
             <ClienteModal
@@ -4772,6 +6428,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             <ClienteOcasionalModal
                 visible={mostrarModalOcasional}
                 onClose={() => setMostrarModalOcasional(false)}
+                topeVentaRutaOcasional={topeVentaRutaOcasional}
                 onClienteCreado={(clienteOcasional) => {
                     // Seleccionar el cliente ocasional como si fuera un cliente normal
                     handleSeleccionarCliente(clienteOcasional);
@@ -4790,6 +6447,21 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 fotosGuardadas={fotoVencidas}
                 userId={userId}
                 fechaSeleccionada={fechaSeleccionada}
+                obtenerAdvertenciasStock={construirAdvertenciasVencidasVenta}
+                obtenerStockDisponibleProducto={obtenerStockDisponibleVencidaVenta}
+            />
+
+            <DevolucionesVencidas
+                visible={mostrarVencidasEdicion}
+                onClose={() => setMostrarVencidasEdicion(false)}
+                onGuardar={handleGuardarVencidasEdicion}
+                tipo="vencidas"
+                datosGuardados={vencidasEdicion}
+                fotosGuardadas={fotoVencidasEdicion}
+                userId={userId}
+                fechaSeleccionada={fechaSeleccionada}
+                obtenerAdvertenciasStock={obtenerAdvertenciasStockVencidasEdicion}
+                obtenerStockDisponibleProducto={obtenerStockDisponibleVencidaEdicion}
             />
 
             <ResumenVentaModal
@@ -5033,9 +6705,20 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 animationType="slide"
                 transparent={true}
                 onRequestClose={() => setMostrarHistorialVentas(false)}
+                onShow={() => {
+                    // 🔧 FIX: Forzar re-render al abrir modal para que las cards se muestren completas
+                    setTimeout(() => {
+                        setMostrarHistorialVentas(true);
+                    }, 50);
+                }}
             >
                 <View style={[styles.modalOverlay, { justifyContent: 'flex-end' }]}>
-                    <View style={[styles.modalContent, { maxHeight: '80%', width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, backgroundColor: 'transparent', borderWidth: 0, shadowOpacity: 0, elevation: 0 }]}>
+                    <View 
+                        style={[styles.modalContent, { maxHeight: '80%', width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, backgroundColor: 'transparent', borderWidth: 0, shadowOpacity: 0, elevation: 0 }]}
+                        onLayout={() => {
+                            // 🔧 FIX: Forzar actualización del layout cuando el modal se monta
+                        }}
+                    >
                         {(() => {
                             const fuenteResumen = (cargandoHistorial && historialReimpresion.length === 0)
                                 ? historialResumenPreview
@@ -5146,7 +6829,10 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                             );
                         })()}
 
-                        <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
+                        <ScrollView 
+                            key={`historial-${historialReimpresion.length}-${mostrarSoloAnuladas}`}
+                            contentContainerStyle={{ paddingBottom: 20 }}
+                        >
                             {(() => {
                                 const usandoVistaPreviaHistorial = cargandoHistorial
                                     && historialReimpresion.length === 0
@@ -5188,8 +6874,11 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                     const esAnulada = venta.estado === 'ANULADA';
                                     const yaModificada = ventaYaFueModificada(venta);
                                     const metodoPagoCard = normalizarMetodoPagoEdicion(venta?.metodo_pago);
-                                    const accionesBloqueadasPorPreview = usandoVistaPreviaHistorial;
-                                    const puedeCambiarMetodoDesdeCard = !accionesBloqueadasPorPreview && !esAnulada && !yaModificada;
+                                    const ventaTieneIdBackend = venta?.id !== undefined && venta?.id !== null && !String(venta?.id).includes('-');
+                                    const ventaEsLocalPreview = String(venta?._key || '').startsWith('local-') || !ventaTieneIdBackend;
+                                    const accionesBloqueadasPorPreview = usandoVistaPreviaHistorial && ventaEsLocalPreview;
+                                    const ventaBackendAsociada = resolverVentaBackendAsociada(venta);
+                                    const puedeCambiarMetodoDesdeCard = !accionesBloqueadasPorPreview && !esAnulada && !yaModificada && !!ventaBackendAsociada;
                                     const vecesEditada = Number(venta?.veces_editada || 0);
                                     const horaUltimaEdicion = formatearHoraEdicion(venta?.fecha_ultima_edicion);
                                     return (
@@ -5253,7 +6942,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                                     {metodoPagoCard ? (
                                                         puedeCambiarMetodoDesdeCard ? (
                                                             <TouchableOpacity
-                                                                onPress={() => abrirSelectorMetodoPagoDesdeCard(venta)}
+                                                                onPress={() => abrirSelectorMetodoPagoDesdeCard(ventaBackendAsociada || venta)}
                                                                 activeOpacity={0.7}
                                                                 style={{ paddingHorizontal: 2, paddingVertical: 1 }}
                                                             >
@@ -5280,13 +6969,25 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
 
                                             {/* Botones: Anular + Editar + Imprimir */}
                                             <View style={{ flexDirection: 'row', gap: 6, marginLeft: 10, alignItems: 'center' }}>
-                                                {/* Botón anular — solo si es de ruta, tiene ID real y no está anulada */}
-                                                {!accionesBloqueadasPorPreview && venta.origen !== 'PEDIDO_FACTURADO' && !esAnulada && venta.id && !String(venta._key || '').startsWith('local-') && (
+                                                {/* Botón anular — visible para todas las ventas de ruta no anuladas */}
+                                                {!accionesBloqueadasPorPreview && venta.origen !== 'PEDIDO_FACTURADO' && !esAnulada && (
                                                     <TouchableOpacity
-                                                        style={{ backgroundColor: '#dc3545', padding: 8, borderRadius: 8 }}
-                                                        onPress={() => anularVentaRuta(venta)}
+                                                        style={{ 
+                                                            backgroundColor: cargandoAnulacion ? '#ccc' : '#dc3545', 
+                                                            padding: 8, 
+                                                            borderRadius: 8,
+                                                            opacity: cargandoAnulacion ? 0.6 : 1
+                                                        }}
+                                                        onPress={() => anularVentaRuta(ventaBackendAsociada || venta)}
+                                                        disabled={cargandoAnulacion}
                                                     >
-                                                        <Ionicons name="ban-outline" size={18} color="white" />
+                                                        {cargandoAnulacion ? (
+                                                            <View style={{ width: 18, height: 18, justifyContent: 'center', alignItems: 'center' }}>
+                                                                <Ionicons name="sync" size={16} color="white" />
+                                                            </View>
+                                                        ) : (
+                                                            <Ionicons name="ban-outline" size={18} color="white" />
+                                                        )}
                                                     </TouchableOpacity>
                                                 )}
                                                 {/* Botón editar — solo si tiene detalles, no es pedido y no está anulada */}
@@ -5378,14 +7079,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 visible={modalEdicionVisible}
                 animationType="fade"
                 transparent={true}
-                onRequestClose={() => {
-                    setModalEdicionVisible(false);
-                    setMetodoPagoEdicion('EFECTIVO');
-                    setCantidadesEdicionInput({});
-                    setBusquedaProductoEdicion('');
-                    setFocoCampoEdicion(null);
-                    setMostrarHistorialVentas(true);
-                }}
+                onRequestClose={() => cerrarEdicionVenta()}
             >
                 <KeyboardAvoidingView
                     style={[
@@ -5416,21 +7110,50 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                         {/* Header */}
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
                             <View>
-                                <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#333' }}>✏️ Editar Venta</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                    <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#333' }}>✏️ Editar Venta</Text>
+                                    <TouchableOpacity
+                                        onPress={abrirModalVencidasDesdeEdicion}
+                                        style={{
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
+                                            backgroundColor: '#fff1f2',
+                                            borderWidth: 1,
+                                            borderColor: '#fecdd3',
+                                            borderRadius: 999,
+                                            paddingHorizontal: 10,
+                                            paddingVertical: 5,
+                                        }}
+                                    >
+                                        <Ionicons name="camera-outline" size={13} color="#dc2626" />
+                                        <Text style={{ color: '#dc2626', fontWeight: '700', fontSize: 11, marginLeft: 4 }}>
+                                            Adjuntar vencidas
+                                        </Text>
+                                        {totalItemsVencidasEdicion > 0 && (
+                                            <View style={{
+                                                backgroundColor: '#dc2626',
+                                                minWidth: 18,
+                                                height: 18,
+                                                borderRadius: 9,
+                                                justifyContent: 'center',
+                                                alignItems: 'center',
+                                                marginLeft: 6,
+                                                paddingHorizontal: 4,
+                                            }}>
+                                                <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>
+                                                    {totalItemsVencidasEdicion}
+                                                </Text>
+                                            </View>
+                                        )}
+                                    </TouchableOpacity>
+                                </View>
                                 {!modoCantidadConTeclado && (
                                     <Text style={{ fontSize: 13, color: '#666', marginTop: 2 }}>
                                         {ventaEnEdicion?.cliente_negocio || ventaEnEdicion?.cliente_nombre || 'Cliente'}
                                     </Text>
                                 )}
                             </View>
-                            <TouchableOpacity onPress={() => {
-                                setModalEdicionVisible(false);
-                                setMetodoPagoEdicion('EFECTIVO');
-                                setCantidadesEdicionInput({});
-                                setBusquedaProductoEdicion('');
-                                setFocoCampoEdicion(null);
-                                setMostrarHistorialVentas(true);
-                            }}>
+                            <TouchableOpacity onPress={() => cerrarEdicionVenta()}>
                                 <Ionicons name="close-circle" size={30} color="#999" />
                             </TouchableOpacity>
                         </View>
@@ -5448,12 +7171,14 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                                 borderColor: activo ? '#003d88' : '#d0d7de',
                                                 backgroundColor: activo ? '#003d88' : '#f8f9fa',
                                                 borderRadius: 8,
-                                                paddingVertical: 4,
+                                                paddingVertical: 6,
                                                 alignItems: 'center',
                                             }}
                                             onPress={() => setMetodoPagoEdicion(metodo)}
+                                            activeOpacity={0.7}
+                                            delayPressIn={0}
                                         >
-                                            <Text style={{ color: activo ? '#fff' : '#333', fontWeight: '700', fontSize: 10 }}>
+                                            <Text style={{ color: activo ? '#fff' : '#333', fontWeight: '700', fontSize: 12 }}>
                                                 {metodo}
                                             </Text>
                                         </TouchableOpacity>
@@ -5569,10 +7294,15 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                     borderColor: '#e9ecef',
                                 }}>
                                     <View style={{ flex: 1 }}>
-                                        <Text style={{ fontSize: 11, fontWeight: '600', color: '#333' }}>{nombre}</Text>
-                                        <Text style={{ fontSize: 10, color: '#666' }}>
-                                            {formatearMoneda(item.precio)} c/u
-                                        </Text>
+                                        <Text style={{ fontSize: 13, fontWeight: '600', color: '#333' }}>{nombre}</Text>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                            <Text style={{ fontSize: 10, color: '#666' }}>
+                                                {formatearMoneda(item.precio)} c/u
+                                            </Text>
+                                            <Text style={{ fontSize: 11, color: obtenerStockDisponibleVencidaEdicion(nombre) > 0 ? '#00ad53' : '#e74c3c', fontWeight: '700' }}>
+                                                • Stock: {obtenerStockDisponibleVencidaEdicion(nombre)}
+                                            </Text>
+                                        </View>
                                     </View>
                                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                         {/* Decrementar */}
@@ -5658,14 +7388,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                                     borderRadius: 10,
                                     alignItems: 'center'
                                 }}
-                                onPress={() => {
-                                    setModalEdicionVisible(false);
-                                    setMetodoPagoEdicion('EFECTIVO');
-                                    setCantidadesEdicionInput({});
-                                    setBusquedaProductoEdicion('');
-                                    setFocoCampoEdicion(null);
-                                    setMostrarHistorialVentas(true);
-                                }}
+                                onPress={() => cerrarEdicionVenta()}
                             >
                                 <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Cancelar</Text>
                             </TouchableOpacity>
@@ -5847,6 +7570,54 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 12,
         fontWeight: '600',
+    },
+    bannerCompacto: {
+        position: 'absolute',
+        top: 118,
+        right: 10,
+        zIndex: 30,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 999,
+        elevation: 5,
+        shadowColor: '#000',
+        shadowOpacity: 0.16,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+    },
+    bannerCompactoOffline: {
+        backgroundColor: '#e65100',
+    },
+    bannerCompactoEnCard: {
+        position: 'absolute',
+        right: 58,
+        bottom: 10,
+        zIndex: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 999,
+        elevation: 4,
+        shadowColor: '#000',
+        shadowOpacity: 0.16,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+    },
+    bannerCompactoSincronizando: {
+        backgroundColor: '#1565c0',
+    },
+    bannerCompactoExito: {
+        backgroundColor: '#2e7d32',
+    },
+    bannerCompactoTexto: {
+        color: '#fff',
+        fontSize: 11,
+        fontWeight: '700',
     },
     // 🆕 Badge "Vendido" en header del cliente — identical al del selector de clientes
     badgeYaVendidoHeader: {
@@ -6150,7 +7921,7 @@ const styles = StyleSheet.create({
         paddingBottom: 260,
     },
     listaContentConTeclado: {
-        paddingBottom: 220, // 🆕 El mínimo necesario para evitar saltos y superposición
+        paddingBottom: 220,
     },
     productoItem: {
         flexDirection: 'row',
@@ -6175,10 +7946,13 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#666',
     },
-    stockTexto: {
+    stockTextoInline: {
         fontSize: 12,
-        color: '#666',
-        fontWeight: 'normal',
+        color: '#1d4ed8',
+        fontWeight: '700',
+    },
+    stockTextoAgotado: {
+        color: '#c62828',
     },
     productoSubtotal: {
         fontSize: 13,
@@ -6324,6 +8098,38 @@ const styles = StyleSheet.create({
     badgeTexto: {
         color: 'white',
         fontSize: 12,
+        fontWeight: 'bold',
+    },
+    // 🟠 Estilos Badge Pendiente (igual que Selector)
+    badgePendienteCliente: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#ff9800',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+        zIndex: 10,
+    },
+    badgePendienteTexto: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    // 🟢 Estilos Badge Entregado (igual que Selector)
+    badgeEntregadoCliente: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        backgroundColor: '#22c55e',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+        zIndex: 10,
+    },
+    badgeEntregadoTexto: {
+        color: 'white',
+        fontSize: 10,
         fontWeight: 'bold',
     },
     // 🆕 Estilos botón Cerrar Turno pequeño

@@ -10,7 +10,8 @@ import {
     ActivityIndicator,
     SectionList,
     Linking, // 🆕 Importar Linking
-    Alert
+    Alert,
+    Keyboard
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -52,7 +53,8 @@ const ClienteSelector = ({
     onActualizarPedidos, // 🆕 Refrescar pedidos pendientes desde el padre
     onClienteOcasional, // 🆕 Callback para abrir modal de cliente ocasional
     flagCrearCliente: flagCrearClienteProp, // 🆕 Flag desde VentasScreen (polling 30s)
-    flagVentaRapida: flagVentaRapidaProp // 🆕 Flag desde VentasScreen (polling 30s)
+    flagVentaRapida: flagVentaRapidaProp, // 🆕 Flag desde VentasScreen (polling 30s)
+    refreshClientesToken = 0,
 }) => {
     const [clientesDelDia, setClientesDelDia] = useState([]);
     const [todosLosClientes, setTodosLosClientes] = useState([]);
@@ -339,7 +341,7 @@ const ClienteSelector = ({
             setModoOrdenar(false); // Resetear modo ordenar al abrir
             cargarVentasBackend();  // 🆕 Cargar ventas reales para badges
         }
-    }, [visible, diaSeleccionado]);
+    }, [visible, diaSeleccionado, refreshClientesToken]);
 
     // 🆕 Cargar clientes primero del cache, luego actualizar desde servidor
     const cargarClientesConCache = async (dia) => {
@@ -725,13 +727,19 @@ const ClienteSelector = ({
         const anuladas = new Set();
 
         const registrarClave = (setObj, negocio, nombre) => {
-            if (negocio) setObj.add(`neg:${negocio}`);
+            if (negocio) {
+                setObj.add(`neg:${negocio}`);
+                return;
+            }
             if (nombre) setObj.add(`nom:${nombre}`);
         };
 
         const registrarVenta = (negocio, nombre, total) => {
             const venta = { total };
-            if (negocio && !mapa.has(`neg:${negocio}`)) mapa.set(`neg:${negocio}`, venta);
+            if (negocio) {
+                if (!mapa.has(`neg:${negocio}`)) mapa.set(`neg:${negocio}`, venta);
+                return;
+            }
             if (nombre && !mapa.has(`nom:${nombre}`)) mapa.set(`nom:${nombre}`, venta);
         };
 
@@ -817,16 +825,11 @@ const ClienteSelector = ({
     }, [clientesDelDia, onClientesDiaActualizados]);
 
     const handleSelectCliente = useCallback((cliente) => {
-        // ✅ OPTIMIZACIÓN: Cerrar modal PRIMERO para dar sensación de rapidez
-        onClose();
+        Keyboard.dismiss();
         setBusqueda('');
         setMostrarTodos(false);
-
-        // Ejecutar callback en el siguiente tick para no bloquear el cierre del modal
-        setTimeout(() => {
-            onSelectCliente(cliente);
-        }, 0);
-    }, [onClose, onSelectCliente]);
+        onSelectCliente(cliente);
+    }, [onSelectCliente]);
 
     const handleNuevoCliente = () => {
         onNuevoCliente();
@@ -928,7 +931,8 @@ const ClienteSelector = ({
                         styles.clienteItemConPedido, // Fondo naranja para pendiente
                     ]}
                     onPress={() => handleSelectCliente(item)}
-                    activeOpacity={0.9}
+                    activeOpacity={0.6}
+                    delayPressIn={0}
                 >
                     {/* 🆕 Columna de Flechas de Ordenamiento (Izquierda) */}
                     {mostrarFlechas && (
@@ -1040,7 +1044,8 @@ const ClienteSelector = ({
                         styles.clienteItemNoEntregado, // 🆕 Fondo rojo transparente
                     ]}
                     onPress={() => handleSelectCliente(item)}
-                    activeOpacity={0.9}
+                    activeOpacity={0.6}
+                    delayPressIn={0}
                 >
                     {/* 🆕 Columna de Flechas de Ordenamiento (Izquierda) */}
                     {mostrarFlechas && (
@@ -1152,7 +1157,8 @@ const ClienteSelector = ({
                         styles.clienteItemEntregado, // 🆕 Fondo verde transparente
                     ]}
                     onPress={() => handleSelectCliente(item)}
-                    activeOpacity={0.9}
+                    activeOpacity={0.6}
+                    delayPressIn={0}
                 >
                     {/* 🆕 Columna de Flechas de Ordenamiento (Izquierda) */}
                     {mostrarFlechas && (
@@ -1552,7 +1558,7 @@ const ClienteSelector = ({
                         windowSize={5}
                         updateCellsBatchingPeriod={40}
                         removeClippedSubviews={true}
-                        keyboardShouldPersistTaps="handled"
+                        keyboardShouldPersistTaps="always"
                         getItemLayout={(data, index) => ({
                             length: ITEM_HEIGHT_ESTIMADO,
                             offset: ITEM_HEIGHT_ESTIMADO * index,
