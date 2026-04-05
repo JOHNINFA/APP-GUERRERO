@@ -31,6 +31,7 @@ import { ENDPOINTS, API_URL } from '../../config';
 import { actualizarPedido, editarVentaRuta, obtenerAuthHeaders } from '../../services/rutasApiService';
 import AsyncStorage from '@react-native-async-storage/async-storage'; // 🆕 Para precarga de clientes
 import NetInfo from '@react-native-community/netinfo'; // 🆕 Para detectar conexión
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Días de la semana
 const DIAS_SEMANA = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO', 'DOMINGO'];
@@ -49,6 +50,7 @@ const METODOS_PAGO_RAPIDOS = ['EFECTIVO', 'NEQUI', 'DAVIPLATA'];
 const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre }) => {
     // userId puede venir de route.params o como prop directa
     const userId = route?.params?.userId || userIdProp;
+    const insets = useSafeAreaInsets();
 
     // Estado para selección de día
     const [mostrarSelectorDia, setMostrarSelectorDia] = useState(false); // 🆕 Inicia en FALSE para verificar turno primero
@@ -641,22 +643,42 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             const pendientesDespues = await obtenerVentasPendientes();
             setVentasPendientes(contarPendientesSincronizables(pendientesDespues));
 
-            // 🆕 Detectar conflictos: ventas que quedaron en revisión por edición ya hecha en otro dispositivo
-            const enRevision = pendientesDespues.filter(v =>
-                v?.requiere_revision === true &&
-                (String(v?.codigo_error || '').includes('YA_MODIFICADA') ||
-                 String(v?.motivo_error || '').toUpperCase().includes('YA FUE MODIFICADA') ||
-                 String(v?.motivo_error || '').toUpperCase().includes('NO SE PERMITEN'))
-            );
+            // Detectar ventas/ediciones que quedaron en revisión (cualquier error permanente)
+            const enRevision = pendientesDespues.filter(v => v?.requiere_revision === true);
             if (enRevision.length > 0) {
-                const nombresConflicto = enRevision.map(v => {
+                const codigoError = (v) => String(v?.codigo_error || v?.motivo_error || '').toUpperCase();
+                const esConflictoEdicion = (v) =>
+                    codigoError(v).includes('YA_MODIFICADA') ||
+                    codigoError(v).includes('YA FUE MODIFICADA') ||
+                    codigoError(v).includes('NO SE PERMITEN') ||
+                    codigoError(v).includes('YA FUE EDITADA');
+                const esStockInsuficiente = (v) =>
+                    codigoError(v).includes('STOCK_CARGUE_INSUFICIENTE') ||
+                    codigoError(v).includes('STOCK_INSUFICIENTE_CARGUE') ||
+                    codigoError(v).includes('STOCK DISPONIBLE DEL CARGUE');
+
+                const filas = enRevision.map(v => {
                     const nombre = v?.data?.nombre_negocio || v?.data?.cliente_nombre || v?.data?.cliente_negocio || 'Cliente desconocido';
-                    return `• ${nombre}`;
+                    let motivo = '';
+                    if (esConflictoEdicion(v)) motivo = ' (ya fue editada antes)';
+                    else if (esStockInsuficiente(v)) motivo = ' (stock insuficiente en cargue)';
+                    else if (v?.motivo_error) motivo = `: ${v.motivo_error}`;
+                    return `• ${nombre}${motivo}`;
                 }).join('\n');
+
                 Alert.alert(
-                    '⚠️ Conflicto de edición',
-                    `${enRevision.length} venta(s) no se pudieron sincronizar porque ya fueron editadas desde otro dispositivo:\n\n${nombresConflicto}\n\nEstas ventas quedaron sin cambios en el servidor. Revisa el historial.`,
-                    [{ text: 'Entendido', style: 'default' }]
+                    '⚠️ Edición no guardada',
+                    `${enRevision.length} venta(s) no pudieron actualizarse en el servidor:\n\n${filas}\n\nLa venta quedó con sus valores originales. Puedes volver a editarla.`,
+                    [{
+                        text: 'Entendido',
+                        style: 'default',
+                        onPress: async () => {
+                            for (const v of enRevision) {
+                                const id = v?.id || v?.data?.id_local || v?.data?.id;
+                                if (id) await descartarVentaEnRevision(id);
+                            }
+                        }
+                    }]
                 );
             }
 
@@ -3432,8 +3454,9 @@ ${error.message}`);
                             );
                         } finally {
                             setCargandoAnulacion(false);
-                            // También refrescar el historial para estar seguros
-                            try { cargarHistorialReimpresion(); } catch (_) { }
+                            // No recargar historial aquí — marcarAnulada ya actualizó el estado local.
+                            // Recargar inmediatamente causa race condition: el backend puede no haber
+                            // procesado la anulación todavía y la recarga sobreescribe el estado ANULADA.
                         }
                     }
                 }
@@ -6415,7 +6438,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
             />
 
             {/* Resumen y botón */}
-            <View style={styles.footer}>
+            <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, Platform.OS === 'android' ? 16 : 15) }]}>
                 <TouchableOpacity
                     style={[
                         styles.btnCompletar,

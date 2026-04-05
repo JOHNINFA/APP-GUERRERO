@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ImageBackground, StyleSheet, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -190,6 +191,7 @@ const App = () => {
   };
 
   return (
+    <SafeAreaProvider>
     <NavigationContainer>
       {isLoggedIn ? (
         <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -228,6 +230,7 @@ const App = () => {
         </View>
       )}
     </NavigationContainer>
+    </SafeAreaProvider>
   );
 };
 

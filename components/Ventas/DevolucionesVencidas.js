@@ -576,8 +576,8 @@ const DevolucionesVencidas = React.memo(({
                     paddingHorizontal: Platform.OS === 'android' ? 0 : 8,
                     paddingBottom: Platform.OS === 'android' ? 0 : 20,
                 }}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                enabled={Platform.OS === 'ios'}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                enabled={true}
             >
                 <View style={{
                     backgroundColor: '#fff',

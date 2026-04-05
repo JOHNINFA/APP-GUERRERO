@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { ScrollView, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, View, FlatList, Modal } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +13,7 @@ import productosConImagenes from './Productos'; // Importar mapeo de imágenes l
 const API_URL = ENDPOINTS.GUARDAR_SUGERIDO;
 
 const ProductList = ({ selectedDay, userId, searchText }) => {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const [quantities, setQuantities] = useState({});
   const [loading, setLoading] = useState(false);
@@ -296,7 +298,7 @@ const ProductList = ({ selectedDay, userId, searchText }) => {
 
       {selectedDay && (
         <TouchableOpacity
-          style={[styles.sendButton, loading && styles.disabledButton]}
+          style={[styles.sendButton, loading && styles.disabledButton, { bottom: Math.max(insets.bottom + 10, 20) }]}
           onPress={handleSendPress}
           disabled={loading}
         >

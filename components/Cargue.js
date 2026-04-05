@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, Vibration, ActivityIndicator, Alert, TextInput, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Checkbox from 'expo-checkbox';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -7,6 +8,7 @@ import { ENDPOINTS } from '../config';
 import { obtenerProductos, sincronizarProductos } from '../services/ventasService';
 
 const Cargue = ({ userId }) => {
+  const insets = useSafeAreaInsets();
   const [selectedDay, setSelectedDay] = useState('Lunes');
   // Fecha actual en formato YYYY-MM-DD (usando fecha local, no UTC)
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -482,7 +484,7 @@ const Cargue = ({ userId }) => {
       )}
 
       <TouchableOpacity
-        style={styles.reloadButton}
+        style={[styles.reloadButton, { marginBottom: Math.max(insets.bottom + 8, 16) }]}
         onPress={fetchData}
         disabled={loading}
       >
