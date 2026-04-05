@@ -142,7 +142,7 @@ export const enviarVentaRuta = async (ventaData) => {
             }
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 segundos (fotos son pesadas)
+            const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s (fotos son pesadas, pero acotado)
 
             try {
                 const headersAuth = await obtenerAuthHeaders();
@@ -193,7 +193,7 @@ export const enviarVentaRuta = async (ventaData) => {
         } else {
             // 🆕 Sin fotos: usar JSON (más rápido)
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 segundos (JSON es rápido)
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s — debe caber en ventana de 15s total
 
             try {
                 const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
@@ -351,7 +351,12 @@ export const editarVentaRuta = async (ventaId, datosActualizados) => {
             throw error;
         }
 
-        return await response.json();
+        try {
+            return await response.json();
+        } catch (_) {
+            // Si el body no es JSON válido pero response.ok, igual es éxito
+            return { ok: true };
+        }
     } catch (error) {
         clearTimeout(timeoutId);
         if (error?.name === 'AbortError') {

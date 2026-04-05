@@ -108,7 +108,7 @@ const ResumenVentaModal = ({ visible, onClose, onConfirmar, venta }) => {
     return (
         <Modal
             visible={visible}
-            animationType="slide"
+            animationType="fade"
             transparent={true}
             onRequestClose={onClose}
         >

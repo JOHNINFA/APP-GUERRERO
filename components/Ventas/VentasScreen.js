@@ -227,7 +227,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [focoCampoEdicion, setFocoCampoEdicion] = useState(null); // null | 'search' | 'cantidad'
     const [cargandoEdicion, setCargandoEdicion] = useState(false);
     const modoCantidadConTeclado = tecladoAbierto && focoCampoEdicion === 'cantidad';
-    const alturaListaEdicionConTeclado = (alturaTeclado >= 320 ? 150 : 170);
+    const alturaListaEdicionConTeclado = (alturaTeclado >= 320 ? 220 : 260);
 
     // 🆕 Ventas del backend del día actual (para badges y alertas de venta duplicada)
     const [ventasBackendDia, setVentasBackendDia] = useState([]);
@@ -436,6 +436,12 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
         return flagEditada || conteoEdiciones > 0;
     }, []);
 
+    // Verifica si el método de pago ya fue cambiado (independiente de edición de productos)
+    const ventaYaCambioMetodoPago = useCallback((venta) => {
+        return venta?.metodo_pago_cambiado === true ||
+            String(venta?.metodo_pago_cambiado || '').toLowerCase() === 'true';
+    }, []);
+
     const fusionarMetaEdicionHistorial = useCallback((itemBase, itemLocal) => {
         if (!itemBase) return itemLocal || itemBase;
         if (!itemLocal || !ventaYaFueModificada(itemLocal)) return itemBase;
@@ -616,11 +622,43 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             sincronizandoAutoRef.current = true;
             setEstadoBanner('sincronizando');
 
-            const resultado = await sincronizarVentasPendientes();
+            // Timeout de seguridad: si en 15s no resuelve (internet intermitente), limpiar el banner
+            const timeoutSeguridad = setTimeout(() => {
+                if (sincronizandoAutoRef.current) {
+                    sincronizandoAutoRef.current = false;
+                    setEstadoBanner(null);
+                }
+            }, 15000);
+
+            let resultado;
+            try {
+                resultado = await sincronizarVentasPendientes();
+            } finally {
+                clearTimeout(timeoutSeguridad);
+            }
             const enviadas = resultado?.sincronizadas || 0;
 
             const pendientesDespues = await obtenerVentasPendientes();
             setVentasPendientes(contarPendientesSincronizables(pendientesDespues));
+
+            // 🆕 Detectar conflictos: ventas que quedaron en revisión por edición ya hecha en otro dispositivo
+            const enRevision = pendientesDespues.filter(v =>
+                v?.requiere_revision === true &&
+                (String(v?.codigo_error || '').includes('YA_MODIFICADA') ||
+                 String(v?.motivo_error || '').toUpperCase().includes('YA FUE MODIFICADA') ||
+                 String(v?.motivo_error || '').toUpperCase().includes('NO SE PERMITEN'))
+            );
+            if (enRevision.length > 0) {
+                const nombresConflicto = enRevision.map(v => {
+                    const nombre = v?.data?.nombre_negocio || v?.data?.cliente_nombre || v?.data?.cliente_negocio || 'Cliente desconocido';
+                    return `• ${nombre}`;
+                }).join('\n');
+                Alert.alert(
+                    '⚠️ Conflicto de edición',
+                    `${enRevision.length} venta(s) no se pudieron sincronizar porque ya fueron editadas desde otro dispositivo:\n\n${nombresConflicto}\n\nEstas ventas quedaron sin cambios en el servidor. Revisa el historial.`,
+                    [{ text: 'Entendido', style: 'default' }]
+                );
+            }
 
             if (enviadas > 0) {
                 setVentasSincronizadas(enviadas);
@@ -730,7 +768,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
             // Usar fecha proporcionada o la seleccionada
             let fecha = fechaStr;
             if (!fecha && fechaSeleccionada) {
-                fecha = fechaSeleccionada.toISOString().split('T')[0];
+                fecha = `${fechaSeleccionada.getFullYear()}-${String(fechaSeleccionada.getMonth() + 1).padStart(2, '0')}-${String(fechaSeleccionada.getDate()).padStart(2, '0')}`;
             }
             // Si no hay fecha ni userId, salir
             if (!fecha || !userId) return;
@@ -1094,8 +1132,12 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                     fecha_accion: new Date().toISOString()
                 };
                 const pendientes = JSON.parse(await AsyncStorage.getItem('pedidos_acciones_pendientes') || '[]');
-                pendientes.push(accionPendiente);
-                await AsyncStorage.setItem('pedidos_acciones_pendientes', JSON.stringify(pendientes));
+                // Evitar duplicados: si ya hay una acción ENTREGADO para este pedido, no agregar otra
+                const yaExiste = pendientes.some(a => a.id === accionPendiente.id && a.tipo === 'ENTREGADO');
+                if (!yaExiste) {
+                    pendientes.push(accionPendiente);
+                    await AsyncStorage.setItem('pedidos_acciones_pendientes', JSON.stringify(pendientes));
+                }
 
                 // Actualizar UI localmente
                 setPedidosEntregadosHoy(prev => [...prev, {
@@ -1726,7 +1768,7 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                 return;
             }
 
-            const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+            const fechaStr = `${fechaSeleccionada.getFullYear()}-${String(fechaSeleccionada.getMonth() + 1).padStart(2, '0')}-${String(fechaSeleccionada.getDate()).padStart(2, '0')}`;
             const vendedorIdVentas = String(userId).toUpperCase().startsWith('ID')
                 ? String(userId).toUpperCase()
                 : `ID${userId}`;
@@ -2053,6 +2095,9 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
             .filter((venta) => {
                 if (!esVentaBackendPersistida(venta)) return false;
 
+                // No resolver una venta ANULADA como backend asociada de una venta activa
+                if (String(venta?.estado || '').toUpperCase() === 'ANULADA') return false;
+
                 const clavesVenta = obtenerClavesCoincidenciaCliente(venta);
                 if (!clavesVenta.some((clave) => clavesObjetivo.includes(clave))) return false;
 
@@ -2152,6 +2197,44 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         })[0] || null;
     }, [ventasDelDia, ventasBackendDia, ventaYaFueModificada, esVentaBackendPersistida, obtenerTimestampVentaComparable, obtenerClavesCoincidenciaCliente]);
 
+    // Cuenta cuántas ventas activas (no anuladas) tiene un cliente hoy.
+    // Usa el estado más reciente de AMBAS listas: si una venta aparece como ANULADA
+    // en cualquier lista (local o backend), se excluye del conteo aunque la otra
+    // lista la tenga todavía como ACTIVA (datos viejos del servidor).
+    const contarVentasActivasCliente = useCallback((clienteObjetivo) => {
+        if (!clienteObjetivo) return 0;
+        const clavesCliente = obtenerClavesCoincidenciaCliente(clienteObjetivo);
+        if (!clavesCliente.length) return 0;
+
+        const todas = [...(ventasDelDia || []), ...(ventasBackendDia || [])];
+
+        // Paso 1: recopilar IDs de ventas que tienen alguna versión ANULADA
+        const idsAnuladas = new Set();
+        todas.forEach((v) => {
+            if (String(v?.estado || '').toUpperCase() === 'ANULADA') {
+                const id = v?.id_local || v?.id_venta_local || v?.id;
+                if (id) idsAnuladas.add(String(id));
+            }
+        });
+
+        // Paso 2: filtrar ventas activas cuyo ID no esté en idsAnuladas
+        const coincideActiva = (venta) => {
+            if (!venta || String(venta?.estado || '').toUpperCase() === 'ANULADA') return false;
+            const id = venta?.id_local || venta?.id_venta_local || venta?.id;
+            if (id && idsAnuladas.has(String(id))) return false; // versión anulada existe en otra lista
+            const clavesVenta = obtenerClavesCoincidenciaCliente(venta);
+            return clavesVenta.some(c => clavesCliente.includes(c));
+        };
+
+        const candidatas = todas.filter(coincideActiva);
+        const mapa = new Map();
+        candidatas.forEach((venta, idx) => {
+            const clave = String(venta?.id_local || venta?.id_venta_local || venta?.id || `idx-${idx}`);
+            if (!mapa.has(clave)) mapa.set(clave, venta);
+        });
+        return mapa.size;
+    }, [ventasDelDia, ventasBackendDia, obtenerClavesCoincidenciaCliente]);
+
     const totalItemsVencidasEdicion = useMemo(() => (
         (vencidasEdicion || []).reduce((sum, item) => sum + (parseInt(item?.cantidad || 0, 10) || 0), 0)
     ), [vencidasEdicion]);
@@ -2233,7 +2316,8 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
             }
         });
 
-        // 🚀 ABRIR MODAL INMEDIATAMENTE con datos básicos
+        // 🚀 ABRIR MODAL INMEDIATAMENTE — cerrar historial y abrir edición en el mismo frame
+        setMostrarHistorialVentas(false);
         setVentaEnEdicion(ventaEditable);
         setCarritoEdicion(carritoInicial);
         setCantidadesEdicionInput(
@@ -2248,7 +2332,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         setFocoCampoEdicion(null);
         setMostrarVencidasEdicion(false);
         setModalEdicionVisible(true);
-        setMostrarHistorialVentas(false);
 
         // 🚀 CARGAR DETALLES COMPLETOS EN SEGUNDO PLANO (solo si es venta del backend)
         if (esVentaBackendPersistida(ventaEditable)) {
@@ -2278,14 +2361,14 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
 
     const abrirSelectorMetodoPagoDesdeCard = useCallback((venta) => {
         if (!venta || venta.estado === 'ANULADA') return;
-        if (ventaYaFueModificada(venta)) {
-            Alert.alert('Bloqueado', 'Esta venta ya fue modificada una vez y no admite otro cambio de método de pago.');
+        if (ventaYaCambioMetodoPago(venta)) {
+            Alert.alert('Bloqueado', 'El método de pago de esta venta ya fue cambiado una vez.');
             return;
         }
         setVentaMetodoPagoCard(venta);
         setMetodoPagoCardSeleccionado(normalizarMetodoPagoEdicion(venta?.metodo_pago));
         setModalMetodoPagoCardVisible(true);
-    }, [normalizarMetodoPagoEdicion, ventaYaFueModificada]);
+    }, [normalizarMetodoPagoEdicion, ventaYaCambioMetodoPago]);
 
     const cerrarSelectorMetodoPagoDesdeCard = useCallback(() => {
         if (guardandoMetodoPagoCard) return;
@@ -2295,8 +2378,8 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
 
     const actualizarMetodoPagoDesdeCard = useCallback(async (venta, metodoNuevoRaw) => {
         if (!venta || venta.estado === 'ANULADA') return false;
-        if (ventaYaFueModificada(venta)) {
-            Alert.alert('Bloqueado', 'Esta venta ya fue modificada una vez y no admite otro cambio de método de pago.');
+        if (ventaYaCambioMetodoPago(venta)) {
+            Alert.alert('Bloqueado', 'El método de pago de esta venta ya fue cambiado una vez.');
             return false;
         }
 
@@ -2304,37 +2387,39 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         const metodoNuevo = normalizarMetodoPagoEdicion(metodoNuevoRaw);
         if (metodoNuevo === metodoAnterior) return true;
         const fechaEdicionLocal = new Date().toISOString();
-        const siguienteConteoEdicion = Math.max(1, Number(venta?.veces_editada || 0) + 1);
 
         const esVentaLocal = !esVentaBackendPersistida(venta);
 
-        const aplicarMetodoEnMemoria = (metodoPago, extra = {}) => {
-            const esMismaVenta = (v) => (
-                (v.id && venta.id && v.id === venta.id) ||
-                (v.id_local && venta.id_local && v.id_local === venta.id_local) ||
-                (v._key && venta._key && v._key === venta._key)
-            );
+        const esMismaVenta = (v) => {
+            // Match directo por ID numérico de backend
+            if (v.id && venta.id && v.id === venta.id) return true;
+            // Match por id_local (ambos lo tienen)
+            if (v.id_local && venta.id_local && v.id_local === venta.id_local) return true;
+            // Match cruzado: el item local tiene id=UUID y el backend tiene id_local=UUID
+            if (v.id && venta.id_local && String(v.id) === String(venta.id_local)) return true;
+            if (v.id_local && venta.id && String(v.id_local) === String(venta.id)) return true;
+            // Match por _key
+            if (v._key && venta._key && v._key === venta._key) return true;
+            return false;
+        };
 
-            setVentasDelDia(prev => prev.map(v => esMismaVenta(v) ? { ...v, metodo_pago: metodoPago, editada: true, ...extra } : v));
-            setHistorialReimpresion(prev => {
-                const updated = prev.map(v => esMismaVenta(v) ? {
-                    ...v,
-                    metodo_pago: metodoPago,
-                    editada: true,
-                    ...extra,
-                    fecha_actualizacion: extra.fecha_ultima_edicion || v.fecha_actualizacion
-                } : v);
-                return updated.sort((a, b) => {
-                    const fechaA = new Date(a?.fecha_actualizacion || a?.fecha_creacion || a?.fecha || 0).getTime();
-                    const fechaB = new Date(b?.fecha_actualizacion || b?.fecha_creacion || b?.fecha || 0).getTime();
-                    return fechaB - fechaA;
-                });
-            });
+        const aplicarMetodoEnMemoria = (metodoPago, extra = {}) => {
+            const actualizarItem = (v) => esMismaVenta(v) ? {
+                ...v,
+                metodo_pago: metodoPago,
+                metodo_pago_cambiado: true,
+                ...extra,
+                fecha_actualizacion: extra.fecha_ultima_edicion || v.fecha_actualizacion
+            } : v;
+
+            // Solo marcar metodo_pago_cambiado, NO editada (no es edición de productos)
+            setVentasDelDia(prev => prev.map(actualizarItem));
+            setHistorialReimpresion(prev => prev.map(actualizarItem));
+            setHistorialResumenPreview(prev => prev.map(actualizarItem));
         };
 
         // Optimista en UI para que el cambio se vea instantáneo en la card
         aplicarMetodoEnMemoria(metodoNuevo, {
-            veces_editada: siguienteConteoEdicion,
             fecha_ultima_edicion: fechaEdicionLocal,
         });
 
@@ -2356,7 +2441,7 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
             }
 
             const metaEdicionFinal = {
-                veces_editada: Number(responseData?.veces_editada || siguienteConteoEdicion),
+                metodo_pago_cambiado: true,
                 fecha_ultima_edicion: responseData?.fecha_ultima_edicion || fechaEdicionLocal,
                 dispositivo_ultima_edicion: responseData?.dispositivo_ultima_edicion || dispositivoId || '',
             };
@@ -2371,7 +2456,7 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                 const ventasGuardadas = await obtenerVentas();
                 const ventasActualizadas = ventasGuardadas.map((v) => (
                     esMismaVenta(v)
-                        ? { ...v, metodo_pago: metodoNuevo, editada: true, ...metaEdicionFinal }
+                        ? { ...v, metodo_pago: metodoNuevo, metodo_pago_cambiado: true, ...metaEdicionFinal }
                         : v
                 ));
                 await AsyncStorage.setItem('ventas', JSON.stringify(ventasActualizadas));
@@ -2413,51 +2498,51 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
             }
             return true;
         } catch (error) {
-            const esErrorConexion = error?.message?.includes('Network') || error?.message?.includes('timeout') || error?.message?.includes('Aborted') || !netInfo.isConnected;
+            console.error('❌ Error cambio método pago:', error?.message, '| code:', error?.code, '| status:', error?.status, '| payload:', JSON.stringify(error?.payload));
+            const esErrorConexion = error?.message?.includes('Network') || error?.message?.includes('timeout') || error?.message?.includes('Aborted') || error?.message?.includes('fetch');
 
-            // Si es un error de conexión y es un pedido facturado, lo mandamos a la cola offline
-            if (esErrorConexion && !esVentaLocal && venta.origen === 'PEDIDO_FACTURADO') {
+            // Si es error de conexión — guardar en cola offline y dejar cambio optimista en pantalla
+            if (esErrorConexion && !esVentaLocal) {
                 try {
-                    const colaAccionesRaw = await AsyncStorage.getItem('pedidos_acciones_pendientes');
-                    const colaAcciones = colaAccionesRaw ? JSON.parse(colaAccionesRaw) : [];
-
-                    // Filtrar si ya existe una actualización de pago para este mismo pedido para no duplicar
-                    const nuevaCola = colaAcciones.filter(a => !(a.id === venta.id && a.tipo === 'ACTUALIZAR_PAGO'));
-
-                    nuevaCola.push({
-                        id: venta.id,
-                        tipo: 'ACTUALIZAR_PAGO',
-                        metodo_pago: metodoNuevo,
-                        fecha_local: new Date().toISOString()
-                    });
-
-                    await AsyncStorage.setItem('pedidos_acciones_pendientes', JSON.stringify(nuevaCola));
-                    console.log('📡 Cambio de pago guardado en cola offline para envío automático');
-
-                    // IMPORTANTE: En este caso NO hacemos rollback visual, 
-                    // dejamos el cambio optimista en pantalla porque ya está en la cola para sincronizar.
-                    Alert.alert('Modo Offline', 'Sin conexión: El cambio de pago se sincronizará automáticamente apenas detecte señal.');
+                    if (venta.origen === 'PEDIDO_FACTURADO') {
+                        const colaAccionesRaw = await AsyncStorage.getItem('pedidos_acciones_pendientes');
+                        const colaAcciones = colaAccionesRaw ? JSON.parse(colaAccionesRaw) : [];
+                        const nuevaCola = colaAcciones.filter(a => !(a.id === venta.id && a.tipo === 'ACTUALIZAR_PAGO'));
+                        nuevaCola.push({ id: venta.id, tipo: 'ACTUALIZAR_PAGO', metodo_pago: metodoNuevo, fecha_local: new Date().toISOString() });
+                        await AsyncStorage.setItem('pedidos_acciones_pendientes', JSON.stringify(nuevaCola));
+                    } else {
+                        // Venta de ruta — guardar en cola de pendientes sync
+                        const colaRaw = await AsyncStorage.getItem('ventas_pendientes_sync');
+                        const cola = colaRaw ? JSON.parse(colaRaw) : [];
+                        const existe = cola.some(p => p.tipo === 'CAMBIO_METODO_PAGO' && esMismaVenta(p.data || {}));
+                        if (!existe) {
+                            cola.push({ tipo: 'CAMBIO_METODO_PAGO', id: venta.id, data: { id: venta.id, id_local: venta.id_local, metodo_pago: metodoNuevo }, fecha_local: new Date().toISOString() });
+                            await AsyncStorage.setItem('ventas_pendientes_sync', JSON.stringify(cola));
+                        }
+                    }
+                    console.log('📡 Cambio de pago guardado offline, se sincronizará con internet');
+                    Alert.alert('Modo Offline', 'Sin conexión. El cambio de pago se sincronizará automáticamente cuando vuelva el internet.');
                     return true;
                 } catch (queueErr) {
-                    console.error('Error guardando en cola de pedidos:', queueErr);
+                    console.error('Error guardando cambio de pago offline:', queueErr);
                 }
             }
 
-            // Rollback visual si backend falla (y no es por conexión manejable offline)
+            // Rollback visual solo si el backend respondió con error real (no conexión)
             aplicarMetodoEnMemoria(metodoAnterior, {
-                veces_editada: Number(venta?.veces_editada || 0),
+                metodo_pago_cambiado: venta?.metodo_pago_cambiado === true,
                 fecha_ultima_edicion: venta?.fecha_ultima_edicion || null,
                 dispositivo_ultima_edicion: venta?.dispositivo_ultima_edicion || '',
             });
 
-            if (esErrorVentaYaModificada(error)) {
-                Alert.alert('Bloqueado', 'Esta venta ya fue modificada una vez y no admite otro cambio.');
+            if (esErrorVentaYaModificada(error) || error?.code === 'METODO_PAGO_YA_CAMBIADO') {
+                Alert.alert('Bloqueado', 'El método de pago de esta venta ya fue cambiado una vez.');
             } else {
                 Alert.alert('Error', 'No se pudo cambiar el método de pago. Intenta nuevamente.');
             }
             return false;
         }
-    }, [normalizarMetodoPagoEdicion, ventaYaFueModificada, esErrorVentaYaModificada]);
+    }, [normalizarMetodoPagoEdicion, ventaYaCambioMetodoPago, esErrorVentaYaModificada]);
 
     const confirmarCambioMetodoPagoDesdeCard = useCallback(async () => {
         if (!ventaMetodoPagoCard || guardandoMetodoPagoCardRef.current) return;
@@ -2599,6 +2684,20 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
 
     /** Modifica la cantidad de un producto en el carritoEdicion */
     const cambiarCantidadEdicion = useCallback((nombreProducto, nuevaCantidad) => {
+        // Si la cantidad es negativa (ej: presionó - cuando estaba en 0) → quitar del carrito
+        if (parseInt(nuevaCantidad) < 0) {
+            setCarritoEdicion(prev => {
+                const updated = { ...prev };
+                delete updated[nombreProducto];
+                return updated;
+            });
+            setCantidadesEdicionInput(prev => {
+                const updated = { ...prev };
+                delete updated[nombreProducto];
+                return updated;
+            });
+            return;
+        }
         const valorRaw = String(nuevaCantidad ?? '');
         const valorLimpio = valorRaw.replace(/[^\d]/g, '');
 
@@ -2632,7 +2731,8 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
 
         setCarritoEdicion(prev => {
             const updated = { ...prev };
-            if (cantidad <= 0) {
+            if (cantidad < 0) {
+                // Presionó - estando en 0 → quitar del carrito
                 delete updated[nombreProducto];
             } else {
                 const precio = updated[nombreProducto]?.precio || 0;
@@ -2655,13 +2755,15 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         }
         const metodoPagoNormalizado = normalizarMetodoPagoEdicion(metodoPagoEdicion);
 
-        const nuevosDetalles = Object.entries(carritoEdicion).map(([nombre, item]) => ({
-            nombre,
-            producto: nombre,
-            cantidad: item.cantidad,
-            precio: item.precio,
-            subtotal: item.precio * item.cantidad,
-        }));
+        const nuevosDetalles = Object.entries(carritoEdicion)
+            .filter(([, item]) => item.cantidad > 0) // ignorar productos agregados pero sin cantidad
+            .map(([nombre, item]) => ({
+                nombre,
+                producto: nombre,
+                cantidad: item.cantidad,
+                precio: item.precio,
+                subtotal: item.precio * item.cantidad,
+            }));
 
         if (nuevosDetalles.length === 0) {
             Alert.alert('Sin productos', 'Agrega al menos un producto para guardar la edición.');
@@ -2760,6 +2862,11 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                 veces_editada: Number(respuestaEdicion?.veces_editada || conteoEdicionLocal),
                 fecha_ultima_edicion: respuestaEdicion?.fecha_ultima_edicion || fechaEdicionLocal,
                 dispositivo_ultima_edicion: respuestaEdicion?.dispositivo_ultima_edicion || dispositivoId || '',
+                // Preservar el flag metodo_pago_cambiado que viene del backend.
+                // Si el backend lo devuelve explícitamente lo tomamos; si no, mantenemos el valor previo.
+                ...(respuestaEdicion?.metodo_pago_cambiado !== undefined
+                    ? { metodo_pago_cambiado: respuestaEdicion.metodo_pago_cambiado }
+                    : {}),
             };
             const fotoVencidosPersistida = respuestaEdicion?.foto_vencidos || ventaEnEdicion?.foto_vencidos || null;
             const evidenciasPersistidas = Array.isArray(respuestaEdicion?.evidencias)
@@ -2826,7 +2933,7 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
             
             // 🔧 Invalidar caché del historial para que se recargue con la edición
             try {
-                const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+                const fechaStr = `${fechaSeleccionada.getFullYear()}-${String(fechaSeleccionada.getMonth() + 1).padStart(2, '0')}-${String(fechaSeleccionada.getDate()).padStart(2, '0')}`;
                 const cacheKey = `historial_cache_${userId}_${fechaStr}`;
                 await AsyncStorage.removeItem(cacheKey);
                 console.log(`🗑️ Caché de historial invalidado tras edición: ${cacheKey}`);
@@ -3119,9 +3226,11 @@ ${error.message}`);
 
                                 // 3. Actualizar UI
                                 const marcarAnuladaUI = v => {
-                                    const misma = (v.id && v.id === venta.id) ||
-                                        (v.id_local && v.id_local === venta.id_local) ||
-                                        (v._key === venta._key);
+                                    const misma = (v.id && venta.id && String(v.id) === String(venta.id)) ||
+                                        (v.id_local && venta.id_local && String(v.id_local) === String(venta.id_local)) ||
+                                        (v.id && venta.id_local && String(v.id) === String(venta.id_local)) ||
+                                        (v.id_local && venta.id && String(v.id_local) === String(venta.id)) ||
+                                        (v._key && venta._key && v._key === venta._key);
                                     // 🔒 Incrementar contador de anulaciones
                                     return misma ? { ...v, estado: 'ANULADA', intentos_anulacion: (parseInt(v.intentos_anulacion) || 0) + 1 } : v;
                                 };
@@ -3221,9 +3330,12 @@ ${error.message}`);
                                     const v_id_local = v.id_local != null ? String(v.id_local) : null;
                                     const venta_id_local = venta.id_local != null ? String(venta.id_local) : null;
 
-                                    const misma = (v_id && v_id === venta_id) ||
-                                                (v_id_local && v_id_local === venta_id_local);
-                                    
+                                    const misma = (v_id && venta_id && v_id === venta_id) ||
+                                                (v_id_local && venta_id_local && v_id_local === venta_id_local) ||
+                                                (v_id && venta_id_local && v_id === venta_id_local) ||
+                                                (v_id_local && venta_id && v_id_local === venta_id) ||
+                                                (v._key && venta._key && v._key === venta._key);
+
                                     // 🔒 Incrementar contador de anulaciones
                                     return misma ? { ...v, estado: 'ANULADA', intentos_anulacion: (parseInt(v.intentos_anulacion) || 0) + 1 } : v;
                                 };
@@ -3991,7 +4103,7 @@ ${error.message}`);
 
             // 5. Recargar pedidos pendientes (con timeout)
             try {
-                const fechaStr = fechaSeleccionada.toISOString().split('T')[0];
+                const fechaStr = `${fechaSeleccionada.getFullYear()}-${String(fechaSeleccionada.getMonth() + 1).padStart(2, '0')}-${String(fechaSeleccionada.getDate()).padStart(2, '0')}`;
                 await conTimeout(
                     verificarPedidosPendientes(fechaStr),
                     'Verificación de pedidos'
@@ -4061,13 +4173,15 @@ ${error.message}`);
         const appStateSub = AppState.addEventListener('change', (nextState) => {
             if (nextState === 'active') {
                 refrescarStockSilencioso();
+                // Al volver al frente, intentar sincronizar pendientes (por si volvió internet mientras estaba en background)
+                sincronizarPendientesAutomatico({ forzar: false });
             }
         });
 
         return () => {
             appStateSub?.remove?.();
         };
-    }, [turnoAbierto, diaSeleccionado, fechaSeleccionada, userId, refrescarStockSilencioso]);
+    }, [turnoAbierto, diaSeleccionado, fechaSeleccionada, userId, refrescarStockSilencioso, sincronizarPendientesAutomatico]);
 
     useEffect(() => {
         if (!turnoAbierto || !diaSeleccionado || !fechaSeleccionada || !userId) return undefined;
@@ -4218,7 +4332,8 @@ ${error.message}`);
 
         setCarritoEdicion((prev) => {
             const itemActual = prev[nombreProducto];
-            const cantidadNueva = (itemActual?.cantidad || 0) + 1;
+            // Si ya está en carrito, sumar 1. Si es nuevo, arrancar en 0 para que vendedor vea stock primero.
+            const cantidadNueva = itemActual ? (itemActual.cantidad || 0) + 1 : 0;
 
             if (cantidadNueva > maximoPermitido) {
                 Alert.alert(
@@ -4462,20 +4577,25 @@ ${error.message}`);
             }
         };
 
-        // 🆕 DETECCIÓN DE VENTA REPETIDA — prioriza la venta más reciente y completa del cliente
-        const ventaPrevia = obtenerVentaPreviaCliente(clienteSeleccionado);
+        // DETECCIÓN DE VENTA REPETIDA — permite máximo 2 ventas por cliente por día
+        const conteoVentas = contarVentasActivasCliente(clienteSeleccionado);
 
-        // Si ya vendió y NO estamos editando un pedido específico (flujo normal)
-        if (ventaPrevia && !pedidoClienteSeleccionado) {
+        if (conteoVentas >= 2 && !pedidoClienteSeleccionado) {
+            Alert.alert(
+                '🚫 Límite de Ventas',
+                `Ya realizaste 2 ventas a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\nNo se pueden hacer más ventas a este cliente.`,
+                [{ text: 'Entendido', style: 'cancel' }]
+            );
+            return;
+        }
+
+        if (conteoVentas === 1 && !pedidoClienteSeleccionado) {
             Alert.alert(
                 '⚠️ Cliente Ya Atendido',
-                `Ya realizaste una venta a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\nSi necesitas ajustar algo, edita la venta existente.`,
+                `Ya realizaste una venta a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\n¿Deseas hacer una segunda venta?`,
                 [
                     { text: 'Cancelar', style: 'cancel' },
-                    {
-                        text: 'Editar venta',
-                        onPress: () => abrirEdicionVenta(ventaPrevia)
-                    }
+                    { text: 'Continuar', onPress: procesarVenta }
                 ]
             );
             return;
@@ -4675,16 +4795,9 @@ ${error.message}`);
                     console.log(`📉 Vendido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
                 });
 
-                // 2. Restar productos vencidos (también salen del stock si es cambio mano a mano)
-                if (ventaConDatos.vencidas && ventaConDatos.vencidas.length > 0) {
-                    ventaConDatos.vencidas.forEach(item => {
-                        const nombreProducto = item.nombre.toUpperCase();
-                        const cantidadVencida = item.cantidad || 0;
-                        const stockActual = nuevoStock[nombreProducto] || 0;
-                        nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVencida);
-                        console.log(`🗑️ Vencido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
-                    });
-                }
+                // Las vencidas YA fueron descontadas de stockCargue en handleGuardarVencidas
+                // cuando el usuario las guardó en el modal. No descontar de nuevo aquí
+                // o el stock quedaría con doble deducción offline.
 
                 setStockCargue(nuevoStock);
             }
@@ -5009,26 +5122,25 @@ ${error.message}`);
 
 
 
-        // 🆕 Verificar si ya le vendió hoy
-        const ventaPrevia = obtenerVentaPreviaCliente(cliente);
+        // Verificar cuántas ventas tiene hoy — máximo 2 por cliente
+        const conteoVentasCliente = contarVentasActivasCliente(cliente);
 
-        if (ventaPrevia) {
-
+        if (conteoVentasCliente >= 2) {
             Alert.alert(
-                '⚠️ Cliente con Venta',
-                `Ya realizaste una venta a ${cliente.negocio || cliente.nombre} el día de hoy.
+                '🚫 Límite de Ventas',
+                `Ya realizaste 2 ventas a ${cliente.negocio || cliente.nombre} hoy.\n\nNo se pueden hacer más ventas a este cliente.`,
+                [{ text: 'Entendido', style: 'cancel' }]
+            );
+            return;
+        }
 
-Si necesitas ajustar algo, edita la venta existente.`,
+        if (conteoVentasCliente === 1) {
+            Alert.alert(
+                '⚠️ Cliente Ya Atendido',
+                `Ya realizaste una venta a ${cliente.negocio || cliente.nombre} el día de hoy.\n\n¿Deseas hacer una segunda venta?`,
                 [
                     { text: 'Cancelar', style: 'cancel' },
-                    {
-                        text: 'Editar venta',
-                        onPress: () => {
-                            if (ventaPrevia) {
-                                abrirEdicionVenta(ventaPrevia);
-                            }
-                        }
-                    }
+                    { text: 'Continuar', onPress: () => seleccionarClienteDirecto(cliente) }
                 ]
             );
             return;
@@ -5055,7 +5167,16 @@ Si necesitas ajustar algo, edita la venta existente.`,
 
         let topeVentaLimit = parseFloat(topeVentaRutaOcasional || 60000) || 60000;
         try {
-            const configRuta = await verificarFlagsRuta();
+            // Race: si la red tarda más de 2s, usar valores ya cargados en estado (offline-first)
+            const fallbackInmediato = {
+                rapida: flagVentaRapida,
+                crear: flagCrearCliente,
+                tope: topeVentaRutaOcasional,
+            };
+            const configRuta = await Promise.race([
+                verificarFlagsRuta(),
+                new Promise(resolve => setTimeout(() => resolve(fallbackInmediato), 2000)),
+            ]);
             const ventaRapidaPermitida = configRuta?.rapida !== false;
 
             if (!ventaRapidaPermitida) {
@@ -5591,8 +5712,11 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 return;
             }
 
-            // 🔧 CORREGIDO: Usar fechaSeleccionada en lugar de fecha actual
-            const fechaFormateada = fechaSeleccionada.toISOString().split('T')[0];
+            // Usar métodos locales para evitar que UTC desplace la fecha al día siguiente
+            const _y = fechaSeleccionada.getFullYear();
+            const _m = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
+            const _d = String(fechaSeleccionada.getDate()).padStart(2, '0');
+            const fechaFormateada = `${_y}-${_m}-${_d}`;
 
             console.log(`🔒 CERRAR TURNO - Fecha: ${fechaFormateada}, Vendedor: ${userId}`);
             console.log(`   Vencidas a reportar:`, vencidas);
@@ -5679,7 +5803,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                     `✅ Datos enviados al CRM`,
                     [
                         {
-                            text: 'OK',
+                            text: 'Volver al Menú',
                             onPress: async () => {
                                 // 🆕 Guardar novedad en localStorage para que el frontend la muestre
                                 if (data.novedad) {
@@ -5741,8 +5865,9 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
         const precioReal = getPrecioProducto(item); // 🆕 Usar precio dinámico
         const subtotalProducto = precioReal * cantidad;
 
-        // 🆕 Obtener stock del cargue
-        const stock = stockCargue[item.nombre.toUpperCase()] || 0;
+        // Stock disponible = stock del cargue - lo que ya está en carrito (actualización inmediata sin red)
+        const stockBase = stockCargue[item.nombre.toUpperCase()] || 0;
+        const stock = Math.max(0, stockBase - cantidad);
 
         // Verificar si es un precio especial
         const esPrecioEspecial = precioReal !== item.precio;
@@ -5765,11 +5890,6 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                         {esPrecioEspecial && <Text style={{ color: '#ff9800', fontWeight: 'bold' }}> ⭐</Text>}
                         <Text style={[styles.stockTextoInline, stock <= 0 && styles.stockTextoAgotado]}>{`  Stock: ${stock}`}</Text>
                     </Text>
-                    {cantidad > 0 && (
-                        <Text style={styles.productoSubtotal}>
-                            Total: {formatearMoneda(subtotalProducto)}
-                        </Text>
-                    )}
                 </View>
 
                 <View style={styles.cantidadControl}>
@@ -6189,11 +6309,11 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                                     )}
                                 </TouchableOpacity>
                                 {turnoAbierto && (
-                                    <TouchableOpacity style={[styles.btnAccion, styles.btnCerrarPequeño]} onPress={async () => {
-                                        // 🆕 Forzar recarga de totales EN VIVO desde backend antes de mostrar el modal
-                                        await verificarPedidosPendientes();
-                                        await cargarVentasDelDia(fechaSeleccionada);
+                                    <TouchableOpacity style={[styles.btnAccion, styles.btnCerrarPequeño]} onPress={() => {
+                                        // Abrir modal inmediatamente, recargar datos en segundo plano
                                         setMostrarModalCerrarTurno(true);
+                                        verificarPedidosPendientes();
+                                        cargarVentasDelDia(fechaSeleccionada);
                                     }}>
                                         <Ionicons name="lock-closed" size={18} color="white" /><Text style={styles.btnAccionTexto}>Cerrar</Text>
                                     </TouchableOpacity>
@@ -6251,7 +6371,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 ref={listaProductosRef}
                 data={productosFiltrados}
                 renderItem={renderProducto}
-                keyExtractor={(item) => String(item.id)}
+                keyExtractor={(item, index) => `prod-${item.id}-${index}`}
                 style={styles.listaProductos}
                 contentContainerStyle={[
                     styles.listaContent,
@@ -6558,7 +6678,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
             {/* 🆕 MODAL PEDIDOS ASIGNADOS */}
             <Modal
                 visible={modalPedidosVisible}
-                animationType="slide"
+                animationType="fade"
                 transparent={true}
                 onRequestClose={() => setModalPedidosVisible(false)}
             >
@@ -6575,8 +6695,8 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                             {pedidosPendientes.length === 0 ? (
                                 <Text style={{ textAlign: 'center', color: '#666', marginTop: 20 }}>No tienes pedidos pendientes</Text>
                             ) : (
-                                pedidosPendientes.map((p) => (
-                                    <View key={p.id} style={[
+                                pedidosPendientes.map((p, idx) => (
+                                    <View key={`pedido-pendiente-${p.id}-${idx}`} style={[
                                         styles.pedidoCard,
                                         p.estado === 'ANULADA' && { backgroundColor: '#fff5f5', borderColor: '#dc3545', borderWidth: 2 }
                                     ]}>
@@ -6628,7 +6748,10 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
 
                                                 <TouchableOpacity
                                                     style={[styles.botonAccion, { backgroundColor: '#e9ecef', flex: 1, marginLeft: 5 }]}
-                                                    onPress={() => marcarPedidoEntregado(p)}
+                                                    onPress={() => {
+                                                        setModalPedidosVisible(false);
+                                                        setTimeout(() => marcarPedidoEntregado(p), 150);
+                                                    }}
                                                 >
                                                     <Ionicons name="checkmark-done" size={18} color="#003d88" />
                                                     <Text style={[styles.textoBotonAccion, { color: '#003d88' }]}>Solo Entregar</Text>
@@ -6702,7 +6825,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
             {/* 🆕 MODAL HISTORIAL VENTAS */}
             <Modal
                 visible={mostrarHistorialVentas}
-                animationType="slide"
+                animationType="fade"
                 transparent={true}
                 onRequestClose={() => setMostrarHistorialVentas(false)}
                 onShow={() => {
@@ -6862,6 +6985,29 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                                     ? fuenteListado.filter(v => v.estado === 'ANULADA')
                                     : fuenteListado.filter(v => v.estado !== 'ANULADA'); // <-- Excluir aquí las anuladas de la vista normal
 
+                                // Detectar segunda venta por cliente (para badge "2ª VENTA")
+                                const idsSegundaVenta = (() => {
+                                    const porCliente = {};
+                                    (ventasAMostrar || []).forEach(v => {
+                                        const clave = norm(v.cliente_negocio || v.nombre_negocio || v.cliente_nombre || '');
+                                        if (!clave) return;
+                                        if (!porCliente[clave]) porCliente[clave] = [];
+                                        porCliente[clave].push(v);
+                                    });
+                                    const ids = new Set();
+                                    Object.values(porCliente).forEach(grupo => {
+                                        if (grupo.length < 2) return;
+                                        const sorted = [...grupo].sort((a, b) =>
+                                            new Date(a.fecha || a.fecha_creacion || 0).getTime() -
+                                            new Date(b.fecha || b.fecha_creacion || 0).getTime()
+                                        );
+                                        sorted.slice(1).forEach(v => {
+                                            ids.add(v._key || v.id_local || String(v.id));
+                                        });
+                                    });
+                                    return ids;
+                                })();
+
                                 if (ventasAMostrar.length === 0) {
                                     return (
                                         <Text style={{ textAlign: 'center', color: '#666', marginTop: 20 }}>
@@ -6872,13 +7018,15 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
 
                                 return ventasAMostrar.map((venta) => {
                                     const esAnulada = venta.estado === 'ANULADA';
+                                    const esSegundaVenta = !esAnulada && idsSegundaVenta.has(venta._key || venta.id_local || String(venta.id));
                                     const yaModificada = ventaYaFueModificada(venta);
                                     const metodoPagoCard = normalizarMetodoPagoEdicion(venta?.metodo_pago);
                                     const ventaTieneIdBackend = venta?.id !== undefined && venta?.id !== null && !String(venta?.id).includes('-');
                                     const ventaEsLocalPreview = String(venta?._key || '').startsWith('local-') || !ventaTieneIdBackend;
                                     const accionesBloqueadasPorPreview = usandoVistaPreviaHistorial && ventaEsLocalPreview;
                                     const ventaBackendAsociada = resolverVentaBackendAsociada(venta);
-                                    const puedeCambiarMetodoDesdeCard = !accionesBloqueadasPorPreview && !esAnulada && !yaModificada && !!ventaBackendAsociada;
+                                    const yaCambioMetodo = ventaYaCambioMetodoPago(ventaBackendAsociada || venta);
+                                    const puedeCambiarMetodoDesdeCard = !accionesBloqueadasPorPreview && !esAnulada && !yaCambioMetodo && !!ventaBackendAsociada;
                                     const vecesEditada = Number(venta?.veces_editada || 0);
                                     const horaUltimaEdicion = formatearHoraEdicion(venta?.fecha_ultima_edicion);
                                     return (
@@ -6923,6 +7071,11 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                                                             <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>
                                                                 {vecesEditada > 0 ? `✏️ EDITADA x${vecesEditada}` : '✏️ EDITADA'}
                                                             </Text>
+                                                        </View>
+                                                    )}
+                                                    {esSegundaVenta && (
+                                                        <View style={{ alignSelf: 'flex-start', backgroundColor: '#7c3aed', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 }}>
+                                                            <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>2ª VENTA</Text>
                                                         </View>
                                                     )}
                                                 </View>
@@ -7079,6 +7232,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 visible={modalEdicionVisible}
                 animationType="fade"
                 transparent={true}
+                statusBarTranslucent={true}
                 onRequestClose={() => cerrarEdicionVenta()}
             >
                 <KeyboardAvoidingView
@@ -7087,9 +7241,10 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                         {
                             // Fijo en zona superior para evitar salto al abrir teclado.
                             justifyContent: 'flex-start',
-                            paddingTop: Platform.OS === 'android' ? 2 : 34,
-                            paddingHorizontal: 8,
-                            paddingBottom: Platform.OS === 'android' ? 2 : 20,
+                            padding: 0,
+                            paddingTop: Platform.OS === 'android' ? 23 : 34,
+                            paddingHorizontal: Platform.OS === 'android' ? 6 : 8,
+                            paddingBottom: Platform.OS === 'android' ? 0 : 20,
                         }
                     ]}
                     // En Android evitamos `height` porque recorta la parte inferior
@@ -7102,13 +7257,14 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                         borderRadius: 20,
                         width: '100%',
                         padding: 8,
-                        maxHeight: Platform.OS === 'android' ? '93%' : '88%',
-                        minHeight: Platform.OS === 'android' ? '64%' : '70%',
-                        flexShrink: 1,
+                        marginTop: 0,
+                        maxHeight: Platform.OS === 'android' ? '100%' : '88%',
+                        minHeight: Platform.OS === 'android' ? '70%' : '70%',
+                        flexShrink: 0,
                         overflow: 'hidden',
                     }}>
                         {/* Header */}
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2, paddingTop: Platform.OS === 'android' ? 8 : 0, paddingBottom: Platform.OS === 'android' ? 6 : 0 }}>
                             <View>
                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                     <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#333' }}>✏️ Editar Venta</Text>
@@ -7158,35 +7314,6 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                             </TouchableOpacity>
                         </View>
 
-                        <View style={{ marginTop: -4, marginBottom: 4 }}>
-                            <View style={{ flexDirection: 'row', gap: 8 }}>
-                                {METODOS_PAGO_VALIDOS_EDICION.map((metodo) => {
-                                    const activo = metodoPagoEdicion === metodo;
-                                    return (
-                                        <TouchableOpacity
-                                            key={metodo}
-                                            style={{
-                                                flex: 1,
-                                                borderWidth: 1,
-                                                borderColor: activo ? '#003d88' : '#d0d7de',
-                                                backgroundColor: activo ? '#003d88' : '#f8f9fa',
-                                                borderRadius: 8,
-                                                paddingVertical: 6,
-                                                alignItems: 'center',
-                                            }}
-                                            onPress={() => setMetodoPagoEdicion(metodo)}
-                                            activeOpacity={0.7}
-                                            delayPressIn={0}
-                                        >
-                                            <Text style={{ color: activo ? '#fff' : '#333', fontWeight: '700', fontSize: 12 }}>
-                                                {metodo}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </View>
-                        </View>
-
                         <View style={{ marginBottom: 4 }}>
                             <TextInput
                                 style={{
@@ -7227,9 +7354,9 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                                                 Sin coincidencias.
                                             </Text>
                                         ) : (
-                                            productosSugeridosEdicion.map((prod) => (
+                                            productosSugeridosEdicion.map((prod, idx) => (
                                                 <View
-                                                    key={`edit-add-${prod.id}`}
+                                                    key={`edit-add-${prod.id}-${idx}`}
                                                     style={{
                                                         flexDirection: 'row',
                                                         alignItems: 'center',
@@ -7246,6 +7373,10 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                                                         </Text>
                                                         <Text style={{ fontSize: 12, color: '#666' }}>
                                                             {formatearMoneda(preciosPorProductoId[Number(prod.id)] ?? prod.precio ?? 0)}
+                                                            {'  '}
+                                                            <Text style={{ color: obtenerMaximoEditableProducto(prod.nombre) > 0 ? '#00ad53' : '#e74c3c', fontWeight: '700' }}>
+                                                                {`Stock: ${obtenerMaximoEditableProducto(prod.nombre)}`}
+                                                            </Text>
                                                         </Text>
                                                     </View>
                                                     <TouchableOpacity
@@ -7379,31 +7510,31 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                         </View>
 
                         {/* Botones */}
-                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 4, paddingBottom: 8 }}>
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 2, paddingBottom: 2 }}>
                             <TouchableOpacity
                                 style={{
                                     flex: 1,
                                     backgroundColor: '#6c757d',
-                                    padding: 8,
+                                    padding: 6,
                                     borderRadius: 10,
                                     alignItems: 'center'
                                 }}
                                 onPress={() => cerrarEdicionVenta()}
                             >
-                                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>Cancelar</Text>
+                                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 13 }}>Cancelar</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={{
                                     flex: 2,
                                     backgroundColor: cargandoEdicion ? '#aaa' : '#e74c3c',
-                                    padding: 8,
+                                    padding: 6,
                                     borderRadius: 10,
                                     alignItems: 'center'
                                 }}
                                 onPress={confirmarEdicionVenta}
                                 disabled={cargandoEdicion}
                             >
-                                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>
+                                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 13 }}>
                                     {cargandoEdicion ? 'Guardando...' : '✅ Guardar Edición'}
                                 </Text>
                             </TouchableOpacity>
@@ -7412,96 +7543,39 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 </KeyboardAvoidingView>
             </Modal>
 
-            {/* 🆕 Modal Turno Ya Cerrado (se muestra cuando backend reabrió un turno cerrado) */}
+            {/* Modal Turno Cerrado */}
             <Modal
                 visible={mostrarModalTurnoCerrado}
                 transparent={true}
                 animationType="fade"
-                onRequestClose={() => setMostrarModalTurnoCerrado(false)}
+                onRequestClose={() => navigation.navigate('Options', { userId, vendedorNombre })}
             >
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContentCentered}>
                         <View style={{ alignItems: 'center', marginBottom: 20 }}>
-                            <Ionicons name="warning" size={60} color="#FF6B6B" />
+                            <Ionicons name="lock-closed" size={60} color="#E74C3C" />
                         </View>
 
-                        <Text style={[styles.modalTitle, { textAlign: 'center', color: '#FF6B6B' }]}>
-                            ⚠️ TURNO YA CERRADO
+                        <Text style={[styles.modalTitle, { textAlign: 'center', color: '#E74C3C' }]}>
+                            🔒 TURNO CERRADO
                         </Text>
 
-                        <Text style={{ fontSize: 16, color: '#555', textAlign: 'center', marginBottom: 8, marginTop: 12 }}>
-                            El turno del {fechaTurnoCerrado} ya fue cerrado anteriormente.
+                        <Text style={{ fontSize: 16, color: '#555', textAlign: 'center', marginBottom: 24, marginTop: 12 }}>
+                            El turno del {fechaTurnoCerrado} ya fue cerrado.{'\n'}No puedes realizar más operaciones.
                         </Text>
 
-                        <Text style={{ fontSize: 14, color: '#888', textAlign: 'center', marginBottom: 24, fontStyle: 'italic' }}>
-                            El stock puede estar en cero. ¿Deseas continuar de todas formas?
-                        </Text>
-
-                        <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-                            <TouchableOpacity
-                                style={[styles.btnModal, { backgroundColor: '#E74C3C', flex: 1 }]}
-                                onPress={() => {
-                                    setMostrarModalTurnoCerrado(false);
-                                    navigation.navigate('Options', { userId, vendedorNombre });
-                                }}
-                            >
-                                <Ionicons name="close-circle" size={20} color="#FFF" />
-                                <Text style={{ color: '#FFF', fontSize: 14, fontWeight: '600', marginLeft: 8 }}>
-                                    Cancelar
-                                </Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                style={[styles.btnModal, { backgroundColor: '#27AE60', flex: 1 }]}
-                                onPress={async () => {
-                                    setMostrarModalTurnoCerrado(false);
-                                    console.log('🔓 Reabriendo turno con forzar=true...');
-
-                                    // Llamar al backend con forzar=true para reabrir
-                                    try {
-                                        const controllerReopen = new AbortController();
-                                        const timeoutReopen = setTimeout(() => controllerReopen.abort(), 10000);
-                                        const headersAuth = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
-
-                                        const resp = await fetch(ENDPOINTS.TURNO_ABRIR, {
-                                            method: 'POST',
-                                            headers: headersAuth,
-                                            body: JSON.stringify({
-                                                vendedor_id: userId,
-                                                vendedor_nombre: vendedorNombre || `Vendedor ${userId}`,
-                                                dia: diaSeleccionado,
-                                                fecha: fechaTurnoCerrado,
-                                                dispositivo: Platform.OS,
-                                                forzar: true
-                                            }),
-                                            signal: controllerReopen.signal
-                                        });
-                                        clearTimeout(timeoutReopen);
-                                        const respData = await resp.json();
-                                        console.log('✅ Turno reabierto:', respData);
-                                    } catch (err) {
-                                        console.log('⚠️ Error reabriendo turno:', err);
-                                    }
-
-                                    // Abrir turno localmente
-                                    setTurnoAbierto(true);
-                                    setHoraTurno(new Date());
-
-                                    // Cargar stock y pedidos
-                                    await cargarStockCargue(diaSeleccionado, new Date(fechaTurnoCerrado));
-                                    await verificarPedidosPendientes(fechaTurnoCerrado);
-
-                                    cargarDatos();
-                                    verificarPendientes();
-                                    precargarClientesEnCache();
-                                }}
-                            >
-                                <Ionicons name="checkmark-circle" size={20} color="#FFF" />
-                                <Text style={{ color: '#FFF', fontSize: 14, fontWeight: '600', marginLeft: 8 }}>
-                                    Continuar
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
+                        <TouchableOpacity
+                            style={[styles.btnModal, { backgroundColor: '#E74C3C', width: '100%' }]}
+                            onPress={() => {
+                                setMostrarModalTurnoCerrado(false);
+                                navigation.navigate('Options', { userId, vendedorNombre });
+                            }}
+                        >
+                            <Ionicons name="arrow-back" size={20} color="#FFF" />
+                            <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                                Volver al Menú
+                            </Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
             </Modal>
@@ -8003,6 +8077,12 @@ const styles = StyleSheet.create({
         marginTop: 5,
     },
     pendientesBar: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 100,
+        elevation: 10,
         backgroundColor: '#ff9800',
         flexDirection: 'row',
         alignItems: 'center',

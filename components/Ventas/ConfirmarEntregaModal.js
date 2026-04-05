@@ -22,7 +22,7 @@ export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido })
         }
     }, [visible]);
 
-    if (!pedido) return null;
+    if (!pedido) return <Modal visible={false} />;
 
     const {
         numero_pedido,
@@ -34,7 +34,7 @@ export const ConfirmarEntregaModal = ({ visible, onClose, onConfirmar, pedido })
     return (
         <Modal
             visible={visible}
-            animationType="slide"
+            animationType="fade"
             transparent={true}
             onRequestClose={onClose}
         >

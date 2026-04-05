@@ -55,6 +55,7 @@ export const obtenerDispositivoId = async () => {
 // ==================== COLA DE SINCRONIZACIÓN OFFLINE ====================
 const COLA_PENDIENTES_KEY = 'ventas_pendientes_sync';
 let sincronizandoCola = false;
+let sincronizandoColaDesde = 0; // timestamp para detectar cola bloqueada
 let colaPendientesLock = Promise.resolve();
 
 /**
@@ -156,7 +157,11 @@ const esErrorPermanenteDeSincronizacion = (resultadoEnvio, error) => {
         .join(' ')
         .toUpperCase();
 
-    return texto.includes('STOCK DISPONIBLE DEL CARGUE') || texto.includes('STOCK_INSUFICIENTE_CARGUE');
+    return texto.includes('STOCK DISPONIBLE DEL CARGUE') ||
+        texto.includes('STOCK_INSUFICIENTE_CARGUE') ||
+        texto.includes('YA FUE MODIFICADA') ||
+        texto.includes('NO SE PERMITEN') ||
+        texto.includes('YA FUE EDITADA');
 };
 
 const construirResumenErrorSync = (resultadoEnvio, error) => {
@@ -415,7 +420,7 @@ const verificarVentaExiste = async (ventaId, ventaData) => {
         const nombreVenta = normalizar(ventaData.cliente_nombre);
         const terminoBusqueda = encodeURIComponent(negocioVenta || nombreVenta || '');
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 segundos
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s — debe caber en ventana de 15s total
 
         const response = await fetch(`${API_BASE}/ventas-ruta/?search=${terminoBusqueda}`, {
             signal: controller.signal
@@ -460,11 +465,17 @@ const verificarVentaExiste = async (ventaId, ventaData) => {
  * Intenta sincronizar todas las ventas pendientes
  */
 export const sincronizarVentasPendientes = async () => {
+    // Safety: si lleva más de 20s bloqueada (red colgada), liberar el lock
     if (sincronizandoCola) {
-        return { sincronizadas: 0, pendientes: 0 };
+        if (Date.now() - sincronizandoColaDesde < 20000) {
+            return { sincronizadas: 0, pendientes: 0 };
+        }
+        console.warn('⚠️ sincronizandoCola estaba bloqueado > 20s, liberando forzosamente');
+        sincronizandoCola = false;
     }
 
     sincronizandoCola = true;
+    sincronizandoColaDesde = Date.now();
     let sincronizadas = 0;
     let yaExistentes = 0;
 
@@ -546,7 +557,7 @@ export const sincronizarVentasPendientes = async () => {
                         sincronizadas++;
                         console.log(`✅ Edición de venta ${ventaNormalizada.id} sincronizada`);
                     } else {
-                        const errorRaw = window.__ultimoErrorEdicion;
+                        const errorRaw = global.__ultimoErrorEdicion;
                         if (errorRaw === 'VENTA_YA_MODIFICADA') {
                             await eliminarDeColaPendientes(ventaId);
                             await marcarVentaLocalSincronizada(ventaId);
@@ -646,6 +657,7 @@ export const sincronizarVentasPendientes = async () => {
         return { sincronizadas: 0, pendientes: 0, error: error.message };
     } finally {
         sincronizandoCola = false;
+        sincronizandoColaDesde = 0;
     }
 };
 

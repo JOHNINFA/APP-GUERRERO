@@ -273,7 +273,7 @@ const ClienteModal = ({ visible, onClose, onClienteGuardado, vendedorId }) => {
     return (
         <Modal
             visible={visible}
-            animationType="slide"
+            animationType="fade"
             transparent={false}
             onRequestClose={handleCancelar}
         >

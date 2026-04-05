@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
     View,
     Text,
@@ -13,7 +13,8 @@ import {
     Keyboard,
     Platform,
     Alert,
-    ActivityIndicator
+    ActivityIndicator,
+    Animated
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -42,6 +43,7 @@ const DevolucionesVencidas = React.memo(({
     const [busquedaProducto, setBusquedaProducto] = useState('');
     const [tecladoVisible, setTecladoVisible] = useState(false);
     const [guardando, setGuardando] = useState(false);
+    const footerAnim = useRef(new Animated.Value(1)).current;
     
     // 🚀 Optimización: Cargar productos solo cuando el modal es visible
     const productos = useMemo(() => {
@@ -79,8 +81,14 @@ const DevolucionesVencidas = React.memo(({
         const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
         const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
-        const showSub = Keyboard.addListener(showEvent, () => setTecladoVisible(true));
-        const hideSub = Keyboard.addListener(hideEvent, () => setTecladoVisible(false));
+        const showSub = Keyboard.addListener(showEvent, () => {
+            setTecladoVisible(true);
+            footerAnim.setValue(0); // ocultar instantáneo al abrir teclado
+        });
+        const hideSub = Keyboard.addListener(hideEvent, () => {
+            setTecladoVisible(false);
+            Animated.timing(footerAnim, { toValue: 1, duration: 120, useNativeDriver: false }).start(); // aparecer suave al cerrar
+        });
 
         return () => {
             showSub.remove();
@@ -556,6 +564,7 @@ const DevolucionesVencidas = React.memo(({
             visible={visible}
             animationType="fade"
             transparent={true}
+            statusBarTranslucent={true}
             onRequestClose={handleCancelar}
         >
             <KeyboardAvoidingView
@@ -563,29 +572,29 @@ const DevolucionesVencidas = React.memo(({
                     flex: 1,
                     backgroundColor: 'rgba(0, 0, 0, 0.5)',
                     justifyContent: 'flex-start',
-                    paddingTop: Platform.OS === 'android' ? 8 : 20,
-                    paddingHorizontal: 8,
-                    paddingBottom: Platform.OS === 'android' ? 8 : 20,
+                    paddingTop: Platform.OS === 'android' ? 0 : 34,
+                    paddingHorizontal: Platform.OS === 'android' ? 0 : 8,
+                    paddingBottom: Platform.OS === 'android' ? 0 : 20,
                 }}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 enabled={Platform.OS === 'ios'}
             >
                 <View style={{
                     backgroundColor: '#fff',
-                    borderRadius: 20,
+                    borderTopLeftRadius: 20,
+                    borderTopRightRadius: 20,
+                    borderBottomLeftRadius: 8,
+                    borderBottomRightRadius: 8,
                     width: '100%',
-                    maxHeight: Platform.OS === 'android' ? '98%' : '95%',
-                    minHeight: Platform.OS === 'android' ? '70%' : '75%',
-                    flexShrink: 1,
-                    overflow: 'hidden',
                     flex: 1,
+                    overflow: 'hidden',
                 }}>
                     {/* Header */}
-                    <View style={[styles.header, tecladoVisible && styles.headerCompacto]}>
+                    <View style={styles.header}>
                         <TouchableOpacity onPress={handleCancelar} style={styles.btnCerrar}>
                             <Ionicons name="close" size={28} color="#333" />
                         </TouchableOpacity>
-                        <Text style={[styles.titulo, tecladoVisible && styles.tituloCompacto]}>
+                        <Text style={styles.titulo}>
                             {tipo === 'devoluciones' ? 'Devoluciones' : 'Productos Vencidos'}
                         </Text>
                         <TouchableOpacity onPress={handleLimpiarTodo} style={styles.btnLimpiarTodo}>
@@ -603,7 +612,7 @@ const DevolucionesVencidas = React.memo(({
                     )}
 
                     {/* Buscador fijo (sticky) */}
-                    <View style={[styles.busquedaContainer, tecladoVisible && styles.busquedaContainerCompacto]}>
+                    <View style={styles.busquedaContainer}>
                         <Ionicons name="search" size={18} color="#666" style={styles.iconoBusqueda} />
                         <TextInput
                             style={styles.inputBusqueda}
@@ -625,7 +634,7 @@ const DevolucionesVencidas = React.memo(({
                         renderItem={renderProducto}
                         keyExtractor={(item) => String(item.id)}
                         style={styles.lista}
-                        contentContainerStyle={[styles.listaContent, tecladoVisible && styles.listaContentCompacto]}
+                        contentContainerStyle={styles.listaContent}
                         keyboardShouldPersistTaps="always"
                         ListFooterComponent={renderPanelFotosGenerales}
                         ListEmptyComponent={
@@ -636,8 +645,12 @@ const DevolucionesVencidas = React.memo(({
                         }
                     />
 
-                    {/* Footer con botones */}
-                    <View style={[styles.footer, tecladoVisible && styles.footerCompacto]}>
+                    {/* Footer con botones — fade out cuando teclado abre, fade in cuando cierra */}
+                    <Animated.View style={[styles.footer, {
+                        opacity: footerAnim,
+                        maxHeight: footerAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 120] }),
+                        overflow: 'hidden',
+                    }]}>
                         <TouchableOpacity
                             style={[styles.btnCancelar, guardando && styles.btnAccionDeshabilitado]}
                             onPress={handleCancelar}
@@ -666,7 +679,7 @@ const DevolucionesVencidas = React.memo(({
                                     )}
                             </Text>
                         </TouchableOpacity>
-                    </View>
+                    </Animated.View>
                 </View>
             </KeyboardAvoidingView>
         </Modal>
@@ -683,9 +696,9 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         alignItems: 'center',
         backgroundColor: 'white',
-        paddingTop: 22,
+        paddingTop: Platform.OS === 'android' ? 12 : 8,
         paddingHorizontal: 15,
-        paddingBottom: 10,
+        paddingBottom: Platform.OS === 'android' ? 4 : 6,
         borderBottomWidth: 1,
         borderBottomColor: '#e0e0e0',
     },
@@ -879,8 +892,8 @@ const styles = StyleSheet.create({
     footer: {
         flexDirection: 'row',
         backgroundColor: 'white',
-        padding: 15,
-        paddingBottom: 30, // Extra padding para barra de navegación Android
+        padding: 10,
+        paddingBottom: Platform.OS === 'android' ? 10 : 20,
         borderTopWidth: 1,
         borderTopColor: '#e0e0e0',
         gap: 10,
@@ -891,7 +904,7 @@ const styles = StyleSheet.create({
     },
     btnCancelar: {
         flex: 1,
-        padding: 15,
+        padding: 10,
         borderRadius: 8,
         backgroundColor: '#f5f5f5',
         alignItems: 'center',
@@ -908,7 +921,7 @@ const styles = StyleSheet.create({
     btnGuardar: {
         flex: 1,
         flexDirection: 'row',
-        padding: 15,
+        padding: 10,
         borderRadius: 8,
         backgroundColor: '#00ad53',
         alignItems: 'center',
