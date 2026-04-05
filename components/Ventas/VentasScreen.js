@@ -4803,6 +4803,12 @@ ${error.message}`);
             // IMPORTANTE: Solo afectar stock si es VENTA DIRECTA.
             // Los pedidos asignados ya tienen su stock reservado/descontado en el cargue inicial.
             if (!pedidoClienteSeleccionado) {
+                // Bloquear refrescarStockSilencioso por 30s para evitar doble deducción:
+                // el backend ya decrementó el stock, pero la venta local puede tardar unos
+                // segundos en marcarse sincronizada=true — si el refresh corre en ese lapso,
+                // reconciliarStockConVentasLocales la descuenta de nuevo.
+                bloqueoRefreshStockHastaRef.current = Date.now() + 30 * 1000;
+
                 // Restar las cantidades vendidas del stock local
                 const nuevoStock = { ...stockCargue };
 
