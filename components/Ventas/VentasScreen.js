@@ -3960,6 +3960,13 @@ ${error.message}`);
                         console.log('⚠️ No se pudo guardar caché de stock:', e?.message);
                     }
 
+                    // Si hay un bloqueo activo (venta recién guardada), no sobreescribir el stock
+                    // que ya fue calculado correctamente en confirmarVenta.
+                    if (Date.now() < (bloqueoRefreshStockHastaRef.current || 0)) {
+                        console.log('⏸️ cargarStockCargue: bloqueo activo, descartando recarga para evitar flash de stock.');
+                        return { hayCargue: true, totalProductos, estado: estadoCargue };
+                    }
+
                     setStockCargue(stockReconciliado);
                     setPreciosAlternosCargue(preciosAlternos);
                     console.log('📦 Stock cargado/reconciliado:', Object.keys(stockReconciliado).length, 'productos');
@@ -3995,6 +4002,10 @@ ${error.message}`);
                 if (Object.keys(stockAUsar).length > 0) {
                     // Reconciliar con ventas locales
                     const stockReconciliado = await reconciliarStockConVentasLocales(stockAUsar, fechaFormateada);
+                    if (Date.now() < (bloqueoRefreshStockHastaRef.current || 0)) {
+                        console.log('⏸️ cargarStockCargue (caché): bloqueo activo, descartando recarga.');
+                        return { hayCargue: true, totalProductos: Object.keys(stockReconciliado).length, estado: 'DESPACHO', offline: isNetworkError, stockLocalConservado: true };
+                    }
                     setStockCargue(stockReconciliado);
                     console.log('✅ Stock recuperado desde caché:', Object.keys(stockReconciliado).length, 'productos');
                     
