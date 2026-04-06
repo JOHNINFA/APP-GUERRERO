@@ -311,15 +311,62 @@ export const actualizarPedido = async (pedidoId, datos) => {
  * @param {object} datosActualizados - { detalles, total, metodo_pago, ... }
  */
 export const editarVentaRuta = async (ventaId, datosActualizados) => {
+    // Misma lógica que enviarVentaRuta: FormData si hay fotos URI, JSON si no hay fotos.
+    const hayFotos = datosActualizados.foto_vencidos &&
+        typeof datosActualizados.foto_vencidos === 'object' &&
+        Object.keys(datosActualizados.foto_vencidos).length > 0;
+    const hayFotosArchivo = hayFotos && Object.values(datosActualizados.foto_vencidos).some((fotosProducto) =>
+        Array.isArray(fotosProducto) &&
+        fotosProducto.some((foto) => typeof foto === 'string' && !foto.startsWith('data:'))
+    );
+
+    // Con foto: 25s (señal lenta puede tardar en subir imagen)
+    // Sin foto: 10s (JSON pequeño, fallo rápido)
+    const timeoutMs = hayFotosArchivo ? 25000 : 10000;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos — fallo rápido para que el alert aparezca pronto
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-        const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
+        let headers;
+        let body;
+
+        if (hayFotosArchivo) {
+            // FormData — igual que enviarVentaRuta con fotos
+            const formData = new FormData();
+            formData.append('detalles', JSON.stringify(datosActualizados.detalles || []));
+            formData.append('total', String(datosActualizados.total || 0));
+            formData.append('metodo_pago', (datosActualizados.metodo_pago || '').toUpperCase());
+            formData.append('dispositivo_id', datosActualizados.dispositivo_id || '');
+            formData.append('productos_vencidos', JSON.stringify(datosActualizados.productos_vencidos || []));
+
+            // Adjuntar cada foto como archivo real
+            for (const productoId in datosActualizados.foto_vencidos) {
+                const fotosProducto = datosActualizados.foto_vencidos[productoId];
+                if (Array.isArray(fotosProducto)) {
+                    fotosProducto.forEach((fotoUri, index) => {
+                        if (fotoUri.startsWith('data:')) return; // base64 se maneja abajo
+                        formData.append(`evidencia_${productoId}_${index}`, {
+                            uri: fotoUri,
+                            type: 'image/jpeg',
+                            name: `evidencia_${productoId}_${index}_${Date.now()}.jpg`,
+                        });
+                    });
+                }
+            }
+            // También enviar el mapa completo para que el backend sepa qué producto tiene qué foto
+            formData.append('foto_vencidos', JSON.stringify(datosActualizados.foto_vencidos));
+
+            headers = await obtenerAuthHeaders();
+            body = formData;
+        } else {
+            headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });
+            body = JSON.stringify(datosActualizados);
+        }
+
         const response = await fetch(`${API_BASE}/ventas-ruta/${ventaId}/editar/`, {
             method: 'PATCH',
             headers,
-            body: JSON.stringify(datosActualizados),
+            body,
             signal: controller.signal,
         });
 

@@ -2854,8 +2854,10 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                 dispositivo_id: dispositivoId,
                 productos_vencidos: nuevosProductosVencidos,
             };
-            if (fotosVencidosEdicionBase64) {
-                payloadEdicion.foto_vencidos = fotosVencidosEdicionBase64;
+            // Llamado directo: pasar URIs originales → editarVentaRuta usa FormData (igual que enviarVentaRuta)
+            // Cola de reintento: usa base64 (más abajo) para que no expiren si se cierra la app
+            if (Object.keys(fotosLocalesEdicion).length > 0) {
+                payloadEdicion.foto_vencidos = fotosLocalesEdicion;
             }
 
             if (esVentaBackendPersistida(ventaEnEdicion)) {
