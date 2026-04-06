@@ -1214,9 +1214,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
     // Estados para vencidas
     const [vencidas, setVencidas] = useState([]);
     const [fotoVencidas, setFotoVencidas] = useState(null);
-    const [mostrarVencidasEdicion, setMostrarVencidasEdicion] = useState(false);
-    const [vencidasEdicion, setVencidasEdicion] = useState([]);
-    const [fotoVencidasEdicion, setFotoVencidasEdicion] = useState({});
 
     // Estado para pull to refresh
     const [refreshing, setRefreshing] = useState(false);
@@ -2031,46 +2028,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         return `${API_URL}${valor.startsWith('/') ? valor : `/${valor}`}`;
     }, []);
 
-    const normalizarVencidasVentaEdicion = useCallback((ventaFuente) => {
-        const listaBase = Array.isArray(ventaFuente?.productos_vencidos)
-            ? ventaFuente.productos_vencidos
-            : Array.isArray(ventaFuente?.vencidas)
-                ? ventaFuente.vencidas
-                : [];
-
-        return listaBase
-            .map((item) => ({
-                id: item?.id,
-                nombre: item?.nombre || item?.producto || '',
-                cantidad: parseInt(item?.cantidad || 0, 10) || 0,
-                motivo: item?.motivo || 'No especificado',
-            }))
-            .filter((item) => item.nombre && item.cantidad > 0);
-    }, []);
-
-    const normalizarFotosVentaEdicion = useCallback((ventaFuente) => {
-        if (ventaFuente?.fotoVencidas && typeof ventaFuente.fotoVencidas === 'object') {
-            return ventaFuente.fotoVencidas;
-        }
-
-        if (Array.isArray(ventaFuente?.evidencias) && ventaFuente.evidencias.length > 0) {
-            const urls = ventaFuente.evidencias
-                .map((ev) => construirUrlMediaVenta(ev?.imagen))
-                .filter(Boolean);
-            if (urls.length > 0) {
-                return { general: urls };
-            }
-        }
-
-        if (ventaFuente?.foto_vencidos) {
-            const url = construirUrlMediaVenta(ventaFuente.foto_vencidos);
-            if (url) {
-                return { general: [url] };
-            }
-        }
-
-        return {};
-    }, [construirUrlMediaVenta]);
 
 
     const esVentaBackendPersistida = useCallback((ventaFuente) => {
@@ -2243,6 +2200,7 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         // Paso 2: filtrar ventas activas cuyo ID no esté en idsAnuladas
         const coincideActiva = (venta) => {
             if (!venta || String(venta?.estado || '').toUpperCase() === 'ANULADA') return false;
+            if (parseFloat(venta?.total || 0) === 0) return false; // reporte puro de vencidas, no cuenta como venta
             const id = venta?.id_local || venta?.id_venta_local || venta?.id;
             if (id && idsAnuladas.has(String(id))) return false; // versión anulada existe en otra lista
             const clavesVenta = obtenerClavesCoincidenciaCliente(venta);
@@ -2258,9 +2216,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         return mapa.size;
     }, [ventasDelDia, ventasBackendDia, obtenerClavesCoincidenciaCliente]);
 
-    const totalItemsVencidasEdicion = useMemo(() => (
-        (vencidasEdicion || []).reduce((sum, item) => sum + (parseInt(item?.cantidad || 0, 10) || 0), 0)
-    ), [vencidasEdicion]);
 
     const cerrarEdicionVenta = useCallback((reabrirHistorial = true) => {
         setModalEdicionVisible(false);
@@ -2270,25 +2225,11 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         setCantidadesEdicionInput({});
         setBusquedaProductoEdicion('');
         setFocoCampoEdicion(null);
-        setVencidasEdicion([]);
-        setFotoVencidasEdicion({});
-        setMostrarVencidasEdicion(false);
         if (reabrirHistorial) {
             setMostrarHistorialVentas(true);
             cargarHistorialReimpresion();
         }
     }, [cargarHistorialReimpresion]);
-
-    const abrirModalVencidasDesdeEdicion = useCallback(() => {
-        if (!ventaEnEdicion) return;
-        setMostrarVencidasEdicion(true);
-    }, [ventaEnEdicion]);
-
-    const handleGuardarVencidasEdicion = useCallback((productosVencidos, foto) => {
-        setVencidasEdicion(productosVencidos || []);
-        setFotoVencidasEdicion(foto || {});
-        setMostrarVencidasEdicion(false);
-    }, []);
 
     // ─────────────────────────────────────────────
     // 🆕 EDICIÓN DE VENTA DESDE HISTORIAL
@@ -2349,11 +2290,8 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
             )
         );
         setMetodoPagoEdicion(normalizarMetodoPagoEdicion(ventaEditable?.metodo_pago));
-        setVencidasEdicion(normalizarVencidasVentaEdicion(ventaEditable));
-        setFotoVencidasEdicion(normalizarFotosVentaEdicion(ventaEditable));
         setBusquedaProductoEdicion('');
         setFocoCampoEdicion(null);
-        setMostrarVencidasEdicion(false);
         setModalEdicionVisible(true);
 
         // 🚀 CARGAR DETALLES COMPLETOS EN SEGUNDO PLANO (solo si es venta del backend)
@@ -2369,11 +2307,9 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                         ...ventaDetallada,
                         detalles: normalizarDetallesVenta(ventaDetallada),
                     };
-                    
+
                     // Actualizar solo si el modal sigue abierto
                     setVentaEnEdicion(ventaActualizada);
-                    setVencidasEdicion(normalizarVencidasVentaEdicion(ventaActualizada));
-                    setFotoVencidasEdicion(normalizarFotosVentaEdicion(ventaActualizada));
                 }
             } catch (error) {
                 console.log('⚠️ No se pudo cargar detalle completo para edición:', error?.message || error);
@@ -2647,63 +2583,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         return Math.max(0, stockActual + cantidadOriginal);
     }, [stockCargue, resolverClaveStockEdicion, obtenerCantidadOriginalEdicion]);
 
-    const obtenerCantidadOriginalVencidaEdicion = useCallback((nombreProducto) => {
-        const vencidasOriginales = normalizarVencidasVentaEdicion(ventaEnEdicion);
-        const nombreNorm = normalizarNombreStockEdicion(nombreProducto);
-        const itemOriginal = vencidasOriginales.find((item) => (
-            normalizarNombreStockEdicion(item?.nombre || item?.producto || '') === nombreNorm
-        ));
-        return parseInt(itemOriginal?.cantidad || 0, 10) || 0;
-    }, [ventaEnEdicion, normalizarNombreStockEdicion, normalizarVencidasVentaEdicion]);
-
-    const construirAdvertenciasVencidasEdicion = useCallback((vencidasObjetivo = [], detallesObjetivo = []) => {
-        if (!Array.isArray(vencidasObjetivo) || vencidasObjetivo.length === 0) return [];
-
-        return vencidasObjetivo.reduce((acumulado, vencida) => {
-            const nombreProducto = vencida?.nombre || vencida?.producto || '';
-            const claveStock = resolverClaveStockEdicion(nombreProducto);
-            const stockActual = parseInt(stockCargue[claveStock] || 0, 10) || 0;
-            const cantidadOriginalVenta = obtenerCantidadOriginalEdicion(nombreProducto);
-            const cantidadOriginalVencida = obtenerCantidadOriginalVencidaEdicion(nombreProducto);
-            const cantidadVendidaNueva = (detallesObjetivo || []).find((item) => (
-                normalizarNombreStockEdicion(item?.nombre || item?.producto || '') === normalizarNombreStockEdicion(nombreProducto)
-            ))?.cantidad || 0;
-
-            const stockDisponible = Math.max(0, stockActual + cantidadOriginalVenta + cantidadOriginalVencida - cantidadVendidaNueva);
-            const cantidadVencidaNueva = parseInt(vencida?.cantidad || 0, 10) || 0;
-
-            if (cantidadVencidaNueva > stockDisponible) {
-                if (stockDisponible <= 0) {
-                    acumulado.push(`⚠️ ${nombreProducto}: No tienes stock para adjuntar ${cantidadVencidaNueva} vencidas`);
-                } else {
-                    acumulado.push(`⚠️ ${nombreProducto}: Solo tienes ${stockDisponible} para adjuntar ${cantidadVencidaNueva} vencidas`);
-                }
-            }
-
-            return acumulado;
-        }, []);
-    }, [resolverClaveStockEdicion, stockCargue, obtenerCantidadOriginalEdicion, obtenerCantidadOriginalVencidaEdicion, normalizarNombreStockEdicion]);
-
-    const obtenerAdvertenciasStockVencidasEdicion = useCallback((vencidasObjetivo = []) => {
-        const detallesObjetivo = Object.entries(carritoEdicion).map(([nombre, item]) => ({
-            nombre,
-            producto: nombre,
-            cantidad: item?.cantidad || 0,
-        }));
-        return construirAdvertenciasVencidasEdicion(vencidasObjetivo, detallesObjetivo);
-    }, [carritoEdicion, construirAdvertenciasVencidasEdicion]);
-
-    const obtenerStockDisponibleVencidaEdicion = useCallback((nombreProducto = '') => {
-        const claveStock = resolverClaveStockEdicion(nombreProducto);
-        const stockActual = parseInt(stockCargue[claveStock] || 0, 10) || 0;
-        const cantidadOriginalVenta = obtenerCantidadOriginalEdicion(nombreProducto);
-        const cantidadOriginalVencida = obtenerCantidadOriginalVencidaEdicion(nombreProducto);
-        const cantidadVendidaNueva = Object.entries(carritoEdicion).find(([nombre]) => (
-            normalizarNombreStockEdicion(nombre) === normalizarNombreStockEdicion(nombreProducto)
-        ))?.[1]?.cantidad || 0;
-
-        return Math.max(0, stockActual + cantidadOriginalVenta + cantidadOriginalVencida - cantidadVendidaNueva);
-    }, [resolverClaveStockEdicion, stockCargue, obtenerCantidadOriginalEdicion, obtenerCantidadOriginalVencidaEdicion, carritoEdicion, normalizarNombreStockEdicion]);
 
     /** Modifica la cantidad de un producto en el carritoEdicion */
     const cambiarCantidadEdicion = useCallback((nombreProducto, nuevaCantidad) => {
@@ -2808,31 +2687,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
             return;
         }
 
-        const advertenciasVencidas = construirAdvertenciasVencidasEdicion(vencidasEdicion, nuevosDetalles);
-        if (advertenciasVencidas.length > 0) {
-            Alert.alert('Stock insuficiente', advertenciasVencidas.join('\n'));
-            return;
-        }
-
-        const nuevosProductosVencidos = (vencidasEdicion || []).map((item) => ({
-            id: item?.id,
-            producto: item?.nombre || item?.producto || '',
-            cantidad: parseInt(item?.cantidad || 0, 10) || 0,
-            motivo: item?.motivo || 'No especificado',
-        })).filter((item) => item.producto && item.cantidad > 0);
-
-        const fotosLocalesEdicion = Object.fromEntries(
-            Object.entries(fotoVencidasEdicion || {}).map(([clave, fotos]) => [
-                clave,
-                (Array.isArray(fotos) ? fotos : []).filter((uri) => typeof uri === 'string' && !uri.startsWith('http')),
-            ]).filter(([, fotos]) => fotos.length > 0)
-        );
-
-        let fotosVencidosEdicionBase64 = null;
-        if (Object.keys(fotosLocalesEdicion).length > 0) {
-            fotosVencidosEdicionBase64 = await convertirFotosABase64(fotosLocalesEdicion);
-        }
-
         const nuevoTotal = nuevosDetalles.reduce((sum, i) => sum + i.subtotal, 0);
         const fechaEdicionLocal = new Date().toISOString();
         const conteoEdicionLocal = Math.max(1, Number(ventaEnEdicion?.veces_editada || 0) + 1);
@@ -2841,7 +2695,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
             veces_editada: conteoEdicionLocal,
             fecha_ultima_edicion: fechaEdicionLocal,
         };
-        const vencidasOriginales = normalizarVencidasVentaEdicion(ventaEnEdicion);
 
         setCargandoEdicion(true);
         try {
@@ -2852,29 +2705,17 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                 total: nuevoTotal,
                 metodo_pago: metodoPagoNormalizado,
                 dispositivo_id: dispositivoId,
-                productos_vencidos: nuevosProductosVencidos,
             };
-            // Llamado directo: pasar URIs originales → editarVentaRuta usa FormData (igual que enviarVentaRuta)
-            // Cola de reintento: usa base64 (más abajo) para que no expiren si se cierra la app
-            if (Object.keys(fotosLocalesEdicion).length > 0) {
-                payloadEdicion.foto_vencidos = fotosLocalesEdicion;
-            }
 
             if (esVentaBackendPersistida(ventaEnEdicion)) {
                 try {
-                    // ⏱️ ESTRATEGIA: esperar al servidor antes de soltar el bloqueo.
-                    // Con foto (vencidas): 20s — la imagen tarda más en subir por la red móvil.
-                    // Sin foto: 6s — JSON pequeño, respuesta rápida.
-                    const hayFotoEnEdicion = Object.keys(fotosLocalesEdicion).length > 0;
-                    const timeoutRace = hayFotoEnEdicion ? 20000 : 6000;
-
                     const promiseSync = editarVentaRuta(ventaEnEdicion.id, payloadEdicion)
                         .then(resp => { respuestaEdicion = resp; })
                         .catch(err => { console.warn('Sync Fallido/Timeout:', err.message); });
 
                     await Promise.race([
                         promiseSync,
-                        new Promise(resolve => setTimeout(resolve, timeoutRace))
+                        new Promise(resolve => setTimeout(resolve, 6000))
                     ]);
 
                     if (respuestaEdicion) {
@@ -2896,11 +2737,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                     ? { metodo_pago_cambiado: respuestaEdicion.metodo_pago_cambiado }
                     : {}),
             };
-            const fotoVencidosPersistida = respuestaEdicion?.foto_vencidos || ventaEnEdicion?.foto_vencidos || null;
-            const evidenciasPersistidas = Array.isArray(respuestaEdicion?.evidencias)
-                ? respuestaEdicion.evidencias
-                : (Array.isArray(ventaEnEdicion?.evidencias) ? ventaEnEdicion.evidencias : []);
-
             setVentasDelDia(prev =>
                 prev.map(v => {
                     const mismaVenta =
@@ -2913,11 +2749,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                             productos: nuevosDetalles,
                             total: nuevoTotal,
                             metodo_pago: metodoPagoNormalizado,
-                            vencidas: vencidasEdicion,
-                            productos_vencidos: nuevosProductosVencidos,
-                            fotoVencidas: fotoVencidasEdicion,
-                            foto_vencidos: fotoVencidosPersistida,
-                            evidencias: evidenciasPersistidas,
                             ...metaEdicionConfirmada,
                         };
                     }
@@ -2938,11 +2769,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                             productos: nuevosDetalles,
                             total: nuevoTotal,
                             metodo_pago: metodoPagoNormalizado,
-                            vencidas: vencidasEdicion,
-                            productos_vencidos: nuevosProductosVencidos,
-                            fotoVencidas: fotoVencidasEdicion,
-                            foto_vencidos: fotoVencidosPersistida,
-                            evidencias: evidenciasPersistidas,
                             ...metaEdicionConfirmada,
                             fecha_actualizacion: metaEdicionConfirmada.fecha_ultima_edicion || v.fecha_actualizacion,
                         };
@@ -2958,7 +2784,7 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
 
             setHistorialReimpresion(prev => aplicarEdicionEnHistorial(prev));
             setHistorialResumenPreview(prev => aplicarEdicionEnHistorial(prev));
-            
+
             // 🔧 Invalidar caché del historial para que se recargue con la edición
             try {
                 const fechaStr = `${fechaSeleccionada.getFullYear()}-${String(fechaSeleccionada.getMonth() + 1).padStart(2, '0')}-${String(fechaSeleccionada.getDate()).padStart(2, '0')}`;
@@ -2968,18 +2794,13 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
             } catch (errCache) {
                 console.log('⚠️ No se pudo invalidar caché de historial:', errCache?.message);
             }
-            
+
             ultimaVentaHistorialRef.current = normalizarItemHistorialLocal({
                 ...ventaEnEdicion,
                 detalles: nuevosDetalles,
                 productos: nuevosDetalles,
                 total: nuevoTotal,
                 metodo_pago: metodoPagoNormalizado,
-                vencidas: vencidasEdicion,
-                productos_vencidos: nuevosProductosVencidos,
-                fotoVencidas: fotoVencidasEdicion,
-                foto_vencidos: fotoVencidosPersistida,
-                evidencias: evidenciasPersistidas,
                 ...metaEdicionConfirmada,
                 fecha_actualizacion: metaEdicionConfirmada.fecha_ultima_edicion || ventaEnEdicion?.fecha_actualizacion || ventaEnEdicion?.fecha,
             });
@@ -3001,11 +2822,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                             productos: nuevosDetalles,
                             total: nuevoTotal,
                             metodo_pago: metodoPagoNormalizado,
-                            vencidas: vencidasEdicion,
-                            productos_vencidos: nuevosProductosVencidos,
-                            fotoVencidas: fotoVencidasEdicion,
-                            foto_vencidos: fotoVencidosPersistida,
-                            evidencias: evidenciasPersistidas,
                             ...metaEdicionConfirmada,
                         };
                     }
@@ -3036,14 +2852,12 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                                 productos: nuevosDetalles,
                                 total: nuevoTotal,
                                 metodo_pago: metodoPagoNormalizado,
-                                productos_vencidos: nuevosProductosVencidos,
-                                ...(fotosVencidosEdicionBase64 ? { foto_vencidos: fotosVencidosEdicionBase64 } : {}),
                                 ...metaEdicionLocal,
                             },
                         };
                     });
 
-                    // 🆕 Si era una venta persistida y la edición inmediata falló, agregarla a la cola
+                    // Si era una venta persistida y la edición inmediata falló, agregarla a la cola
                     if (!huboCambiosEnCola && !respuestaEdicion && esVentaBackendPersistida(ventaEnEdicion)) {
                         colaActualizada.push({
                             id: ventaEnEdicion.id,
@@ -3053,8 +2867,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                                 productos: nuevosDetalles,
                                 total: nuevoTotal,
                                 metodo_pago: metodoPagoNormalizado,
-                                productos_vencidos: nuevosProductosVencidos,
-                                ...(fotosVencidosEdicionBase64 ? { foto_vencidos: fotosVencidosEdicionBase64 } : {}),
                                 ...metaEdicionConfirmada,
                             },
                             intentos: 0,
@@ -3143,14 +2955,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                     }
                 });
 
-                (vencidasEdicion || []).forEach((item) => {
-                    const nombre = resolverClaveStock(item.nombre || item.producto || '');
-                    const cant = parseInt(item.cantidad, 10) || 0;
-                    if (nombre && cant > 0) {
-                        nuevoStock[nombre] = Math.max(0, (nuevoStock[nombre] || 0) - cant);
-                    }
-                });
-
                 return nuevoStock;
             });
 
@@ -3166,8 +2970,7 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                 '✅ Venta editada',
                 `La venta fue actualizada correctamente.
 Nuevo total: ${formatearMoneda(Math.round(nuevoTotal))}
-Pago: ${metodoPagoNormalizado}${nuevosProductosVencidos.length > 0 ? `
-Vencidas: ${nuevosProductosVencidos.length}` : ''}`,
+Pago: ${metodoPagoNormalizado}`,
                 [{ text: 'Ver historial', onPress: () => abrirHistorialReimpresion() }, { text: 'OK' }]
             );
         } catch (error) {
@@ -6627,20 +6430,6 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 obtenerStockDisponibleProducto={obtenerStockDisponibleVencidaVenta}
             />
 
-            <DevolucionesVencidas
-                visible={mostrarVencidasEdicion}
-                onClose={() => setMostrarVencidasEdicion(false)}
-                onGuardar={handleGuardarVencidasEdicion}
-                tipo="vencidas"
-                fotoOpcional={true}
-                datosGuardados={vencidasEdicion}
-                fotosGuardadas={fotoVencidasEdicion}
-                userId={userId}
-                fechaSeleccionada={fechaSeleccionada}
-                obtenerAdvertenciasStock={obtenerAdvertenciasStockVencidasEdicion}
-                obtenerStockDisponibleProducto={obtenerStockDisponibleVencidaEdicion}
-            />
-
             <ResumenVentaModal
                 visible={mostrarResumen}
                 onClose={() => setMostrarResumen(false)}
@@ -7325,40 +7114,6 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                             <View>
                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                     <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#333' }}>✏️ Editar Venta</Text>
-                                    <TouchableOpacity
-                                        onPress={abrirModalVencidasDesdeEdicion}
-                                        style={{
-                                            flexDirection: 'row',
-                                            alignItems: 'center',
-                                            backgroundColor: '#fff1f2',
-                                            borderWidth: 1,
-                                            borderColor: '#fecdd3',
-                                            borderRadius: 999,
-                                            paddingHorizontal: 10,
-                                            paddingVertical: 5,
-                                        }}
-                                    >
-                                        <Ionicons name="camera-outline" size={13} color="#dc2626" />
-                                        <Text style={{ color: '#dc2626', fontWeight: '700', fontSize: 11, marginLeft: 4 }}>
-                                            Adjuntar vencidas
-                                        </Text>
-                                        {totalItemsVencidasEdicion > 0 && (
-                                            <View style={{
-                                                backgroundColor: '#dc2626',
-                                                minWidth: 18,
-                                                height: 18,
-                                                borderRadius: 9,
-                                                justifyContent: 'center',
-                                                alignItems: 'center',
-                                                marginLeft: 6,
-                                                paddingHorizontal: 4,
-                                            }}>
-                                                <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>
-                                                    {totalItemsVencidasEdicion}
-                                                </Text>
-                                            </View>
-                                        )}
-                                    </TouchableOpacity>
                                 </View>
                                 {!modoCantidadConTeclado && (
                                     <Text style={{ fontSize: 13, color: '#666', marginTop: 2 }}>
@@ -7487,8 +7242,8 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                                             <Text style={{ fontSize: 10, color: '#666' }}>
                                                 {formatearMoneda(item.precio)} c/u
                                             </Text>
-                                            <Text style={{ fontSize: 11, color: obtenerStockDisponibleVencidaEdicion(nombre) > 0 ? '#00ad53' : '#e74c3c', fontWeight: '700' }}>
-                                                • Stock: {obtenerStockDisponibleVencidaEdicion(nombre)}
+                                            <Text style={{ fontSize: 11, color: obtenerMaximoEditableProducto(nombre) > 0 ? '#00ad53' : '#e74c3c', fontWeight: '700' }}>
+                                                • Stock: {obtenerMaximoEditableProducto(nombre)}
                                             </Text>
                                         </View>
                                     </View>
