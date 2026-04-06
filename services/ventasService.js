@@ -547,7 +547,9 @@ export const sincronizarVentasPendientes = async () => {
                         productos_vencidos: ventaNormalizada.productos_vencidos || [],
                     };
 
-                    if (ventaNormalizada.foto_vencidos && String(ventaNormalizada.foto_vencidos).startsWith('data:')) {
+                    if (ventaNormalizada.foto_vencidos &&
+                        typeof ventaNormalizada.foto_vencidos === 'object' &&
+                        Object.keys(ventaNormalizada.foto_vencidos).length > 0) {
                         payloadEdicionClean.foto_vencidos = ventaNormalizada.foto_vencidos;
                     }
 
@@ -628,8 +630,9 @@ export const sincronizarVentasPendientes = async () => {
                 // Las ediciones (PATCH) siempre son errores permanentes: el reintento
                 // no tiene sentido porque el servidor ya tiene la versión que tenía antes.
                 // El usuario debe ser notificado para que decida qué hacer.
+                const hayRespuestaServidor = error?.status != null || resultadoEnvio?.status != null;
                 const errorPermanente = _esEdicion
-                    ? true
+                    ? hayRespuestaServidor  // edición: solo permanente si el servidor rechazó explícitamente (no si fue falla de red)
                     : esErrorPermanenteDeSincronizacion(resultadoEnvio, error);
                 const resumenError = construirResumenErrorSync(resultadoEnvio, error);
 

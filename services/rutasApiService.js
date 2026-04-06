@@ -312,7 +312,7 @@ export const actualizarPedido = async (pedidoId, datos) => {
  */
 export const editarVentaRuta = async (ventaId, datosActualizados) => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 segundos (editar es pesado en el servidor)
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos — fallo rápido para que el alert aparezca pronto
 
     try {
         const headers = await obtenerAuthHeaders({ 'Content-Type': 'application/json' });

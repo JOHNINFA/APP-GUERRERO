@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Pressable, FlatList, StyleSheet, Alert, SafeAreaView, StatusBar, Platform, RefreshControl, Modal, Linking, ScrollView, Keyboard, KeyboardAvoidingView, AppState } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Pressable, FlatList, StyleSheet, Alert, SafeAreaView, StatusBar, Platform, RefreshControl, Modal, Linking, ScrollView, Keyboard, KeyboardAvoidingView, AppState, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker'; // 🆕 Import DatePicker
 import ClienteSelector from './ClienteSelector';
@@ -228,6 +228,7 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [busquedaProductoEdicion, setBusquedaProductoEdicion] = useState('');
     const [focoCampoEdicion, setFocoCampoEdicion] = useState(null); // null | 'search' | 'cantidad'
     const [cargandoEdicion, setCargandoEdicion] = useState(false);
+    const [stockOculto, setStockOculto] = useState(false); // spinner breve en vez del 0 flash al confirmar venta
     const modoCantidadConTeclado = tecladoAbierto && focoCampoEdicion === 'cantidad';
     const alturaListaEdicionConTeclado = (alturaTeclado >= 320 ? 220 : 260);
 
@@ -4820,6 +4821,10 @@ ${error.message}`);
                 // reconciliarStockConVentasLocales la descuenta de nuevo.
                 bloqueoRefreshStockHastaRef.current = Date.now() + 30 * 1000;
 
+                // Ocultar número de stock por 1.5s (evita flash de 0 durante actualización)
+                setStockOculto(true);
+                setTimeout(() => setStockOculto(false), 1500);
+
                 // Restar las cantidades vendidas del stock local
                 const nuevoStock = { ...stockCargue };
 
@@ -5931,7 +5936,10 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                     <Text style={styles.productoPrecio}>
                         Precio: {formatearMoneda(precioReal)}
                         {esPrecioEspecial && <Text style={{ color: '#ff9800', fontWeight: 'bold' }}> ⭐</Text>}
-                        <Text style={[styles.stockTextoInline, stock <= 0 && styles.stockTextoAgotado]}>{`  Stock: ${stock}`}</Text>
+                        {stockOculto
+                            ? <ActivityIndicator size="small" color="#1d4ed8" style={{ marginLeft: 8 }} />
+                            : <Text style={[styles.stockTextoInline, stock <= 0 && styles.stockTextoAgotado]}>{`  Stock: ${stock}`}</Text>
+                        }
                     </Text>
                 </View>
 
@@ -6002,7 +6010,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 </View>
             </View>
         );
-    }, [carrito, stockCargue, clienteSeleccionado, pedidoClienteSeleccionado, modoEdicionPedido, tecladoAbierto, productosFiltrados.length, actualizarCantidad, asegurarVisibilidadInputCantidad, preAjusteListaAntesDeTecladoCantidad, esModoListaScroll]);
+    }, [carrito, stockCargue, stockOculto, clienteSeleccionado, pedidoClienteSeleccionado, modoEdicionPedido, tecladoAbierto, productosFiltrados.length, actualizarCantidad, asegurarVisibilidadInputCantidad, preAjusteListaAntesDeTecladoCantidad, esModoListaScroll]);
 
     // 🆕 Handler para cuando se guarda una nota
     const handleNotaGuardada = async (nota) => {
