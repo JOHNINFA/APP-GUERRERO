@@ -2862,16 +2862,19 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
 
             if (esVentaBackendPersistida(ventaEnEdicion)) {
                 try {
-                    // ⏱️ ESTRATEGIA: Esperar un máximo de 6 segundos por el servidor.
-                    // Si el servidor es rápido (buena señal), sincronizamos 'de una vez' y no sale el banner naranja.
-                    // Si pasan 6s y no hay respuesta, soltamos el bloqueo y seguimos en segundo plano.
+                    // ⏱️ ESTRATEGIA: esperar al servidor antes de soltar el bloqueo.
+                    // Con foto (vencidas): 20s — la imagen tarda más en subir por la red móvil.
+                    // Sin foto: 6s — JSON pequeño, respuesta rápida.
+                    const hayFotoEnEdicion = Object.keys(fotosLocalesEdicion).length > 0;
+                    const timeoutRace = hayFotoEnEdicion ? 20000 : 6000;
+
                     const promiseSync = editarVentaRuta(ventaEnEdicion.id, payloadEdicion)
                         .then(resp => { respuestaEdicion = resp; })
                         .catch(err => { console.warn('Sync Fallido/Timeout:', err.message); });
 
                     await Promise.race([
                         promiseSync,
-                        new Promise(resolve => setTimeout(resolve, 6000)) // Espera máxima para el usuario
+                        new Promise(resolve => setTimeout(resolve, timeoutRace))
                     ]);
 
                     if (respuestaEdicion) {
@@ -8200,7 +8203,7 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#eee',
         zIndex: 10,
-        elevation: 10,
+        elevation: 2,
     },
     manijaIndicador: {
         width: 40,

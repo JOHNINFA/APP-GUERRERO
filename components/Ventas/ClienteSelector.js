@@ -1559,11 +1559,6 @@ const ClienteSelector = ({
                         updateCellsBatchingPeriod={40}
                         removeClippedSubviews={true}
                         keyboardShouldPersistTaps="always"
-                        getItemLayout={(data, index) => ({
-                            length: ITEM_HEIGHT_ESTIMADO,
-                            offset: ITEM_HEIGHT_ESTIMADO * index,
-                            index,
-                        })}
                         ListEmptyComponent={
                             <View style={styles.emptyContainer}>
                                 <Ionicons name="people-outline" size={48} color="#ccc" />
