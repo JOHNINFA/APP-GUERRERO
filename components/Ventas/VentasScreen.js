@@ -4916,9 +4916,12 @@ ${error.message}`);
             alertOptions.unshift({
                 text: 'Imprimir',
                 onPress: async () => {
+                    // Limpiar carrito ANTES de imprimir para que el stock visual
+                    // no muestre stockCargue - carrito (lo que causaba el flash de 0).
+                    // La venta ya fue guardada — limpiar aquí es seguro.
+                    limpiarVenta();
                     try {
                         await imprimirTicket(ventaParaTicket);
-                        limpiarVenta(); // Solo limpiar si la impresión fue exitosa
                         continuarDespuesDeVentaGuardada({ limpiarAntes: false, mostrarAvisoFin: true });
                     } catch (error) {
                         console.error('❌ Error al imprimir:', error);
@@ -4927,7 +4930,7 @@ ${error.message}`);
                             'No se pudo imprimir el ticket. Verifica que el Bluetooth esté conectado.\n\nLa venta ya fue guardada correctamente.',
                             [{ text: 'OK' }]
                         );
-                        // NO limpiar venta en caso de error para mantener el turno activo
+                        continuarDespuesDeVentaGuardada({ limpiarAntes: false, mostrarAvisoFin: true });
                     }
                 }
             });
