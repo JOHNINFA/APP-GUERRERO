@@ -503,6 +503,7 @@ export const sincronizarVentasPendientes = async () => {
         }
 
         for (const venta of pendientesSincronizables) {
+            let _esEdicion = false; // accesible en el catch
             try {
                 // Soporta formato nuevo {id, data, ...} y formato legado (venta directa).
                 const fuenteData = venta?.data || venta;
@@ -510,6 +511,7 @@ export const sincronizarVentasPendientes = async () => {
                 const ventaId = String(venta?.id || ventaNormalizada?.id_local || ventaNormalizada?.id || '');
                 const esPedido = !!fuenteData?._esPedido;
                 const esEdicionVentaPersistida = !esPedido && !!(ventaNormalizada.id && /^\d+$/.test(String(ventaNormalizada.id)));
+                _esEdicion = esEdicionVentaPersistida;
 
                 if (!ventaNormalizada.id_local && ventaId) {
                     ventaNormalizada.id_local = ventaId;
@@ -563,6 +565,27 @@ export const sincronizarVentasPendientes = async () => {
                             await marcarVentaLocalSincronizada(ventaId);
                             sincronizadas++;
                             console.log(`🛡️ Venta ${ventaNormalizada.id} ya estaba editada en servidor. Limpiando cola.`);
+                        } else {
+                            // Cualquier otro error de edición: marcar como requiere_revision
+                            // para que VentasScreen muestre la alerta al usuario.
+                            const resumenEdicion = errorRaw
+                                ? String(errorRaw)
+                                : 'El servidor no aceptó la edición';
+                            await mutarColaPendientes(async (pendientesActuales) => ({
+                                cola: pendientesActuales.map((v) =>
+                                    String(v?.id || v?.data?.id_local || v?.data?.id || '') === String(ventaId)
+                                        ? {
+                                            ...v,
+                                            requiere_revision: true,
+                                            estado_sync: 'REVISION',
+                                            motivo_error: resumenEdicion,
+                                            codigo_error: errorRaw || 'EDICION_FALLIDA',
+                                        }
+                                        : v
+                                ),
+                                hubocambios: true,
+                            }));
+                            console.warn(`⚠️ Edición de venta ${ventaNormalizada.id} falló: ${resumenEdicion}`);
                         }
                     }
                     continue; // 🚀 SALTAR PROCESO DE VENTA NUEVA (POST)
@@ -602,7 +625,12 @@ export const sincronizarVentasPendientes = async () => {
                 console.warn(`⚠️ Error sincronizando venta ${ventaIdStr}:`, error.message);
 
                 const resultadoEnvio = error?.resultadoEnvio || null;
-                const errorPermanente = esErrorPermanenteDeSincronizacion(resultadoEnvio, error);
+                // Las ediciones (PATCH) siempre son errores permanentes: el reintento
+                // no tiene sentido porque el servidor ya tiene la versión que tenía antes.
+                // El usuario debe ser notificado para que decida qué hacer.
+                const errorPermanente = _esEdicion
+                    ? true
+                    : esErrorPermanenteDeSincronizacion(resultadoEnvio, error);
                 const resumenError = construirResumenErrorSync(resultadoEnvio, error);
 
                 venta.intentos = (venta.intentos || 0) + 1;
