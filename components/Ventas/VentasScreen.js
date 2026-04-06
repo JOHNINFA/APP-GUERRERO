@@ -6632,6 +6632,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 onClose={() => setMostrarVencidasEdicion(false)}
                 onGuardar={handleGuardarVencidasEdicion}
                 tipo="vencidas"
+                fotoOpcional={true}
                 datosGuardados={vencidasEdicion}
                 fotosGuardadas={fotoVencidasEdicion}
                 userId={userId}

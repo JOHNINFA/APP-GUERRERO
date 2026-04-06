@@ -32,6 +32,7 @@ const DevolucionesVencidas = React.memo(({
     fotosGuardadas = {},
     userId,
     fechaSeleccionada,
+    fotoOpcional = false, // si true, no fuerza foto al guardar (usado en edición de venta)
     modoSoloRegistro = false, // 🆕 Modo directo sin "completar venta"
     clienteId = null, // 🆕 ID del cliente para modo registro directo
     onVencidasRegistradas = null, // 🆕 Callback cuando se completa registro directo
@@ -260,7 +261,7 @@ const DevolucionesVencidas = React.memo(({
                 if (!puedeContinuarPorStock) return;
 
                 const tieneAlgunaFoto = Object.values(fotosFinales).some(uris => uris.length > 0);
-                if (!tieneAlgunaFoto) {
+                if (!tieneAlgunaFoto && !fotoOpcional) {
                     // Abrir cámara y luego proceder a guardar
                     const nuevaUri = await tomarFotoDirecta();
                     if (!nuevaUri) return; // Si el usuario cancela la cámara, detener guardado.
