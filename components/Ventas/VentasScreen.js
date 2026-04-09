@@ -2939,14 +2939,6 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
                     }
                 });
 
-                vencidasOriginales.forEach((item) => {
-                    const nombre = resolverClaveStock(item.nombre || item.producto || '');
-                    const cant = parseInt(item.cantidad, 10) || 0;
-                    if (nombre && cant > 0) {
-                        nuevoStock[nombre] = (nuevoStock[nombre] || 0) + cant;
-                    }
-                });
-
                 nuevosDetalles.forEach((item) => {
                     const nombre = resolverClaveStock(item.nombre || item.producto || '');
                     const cant = parseInt(item.cantidad, 10) || 0;
@@ -5261,7 +5253,7 @@ ${error.message}`);
         const pedidoPreferido = cliente?.__pedidoVista || null;
         let pedidosCliente;
         if (pedidoPreferido) {
-            pedidosCliente = [pedidoPreferido, ...pedidosPendientes.filter((pedido) => String(pedido?.id || '') !== String(pedidoPreferido?.id || ''))];
+            pedidosCliente = [pedidoPreferido];
         } else {
             // Buscar por coincideCliente Y también por nombre/negocio vs destinatario
             // (cubre el caso de la flecha ⏭️ donde coincideCliente puede fallar por IDs no comparables)
