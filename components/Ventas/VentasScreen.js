@@ -6862,6 +6862,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                                     : fuenteListado.filter(v => v.estado !== 'ANULADA'); // <-- Excluir aquí las anuladas de la vista normal
 
                                 // Detectar segunda venta por cliente (para badge "2ª VENTA")
+                                // Excluir ventas con total $0 (solo vencidas) del conteo de "segunda venta"
                                 const idsSegundaVenta = (() => {
                                     const porCliente = {};
                                     (ventasAMostrar || []).forEach(v => {
@@ -6872,8 +6873,10 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                                     });
                                     const ids = new Set();
                                     Object.values(porCliente).forEach(grupo => {
-                                        if (grupo.length < 2) return;
-                                        const sorted = [...grupo].sort((a, b) =>
+                                        // Solo contar ventas con total > 0 para determinar segunda venta
+                                        const ventasReales = grupo.filter(v => parseFloat(v.total || 0) > 0);
+                                        if (ventasReales.length < 2) return;
+                                        const sorted = [...ventasReales].sort((a, b) =>
                                             new Date(a.fecha || a.fecha_creacion || 0).getTime() -
                                             new Date(b.fecha || b.fecha_creacion || 0).getTime()
                                         );
