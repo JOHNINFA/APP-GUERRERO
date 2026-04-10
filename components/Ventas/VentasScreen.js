@@ -4300,17 +4300,27 @@ ${error.message}`);
 
         return vencidasObjetivo.reduce((acumulado, vencida) => {
             const nombreProducto = String(vencida?.nombre || '').toUpperCase();
-            const stockActual = stockCargue[nombreProducto] || 0;
+            const cantidadVencida = parseInt(vencida.cantidad, 10) || 0;
+            // stockCargue ya tiene las vencidas descontadas por handleGuardarVencidas.
+            // Reconstruir stock antes de vencidas sumando todas las vencidas del producto
+            const stockTrasVencidas = stockCargue[nombreProducto] || 0;
+            const totalVencidasProducto = vencidasObjetivo
+                .filter(v => String(v?.nombre || '').toUpperCase() === nombreProducto)
+                .reduce((sum, v) => sum + (parseInt(v.cantidad, 10) || 0), 0);
+            // stockCargue = max(0, stockOriginal - totalVencidas), entonces:
+            // stockOriginal >= stockTrasVencidas + totalVencidas (si no hubo clamp a 0)
+            // Si hubo clamp: stockOriginal < totalVencidas, alertar
+            const stockOriginal = stockTrasVencidas + totalVencidasProducto;
             const cantidadVendida = productosVentaPreview.find(
                 (producto) => String(producto?.nombre || '').toUpperCase() === nombreProducto
             )?.cantidad || 0;
-            const stockDisponible = stockActual - cantidadVendida;
+            const stockParaVencidas = stockOriginal - cantidadVendida;
 
-            if (vencida.cantidad > stockDisponible) {
-                if (stockDisponible <= 0) {
-                    acumulado.push(`⚠️ ${vencida.nombre}: No tienes stock para cambiar ${vencida.cantidad} vencidas`);
+            if (cantidadVencida > stockParaVencidas) {
+                if (stockParaVencidas <= 0) {
+                    acumulado.push(`⚠️ ${vencida.nombre}: No tienes stock para cambiar ${cantidadVencida} vencidas`);
                 } else {
-                    acumulado.push(`⚠️ ${vencida.nombre}: Solo tienes ${stockDisponible} para cambiar ${vencida.cantidad} vencidas`);
+                    acumulado.push(`⚠️ ${vencida.nombre}: Solo tienes ${stockParaVencidas} para cambiar ${cantidadVencida} vencidas`);
                 }
             }
 
