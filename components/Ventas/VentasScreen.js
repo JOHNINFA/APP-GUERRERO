@@ -4653,11 +4653,13 @@ ${error.message}`);
             // IMPORTANTE: Solo afectar stock si es VENTA DIRECTA.
             // Los pedidos asignados ya tienen su stock reservado/descontado en el cargue inicial.
             if (!pedidoClienteSeleccionado) {
-                // Bloquear refrescarStockSilencioso por 30s para evitar doble deducción:
-                // el backend ya decrementó el stock, pero la venta local puede tardar unos
-                // segundos en marcarse sincronizada=true — si el refresh corre en ese lapso,
-                // reconciliarStockConVentasLocales la descuenta de nuevo.
-                bloqueoRefreshStockHastaRef.current = Date.now() + 30 * 1000;
+                // Bloquear refrescarStockSilencioso para evitar que el refresh del servidor
+                // sobrescriba el stock local antes de que el backend procese la venta completa.
+                // Ventas con vencidas necesitan más tiempo (el backend debe actualizar el cargue).
+                const tieneVencidas = (ventaConDatos.vencidas || []).length > 0 ||
+                    (ventaConDatos.productos_vencidos || []).length > 0;
+                const tiempoBloqueo = tieneVencidas ? 45 * 1000 : 30 * 1000;
+                bloqueoRefreshStockHastaRef.current = Date.now() + tiempoBloqueo;
 
                 // Ocultar número de stock por 1.5s (evita flash de 0 durante actualización)
                 setStockOculto(true);
