@@ -2631,6 +2631,16 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         return Math.max(0, stockActual + cantidadOriginal);
     }, [stockCargue, resolverClaveStockEdicion, obtenerCantidadOriginalEdicion]);
 
+    // Stock visual en edición: máximo - lo que ya pusiste en el carrito de edición
+    const obtenerStockVisualEdicion = useCallback((nombreProducto) => {
+        const maximo = obtenerMaximoEditableProducto(nombreProducto);
+        const nombreNorm = normalizarNombreStockEdicion(nombreProducto);
+        const cantidadEnCarrito = parseInt(
+            Object.entries(carritoEdicion).find(([k]) => normalizarNombreStockEdicion(k) === nombreNorm)?.[1]?.cantidad || 0
+        , 10) || 0;
+        return Math.max(0, maximo - cantidadEnCarrito);
+    }, [obtenerMaximoEditableProducto, carritoEdicion, normalizarNombreStockEdicion]);
+
 
     /** Modifica la cantidad de un producto en el carritoEdicion */
     const cambiarCantidadEdicion = useCallback((nombreProducto, nuevaCantidad) => {
@@ -7214,8 +7224,8 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                                                         <Text style={{ fontSize: 12, color: '#666' }}>
                                                             {formatearMoneda(preciosPorProductoId[Number(prod.id)] ?? prod.precio ?? 0)}
                                                             {'  '}
-                                                            <Text style={{ color: obtenerMaximoEditableProducto(prod.nombre) > 0 ? '#00ad53' : '#e74c3c', fontWeight: '700' }}>
-                                                                {`Stock: ${obtenerMaximoEditableProducto(prod.nombre)}`}
+                                                            <Text style={{ color: obtenerStockVisualEdicion(prod.nombre) > 0 ? '#00ad53' : '#e74c3c', fontWeight: '700' }}>
+                                                                {`Stock: ${obtenerStockVisualEdicion(prod.nombre)}`}
                                                             </Text>
                                                         </Text>
                                                     </View>
@@ -7270,8 +7280,8 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                                             <Text style={{ fontSize: 10, color: '#666' }}>
                                                 {formatearMoneda(item.precio)} c/u
                                             </Text>
-                                            <Text style={{ fontSize: 11, color: obtenerMaximoEditableProducto(nombre) > 0 ? '#00ad53' : '#e74c3c', fontWeight: '700' }}>
-                                                • Stock: {obtenerMaximoEditableProducto(nombre)}
+                                            <Text style={{ fontSize: 11, color: obtenerStockVisualEdicion(nombre) > 0 ? '#00ad53' : '#e74c3c', fontWeight: '700' }}>
+                                                • Stock: {obtenerStockVisualEdicion(nombre)}
                                             </Text>
                                         </View>
                                     </View>
