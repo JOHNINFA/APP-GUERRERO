@@ -689,6 +689,27 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
                 bannerTimerRef.current = setTimeout(() => setEstadoBanner(null), 3500);
                 mostrarConfirmacionSyncRapida(enviadas);
+
+                // 🔧 Actualizar IDs de backend en ventasDelDia tras sincronización exitosa.
+                // guardarVenta() actualiza AsyncStorage con el ID numérico del backend,
+                // pero ventasDelDia (estado React) queda con el ID local viejo.
+                // Sin esto, esVentaBackendPersistida() retorna false y la edición no se envía.
+                try {
+                    const ventasStorage = await obtenerVentas();
+                    setVentasDelDia(prev => prev.map(v => {
+                        const idLocal = v.id_local || v.id;
+                        const match = ventasStorage.find(vs =>
+                            (vs.id_local && vs.id_local === idLocal) ||
+                            (vs.id && vs.id === v.id)
+                        );
+                        if (match && match.id !== v.id) {
+                            return { ...v, id: match.id, sincronizada: true };
+                        }
+                        return v;
+                    }));
+                } catch (e) {
+                    console.log('⚠️ No se pudo actualizar IDs tras sync:', e?.message);
+                }
             } else if (pendientesDespues.length === 0) {
                 setEstadoBanner(null);
             } else {
@@ -2254,6 +2275,25 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
             ...venta,
             detalles: normalizarDetallesVenta(venta),
         };
+
+        // 🔧 Si la venta no tiene ID numérico (aún tiene ID local), buscar en AsyncStorage
+        // por si ya fue sincronizada y tiene el ID real del backend.
+        if (!esVentaBackendPersistida(ventaEditable)) {
+            try {
+                const ventasStorage = await obtenerVentas();
+                const idLocal = ventaEditable.id_local || ventaEditable.id;
+                const match = ventasStorage.find(vs =>
+                    (vs.id_local === idLocal || vs.id === idLocal) &&
+                    vs.id && /^\d+$/.test(String(vs.id))
+                );
+                if (match) {
+                    ventaEditable = { ...ventaEditable, id: match.id, sincronizada: true };
+                    console.log(`🔧 ID backend resuelto para edición: ${match.id}`);
+                }
+            } catch (e) {
+                console.log('⚠️ No se pudo resolver ID backend:', e?.message);
+            }
+        }
 
         // 🚀 OPTIMIZACIÓN: Validar bloqueos ANTES de abrir el modal
         if (ventaYaFueModificada(ventaEditable)) {
