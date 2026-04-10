@@ -2627,12 +2627,9 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
         const claveStock = resolverClaveStockEdicion(nombreProducto);
         const stockActual = parseInt(stockCargue[claveStock] || 0, 10) || 0;
         const cantidadOriginal = obtenerCantidadOriginalEdicion(nombreProducto);
-        const nombreNorm = normalizarNombreStockEdicion(nombreProducto);
-        const cantidadEnCarrito = parseInt(
-            Object.entries(carritoEdicion).find(([k]) => normalizarNombreStockEdicion(k) === nombreNorm)?.[1]?.cantidad || 0
-        , 10) || 0;
-        return Math.max(0, stockActual + cantidadOriginal - cantidadEnCarrito);
-    }, [stockCargue, carritoEdicion, resolverClaveStockEdicion, obtenerCantidadOriginalEdicion, normalizarNombreStockEdicion]);
+        // Máximo = stock actual + lo que ya vendiste (porque al editar reemplazas la venta, no sumas encima)
+        return Math.max(0, stockActual + cantidadOriginal);
+    }, [stockCargue, resolverClaveStockEdicion, obtenerCantidadOriginalEdicion]);
 
 
     /** Modifica la cantidad de un producto en el carritoEdicion */
