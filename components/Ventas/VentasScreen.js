@@ -696,17 +696,20 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
                 // Sin esto, esVentaBackendPersistida() retorna false y la edición no se envía.
                 try {
                     const ventasStorage = await obtenerVentas();
-                    setVentasDelDia(prev => prev.map(v => {
+                    const resolverIdBackend = (v) => {
                         const idLocal = v.id_local || v.id;
                         const match = ventasStorage.find(vs =>
                             (vs.id_local && vs.id_local === idLocal) ||
                             (vs.id && vs.id === v.id)
                         );
                         if (match && match.id !== v.id) {
-                            return { ...v, id: match.id, sincronizada: true };
+                            return { ...v, id: match.id, id_local: v.id_local || v.id, sincronizada: true };
                         }
                         return v;
-                    }));
+                    };
+                    setVentasDelDia(prev => prev.map(resolverIdBackend));
+                    setHistorialReimpresion(prev => prev.map(resolverIdBackend));
+                    setHistorialResumenPreview(prev => prev.map(resolverIdBackend));
                 } catch (e) {
                     console.log('⚠️ No se pudo actualizar IDs tras sync:', e?.message);
                 }
