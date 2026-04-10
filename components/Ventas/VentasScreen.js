@@ -6257,7 +6257,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 ref={listaProductosRef}
                 data={productosFiltrados}
                 renderItem={renderProducto}
-                extraData={stockCargue}
+                extraData={[stockCargue, vencidas]}
                 keyExtractor={(item, index) => `prod-${item.id}-${index}`}
                 style={styles.listaProductos}
                 contentContainerStyle={[
