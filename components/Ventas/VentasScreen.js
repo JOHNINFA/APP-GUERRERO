@@ -4464,27 +4464,32 @@ ${error.message}`);
         };
 
         // DETECCIÓN DE VENTA REPETIDA — permite máximo 2 ventas por cliente por día
-        const conteoVentas = contarVentasActivasCliente(clienteSeleccionado);
+        // Si solo hay vencidas (carrito vacío), no aplica límite de segunda venta
+        const soloVencidas = productosEnCarrito.length === 0 && vencidas.length > 0;
 
-        if (conteoVentas >= 2 && !pedidoClienteSeleccionado) {
-            Alert.alert(
-                '🚫 Límite de Ventas',
-                `Ya realizaste 2 ventas a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\nNo se pueden hacer más ventas a este cliente.`,
-                [{ text: 'Entendido', style: 'cancel' }]
-            );
-            return;
-        }
+        if (!soloVencidas) {
+            const conteoVentas = contarVentasActivasCliente(clienteSeleccionado);
 
-        if (conteoVentas === 1 && !pedidoClienteSeleccionado) {
-            Alert.alert(
-                '⚠️ Cliente Ya Atendido',
-                `Ya realizaste una venta a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\n¿Deseas hacer una segunda venta?`,
-                [
-                    { text: 'Cancelar', style: 'cancel' },
-                    { text: 'Continuar', onPress: procesarVenta }
-                ]
-            );
-            return;
+            if (conteoVentas >= 2 && !pedidoClienteSeleccionado) {
+                Alert.alert(
+                    '🚫 Límite de Ventas',
+                    `Ya realizaste 2 ventas a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\nNo se pueden hacer más ventas a este cliente.`,
+                    [{ text: 'Entendido', style: 'cancel' }]
+                );
+                return;
+            }
+
+            if (conteoVentas === 1 && !pedidoClienteSeleccionado) {
+                Alert.alert(
+                    '⚠️ Cliente Ya Atendido',
+                    `Ya realizaste una venta a ${clienteSeleccionado.negocio || clienteSeleccionado.nombre} hoy.\n\n¿Deseas hacer una segunda venta?`,
+                    [
+                        { text: 'Cancelar', style: 'cancel' },
+                        { text: 'Continuar', onPress: procesarVenta }
+                    ]
+                );
+                return;
+            }
         }
 
         // Si no hay problema, procesar directamente
