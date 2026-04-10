@@ -4301,16 +4301,8 @@ ${error.message}`);
         return vencidasObjetivo.reduce((acumulado, vencida) => {
             const nombreProducto = String(vencida?.nombre || '').toUpperCase();
             const cantidadVencida = parseInt(vencida.cantidad, 10) || 0;
-            // stockCargue ya tiene las vencidas descontadas por handleGuardarVencidas.
-            // Reconstruir stock antes de vencidas sumando todas las vencidas del producto
-            const stockTrasVencidas = stockCargue[nombreProducto] || 0;
-            const totalVencidasProducto = vencidasObjetivo
-                .filter(v => String(v?.nombre || '').toUpperCase() === nombreProducto)
-                .reduce((sum, v) => sum + (parseInt(v.cantidad, 10) || 0), 0);
-            // stockCargue = max(0, stockOriginal - totalVencidas), entonces:
-            // stockOriginal >= stockTrasVencidas + totalVencidas (si no hubo clamp a 0)
-            // Si hubo clamp: stockOriginal < totalVencidas, alertar
-            const stockOriginal = stockTrasVencidas + totalVencidasProducto;
+            // handleGuardarVencidas ya no toca el stock — stockCargue es el stock original
+            const stockOriginal = stockCargue[nombreProducto] || 0;
             const cantidadVendida = productosVentaPreview.find(
                 (producto) => String(producto?.nombre || '').toUpperCase() === nombreProducto
             )?.cantidad || 0;
@@ -4697,10 +4689,21 @@ ${error.message}`);
                         console.log(`📉 Vendido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
                     });
 
-                    // Las vencidas YA fueron descontadas en handleGuardarVencidas
-                    // No descontar de nuevo aquí
+                    // Restar vencidas en el mismo update para evitar race conditions
+                    // con el refresh de fondo (bloqueo aún no activo cuando handleGuardarVencidas corría)
+                    const vencidasVenta = ventaConDatos.vencidas || ventaConDatos.productos_vencidos || [];
+                    vencidasVenta.forEach(item => {
+                        const nombreProducto = (item.nombre || item.producto || '').toUpperCase().trim();
+                        const cantidadVencida = parseInt(item.cantidad || 0, 10);
 
-                    // Persistir stock actualizado en caché para evitar flash al recargar
+                        if (!nombreProducto || cantidadVencida <= 0) return;
+
+                        const stockActual = parseInt(nuevoStock[nombreProducto] || 0, 10);
+                        nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVencida);
+                        console.log(`🗑️ Vencida descontada: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                    });
+
+                    // Persistir stock actualizado en caché
                     try {
                         const fechaStr = `${fechaSeleccionada.getFullYear()}-${String(fechaSeleccionada.getMonth() + 1).padStart(2, '0')}-${String(fechaSeleccionada.getDate()).padStart(2, '0')}`;
                         AsyncStorage.setItem(`@stock_cargue_${userId}_${fechaStr}`, JSON.stringify(nuevoStock));
@@ -5477,50 +5480,10 @@ ${error.message}`);
 
     // Manejar vencidas
     const handleGuardarVencidas = (productosVencidos, foto) => {
-        // 🆕 Calcular diferencia con vencidas anteriores para ajustar stock correctamente
-        const vencidasAnteriores = vencidas || [];
-        
+        // Solo guardar en estado — el stock se descuenta en confirmarVenta junto con los
+        // productos vendidos para evitar race conditions con el refresh de fondo.
         setVencidas(productosVencidos);
         setFotoVencidas(foto);
-
-        // 🆕 Ajustar stock localmente cuando se agregan/modifican productos vencidos
-        setStockCargue(prevStock => {
-            const nuevoStock = { ...prevStock };
-            
-            // 1. Restaurar stock de vencidas anteriores (si las había)
-            vencidasAnteriores.forEach(item => {
-                const nombreProducto = (item.nombre || '').toUpperCase().trim();
-                const cantidadAnterior = parseInt(item.cantidad || 0, 10);
-                
-                if (!nombreProducto || cantidadAnterior <= 0) return;
-                
-                const stockActual = parseInt(nuevoStock[nombreProducto] || 0, 10);
-                nuevoStock[nombreProducto] = stockActual + cantidadAnterior;
-                
-                console.log(`↩️ Restaurando vencido anterior: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
-            });
-            
-            // 2. Descontar nuevas vencidas
-            (productosVencidos || []).forEach(item => {
-                const nombreProducto = (item.nombre || '').toUpperCase().trim();
-                const cantidadVencida = parseInt(item.cantidad || 0, 10);
-                
-                if (!nombreProducto || cantidadVencida <= 0) return;
-                
-                const stockActual = parseInt(nuevoStock[nombreProducto] || 0, 10);
-                nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVencida);
-                
-                console.log(`🗑️ Vencido agregado: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
-            });
-
-            // Persistir stock actualizado en caché para evitar flash al recargar
-            try {
-                const fechaStr = `${fechaSeleccionada.getFullYear()}-${String(fechaSeleccionada.getMonth() + 1).padStart(2, '0')}-${String(fechaSeleccionada.getDate()).padStart(2, '0')}`;
-                AsyncStorage.setItem(`@stock_cargue_${userId}_${fechaStr}`, JSON.stringify(nuevoStock));
-            } catch (e) { /* no bloquear */ }
-
-            return nuevoStock;
-        });
     };
 
     const describirVentaEnRevision = useCallback((ventaRevision) => {
