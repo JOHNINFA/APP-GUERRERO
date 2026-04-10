@@ -4690,6 +4690,12 @@ ${error.message}`);
                     // Las vencidas YA fueron descontadas en handleGuardarVencidas
                     // No descontar de nuevo aquí
 
+                    // Persistir stock actualizado en caché para evitar flash al recargar
+                    try {
+                        const fechaStr = `${fechaSeleccionada.getFullYear()}-${String(fechaSeleccionada.getMonth() + 1).padStart(2, '0')}-${String(fechaSeleccionada.getDate()).padStart(2, '0')}`;
+                        AsyncStorage.setItem(`@stock_cargue_${userId}_${fechaStr}`, JSON.stringify(nuevoStock));
+                    } catch (e) { /* no bloquear */ }
+
                     return nuevoStock;
                 });
             }
@@ -5496,7 +5502,13 @@ ${error.message}`);
                 
                 console.log(`🗑️ Vencido agregado: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
             });
-            
+
+            // Persistir stock actualizado en caché para evitar flash al recargar
+            try {
+                const fechaStr = `${fechaSeleccionada.getFullYear()}-${String(fechaSeleccionada.getMonth() + 1).padStart(2, '0')}-${String(fechaSeleccionada.getDate()).padStart(2, '0')}`;
+                AsyncStorage.setItem(`@stock_cargue_${userId}_${fechaStr}`, JSON.stringify(nuevoStock));
+            } catch (e) { /* no bloquear */ }
+
             return nuevoStock;
         });
     };
