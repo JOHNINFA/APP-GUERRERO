@@ -2713,20 +2713,11 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
 
             if (esVentaBackendPersistida(ventaEnEdicion)) {
                 try {
-                    const promiseSync = editarVentaRuta(ventaEnEdicion.id, payloadEdicion)
-                        .then(resp => { respuestaEdicion = resp; })
-                        .catch(err => { console.warn('Sync Fallido/Timeout:', err.message); });
-
-                    await Promise.race([
-                        promiseSync,
-                        new Promise(resolve => setTimeout(resolve, 20000))
-                    ]);
-
-                    if (respuestaEdicion) {
-                        console.log('✅ Edición sincronizada de inmediato (sin banner)');
-                    }
+                    respuestaEdicion = await editarVentaRuta(ventaEnEdicion.id, payloadEdicion);
+                    console.log('✅ Edición sincronizada de inmediato');
                 } catch (editError) {
                     console.warn('⚠️ Fallo edición inmediata:', editError.message);
+                    // No tragar el error: respuestaEdicion queda null → irá a cola de pendientes
                 }
             }
 
