@@ -1893,6 +1893,10 @@ El pedido #${pedidoParaEntregar.numero_pedido} ha sido marcado como entregado ex
 
             // 🌐 Actualizar desde backend en segundo plano (solo si hay internet)
             if (!hayInternet) {
+                // Sin internet y sin caché: usar historial local como fuente
+                if (historialReimpresion.length === 0 && fallbackLocal.length > 0) {
+                    setHistorialReimpresion(fallbackLocal);
+                }
                 setCargandoHistorial(false);
                 return;
             }
