@@ -1157,6 +1157,7 @@ export const guardarVenta = async (venta) => {
                             // Marcar como sincronizada y guardar el ID real del backend
                             nuevaVenta.sincronizada = true;
                             if (resultado.data?.id) {
+                                nuevaVenta.id_local = nuevaVenta.id; // preservar ID local para resolución en edición
                                 nuevaVenta.id = resultado.data.id;
                             }
 
