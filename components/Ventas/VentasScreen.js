@@ -4664,25 +4664,28 @@ ${error.message}`);
                 setTimeout(() => setStockOculto(false), 1500);
 
                 // Restar las cantidades vendidas del stock local
-                const nuevoStock = { ...stockCargue };
+                // Usar forma funcional para no sobrescribir descuentos de vencidas
+                // que handleGuardarVencidas ya aplicó via setStockCargue
+                setStockCargue(prevStock => {
+                    const nuevoStock = { ...prevStock };
 
-                // 1. Restar productos vendidos
-                (ventaConDatos.productos || []).forEach(item => {
-                    const nombreProducto = (item.nombre || '').toUpperCase();
-                    const cantidadVendida = item.cantidad || 0;
+                    // Restar productos vendidos
+                    (ventaConDatos.productos || []).forEach(item => {
+                        const nombreProducto = (item.nombre || '').toUpperCase();
+                        const cantidadVendida = item.cantidad || 0;
 
-                    if (!nombreProducto || cantidadVendida <= 0) return;
+                        if (!nombreProducto || cantidadVendida <= 0) return;
 
-                    const stockActual = nuevoStock[nombreProducto] || 0;
-                    nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVendida);
-                    console.log(`📉 Vendido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                        const stockActual = nuevoStock[nombreProducto] || 0;
+                        nuevoStock[nombreProducto] = Math.max(0, stockActual - cantidadVendida);
+                        console.log(`📉 Vendido: ${nombreProducto}: ${stockActual} -> ${nuevoStock[nombreProducto]}`);
+                    });
+
+                    // Las vencidas YA fueron descontadas en handleGuardarVencidas
+                    // No descontar de nuevo aquí
+
+                    return nuevoStock;
                 });
-
-                // Las vencidas YA fueron descontadas de stockCargue en handleGuardarVencidas
-                // cuando el usuario las guardó en el modal. No descontar de nuevo aquí
-                // o el stock quedaría con doble deducción offline.
-
-                setStockCargue(nuevoStock);
             }
 
             // 🆕 Actualizar contador y agregar venta al estado inmediatamente
@@ -6260,6 +6263,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 ref={listaProductosRef}
                 data={productosFiltrados}
                 renderItem={renderProducto}
+                extraData={stockCargue}
                 keyExtractor={(item, index) => `prod-${item.id}-${index}`}
                 style={styles.listaProductos}
                 contentContainerStyle={[
