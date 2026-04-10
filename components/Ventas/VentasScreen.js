@@ -5745,9 +5745,12 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
         const precioReal = getPrecioProducto(item); // 🆕 Usar precio dinámico
         const subtotalProducto = precioReal * cantidad;
 
-        // Stock disponible = stock del cargue - lo que ya está en carrito (actualización inmediata sin red)
+        // Stock disponible = stock del cargue - carrito - vencidas reportadas (visual inmediato)
         const stockBase = stockCargue[item.nombre.toUpperCase()] || 0;
-        const stock = Math.max(0, stockBase - cantidad);
+        const cantidadVencida = (vencidas || [])
+            .filter(v => (v.nombre || '').toUpperCase().trim() === item.nombre.toUpperCase().trim())
+            .reduce((sum, v) => sum + (parseInt(v.cantidad, 10) || 0), 0);
+        const stock = Math.max(0, stockBase - cantidad - cantidadVencida);
 
         // Verificar si es un precio especial
         const esPrecioEspecial = precioReal !== item.precio;
@@ -5842,7 +5845,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 </View>
             </View>
         );
-    }, [carrito, stockCargue, stockOculto, clienteSeleccionado, pedidoClienteSeleccionado, modoEdicionPedido, tecladoAbierto, productosFiltrados.length, actualizarCantidad, asegurarVisibilidadInputCantidad, preAjusteListaAntesDeTecladoCantidad, esModoListaScroll]);
+    }, [carrito, stockCargue, vencidas, stockOculto, clienteSeleccionado, pedidoClienteSeleccionado, modoEdicionPedido, tecladoAbierto, productosFiltrados.length, actualizarCantidad, asegurarVisibilidadInputCantidad, preAjusteListaAntesDeTecladoCantidad, esModoListaScroll]);
 
     // 🆕 Handler para cuando se guarda una nota
     const handleNotaGuardada = async (nota) => {
