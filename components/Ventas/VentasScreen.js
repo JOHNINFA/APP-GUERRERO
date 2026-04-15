@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { InteractionManager } from 'react-native';
 import { View, Text, TextInput, TouchableOpacity, Pressable, FlatList, StyleSheet, Alert, SafeAreaView, StatusBar, Platform, RefreshControl, Modal, Linking, ScrollView, Keyboard, KeyboardAvoidingView, AppState, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker'; // 🆕 Import DatePicker
@@ -4842,14 +4843,14 @@ ${error.message}`);
                 });
             }
 
-            // 🆕 Usar setTimeout para asegurar que el modal se cierre antes de lanzar el Alert
-            setTimeout(() => {
+            // Esperar que animaciones y re-renders terminen antes de lanzar el Alert
+            InteractionManager.runAfterInteractions(() => {
                 Alert.alert(
                     'Venta Completada',
                     `Venta guardada exitosamente\nTotal: ${formatearMoneda(ventaConDatos.total)}\nMétodo: ${metodoPago}`,
                     alertOptions
                 );
-            }, 500);
+            });
         } catch (error) {
             console.error('❌ Error en confirmarVenta:', error);
             Alert.alert('Error', 'No se pudo guardar la venta');
