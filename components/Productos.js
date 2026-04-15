@@ -38,6 +38,7 @@ const productos = [
   { id: 54, name: 'LIBRA MASA', image: require('../images/masa.jpeg') },
   { id: 55, name: 'MUTE BOYACENSE XLB', image: require('../images/maiz-peto.jpeg') },
   { id: 56, name: 'ENVUELTOS DE MAIZ X 5 UND', image: require('../images/envueltos.jpeg') },
+  { id: 63, name: 'MAIZ PETO X LB', image: require('../images/maiz-peto.jpeg') },
   { id: 65, name: 'ALMOJABANAS X5', image: require('../images/almojabanas-x-5.jpeg') },
   { id: 66, name: 'AREPA BOY X5', image: require('../images/arepa-boyacense-x-5.jpeg') },
 ];
