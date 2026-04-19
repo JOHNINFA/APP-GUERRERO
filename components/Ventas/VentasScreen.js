@@ -7457,7 +7457,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                         </Text>
 
                         <TouchableOpacity
-                            style={[styles.btnModal, { backgroundColor: '#2980b9', width: '100%', marginBottom: 10 }]}
+                            style={[styles.btnModal, { backgroundColor: '#003d88', width: '100%', marginBottom: 10 }]}
                             onPress={async () => {
                                 setModalImprimirVisible(false);
                                 if (datosModalImprimir) {
