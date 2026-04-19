@@ -103,6 +103,8 @@ const VentasScreen = ({ navigation, route, userId: userIdProp, vendedorNombre })
     const [compensacionBloqueSuperior, setCompensacionBloqueSuperior] = useState(0);
     const [modoListaProductos, setModoListaProductos] = useState('scroll'); // normal | scroll
     const [cargandoAnulacion, setCargandoAnulacion] = useState(false); // 🆕 Estado para evitar doble toque al anular
+    const [modalImprimirVisible, setModalImprimirVisible] = useState(false);
+    const [datosModalImprimir, setDatosModalImprimir] = useState(null); // { ventaParaTicket, total, metodoPago, opcionesEnvio, continuarFn }
 
     // 🆕 Estados para edición de venta desde historial
     const [ventaEnEdicion, setVentaEnEdicion] = useState(null); // venta completa que se está editando
@@ -4843,14 +4845,15 @@ ${error.message}`);
                 });
             }
 
-            // Esperar que animaciones y re-renders terminen antes de lanzar el Alert
-            InteractionManager.runAfterInteractions(() => {
-                Alert.alert(
-                    'Venta Completada',
-                    `Venta guardada exitosamente\nTotal: ${formatearMoneda(ventaConDatos.total)}\nMétodo: ${metodoPago}`,
-                    alertOptions
-                );
+            // Mostrar modal propio de impresión (más confiable que Alert nativo)
+            setDatosModalImprimir({
+                ventaParaTicket,
+                total: ventaConDatos.total,
+                metodoPago,
+                opcionesEnvio,
+                alertOptions,
             });
+            setModalImprimirVisible(true);
         } catch (error) {
             console.error('❌ Error en confirmarVenta:', error);
             Alert.alert('Error', 'No se pudo guardar la venta');
@@ -7435,6 +7438,55 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                     </View>
                 </View>
             </Modal>
+            {/* MODAL IMPRIMIR — reemplaza Alert nativo para mayor confiabilidad */}
+            <Modal
+                visible={modalImprimirVisible}
+                animationType="fade"
+                transparent={true}
+                statusBarTranslucent={true}
+                onRequestClose={() => {}}
+            >
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
+                    <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '100%', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#27ae60', marginBottom: 6 }}>✅ Venta Completada</Text>
+                        <Text style={{ fontSize: 15, color: '#333', marginBottom: 4 }}>
+                            Total: {datosModalImprimir ? formatearMoneda(datosModalImprimir.total) : ''}
+                        </Text>
+                        <Text style={{ fontSize: 14, color: '#666', marginBottom: 20 }}>
+                            Método: {datosModalImprimir?.metodoPago || ''}
+                        </Text>
+
+                        <TouchableOpacity
+                            style={{ backgroundColor: '#2980b9', borderRadius: 10, paddingVertical: 14, width: '100%', alignItems: 'center', marginBottom: 10 }}
+                            onPress={async () => {
+                                setModalImprimirVisible(false);
+                                if (datosModalImprimir) {
+                                    const { ventaParaTicket, alertOptions } = datosModalImprimir;
+                                    const btnImprimir = alertOptions.find(b => b.text === 'Imprimir');
+                                    if (btnImprimir) await btnImprimir.onPress();
+                                }
+                            }}
+                        >
+                            <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>🖨️ Imprimir</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={{ backgroundColor: '#ecf0f1', borderRadius: 10, paddingVertical: 14, width: '100%', alignItems: 'center' }}
+                            onPress={() => {
+                                setModalImprimirVisible(false);
+                                if (datosModalImprimir) {
+                                    const { alertOptions } = datosModalImprimir;
+                                    const btnCerrar = alertOptions.find(b => b.text === 'Cerrar');
+                                    if (btnCerrar) btnCerrar.onPress();
+                                }
+                            }}
+                        >
+                            <Text style={{ color: '#555', fontSize: 15 }}>Continuar sin imprimir</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
         </View >
     );
 };
