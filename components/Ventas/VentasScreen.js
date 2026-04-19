@@ -7446,22 +7446,22 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                 statusBarTranslucent={true}
                 onRequestClose={() => {}}
             >
-                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
-                    <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '100%', alignItems: 'center' }}>
-                        <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#27ae60', marginBottom: 6 }}>✅ Venta Completada</Text>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContentCentered}>
+                        <Text style={[styles.modalTitle, { color: '#27ae60', marginBottom: 6 }]}>✅ Venta Completada</Text>
                         <Text style={{ fontSize: 15, color: '#333', marginBottom: 4 }}>
                             Total: {datosModalImprimir ? formatearMoneda(datosModalImprimir.total) : ''}
                         </Text>
-                        <Text style={{ fontSize: 14, color: '#666', marginBottom: 20 }}>
+                        <Text style={{ fontSize: 14, color: '#666', marginBottom: 24 }}>
                             Método: {datosModalImprimir?.metodoPago || ''}
                         </Text>
 
                         <TouchableOpacity
-                            style={{ backgroundColor: '#2980b9', borderRadius: 10, paddingVertical: 14, width: '100%', alignItems: 'center', marginBottom: 10 }}
+                            style={[styles.btnModal, { backgroundColor: '#2980b9', width: '100%', marginBottom: 10 }]}
                             onPress={async () => {
                                 setModalImprimirVisible(false);
                                 if (datosModalImprimir) {
-                                    const { ventaParaTicket, alertOptions } = datosModalImprimir;
+                                    const { alertOptions } = datosModalImprimir;
                                     const btnImprimir = alertOptions.find(b => b.text === 'Imprimir');
                                     if (btnImprimir) await btnImprimir.onPress();
                                 }
@@ -7471,7 +7471,7 @@ Sincroniza o revisa antes de cerrar turno para no descuadrar inventario y report
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                            style={{ backgroundColor: '#ecf0f1', borderRadius: 10, paddingVertical: 14, width: '100%', alignItems: 'center' }}
+                            style={[styles.btnModal, { backgroundColor: '#ecf0f1', width: '100%' }]}
                             onPress={() => {
                                 setModalImprimirVisible(false);
                                 if (datosModalImprimir) {
